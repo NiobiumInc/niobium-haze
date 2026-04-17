@@ -14,12 +14,40 @@
 
 #include <haze/haze.h>
 
-// Thread-local last error, defined in haze_error.cpp.
+#include <cstdint>
+#include <mutex>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Thread-local error state (defined in haze_error.cpp)
+// ---------------------------------------------------------------------------
+
 extern thread_local hazeError_t g_last_error;
 
-// Set the thread-local error and return it so callers can write:
-//   return set_error(HAZE_ERROR_INVALID_VALUE);
 [[nodiscard]] inline hazeError_t set_error(hazeError_t err) noexcept {
     g_last_error = err;
     return err;
 }
+
+// ---------------------------------------------------------------------------
+// Memory manager accessors (defined in haze_memory.cpp)
+// ---------------------------------------------------------------------------
+
+std::mutex& haze_alloc_mutex() noexcept;
+std::vector<uint8_t>* haze_shadow_buffer(uintptr_t dev_addr) noexcept;
+bool haze_shadow_has_data(uintptr_t dev_addr) noexcept;
+size_t haze_alloc_size(uintptr_t dev_addr) noexcept;
+void haze_shadow_update(uintptr_t dev_addr, const std::vector<uint8_t>& data) noexcept;
+
+// ---------------------------------------------------------------------------
+// Stream accessor (defined in haze_stream.cpp)
+// ---------------------------------------------------------------------------
+
+hazeStream_t haze_default_stream() noexcept;
+
+// ---------------------------------------------------------------------------
+// Materialization hook (defined in haze_materialize.cpp, task 03).
+// Returns HAZE_SUCCESS as a no-op stub until task 03 is implemented.
+// ---------------------------------------------------------------------------
+
+hazeError_t haze_materialize_d2h(uintptr_t dev_addr) noexcept;

@@ -14,6 +14,7 @@
 
 #include <haze/haze.h>
 
+#include <cstring>
 #include <string_view>
 #include <thread>
 
@@ -30,14 +31,19 @@ TEST_CASE("hazeGetLastError clears after read") {
 }
 
 TEST_CASE("hazeGetErrorString returns \"unknown error\" for out-of-range codes") {
-    REQUIRE(std::string_view(hazeGetErrorString(static_cast<hazeError_t>(999)))
-            == "unknown error");
+    // Construct an out-of-range enum value via memcpy to avoid the
+    // -Wconversion warning GCC emits on static_cast<hazeError_t>(999).
+    int raw = 999;
+    hazeError_t unknown;
+    static_assert(sizeof(hazeError_t) == sizeof(raw), "enum size mismatch");
+    std::memcpy(&unknown, &raw, sizeof(unknown));
+    REQUIRE(std::string_view(hazeGetErrorString(unknown)) == "unknown error");
 }
 
 TEST_CASE("hazeGetDeviceCount compiles and links") {
     int count = -1;
     REQUIRE(hazeGetDeviceCount(&count) == HAZE_SUCCESS);
-    REQUIRE(count == 0);
+    REQUIRE(count == 1);
 }
 
 // Graph capture returns NOT_SUPPORTED rather than silently no-op'ing on

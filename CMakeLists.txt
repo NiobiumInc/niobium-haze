@@ -59,6 +59,7 @@ add_library(haze SHARED
   src/haze_compute.cpp
   src/haze_config.cpp
   src/haze_error.cpp
+  src/haze_materialize.cpp
 )
 
 target_include_directories(haze
@@ -97,7 +98,10 @@ install(DIRECTORY include/ DESTINATION include)
 enable_testing()
 find_package(Catch2 3 REQUIRED)
 
-add_executable(haze_tests test/test_build.cpp)
+add_executable(haze_tests
+  test/test_build.cpp
+  test/test_memory.cpp
+)
 
 target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
