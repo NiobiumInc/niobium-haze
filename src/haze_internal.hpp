@@ -46,6 +46,15 @@ void haze_shadow_update(uintptr_t dev_addr, const std::vector<uint8_t>& data) no
 hazeStream_t haze_default_stream() noexcept;
 
 // ---------------------------------------------------------------------------
+// Configuration accessors (defined in haze_config.cpp)
+// ---------------------------------------------------------------------------
+
+uint64_t haze_config_ring_dim() noexcept;
+uint64_t haze_config_modulus(int index) noexcept;
+bool haze_config_is_configured() noexcept;
+std::vector<uint64_t> haze_config_moduli_copy() noexcept;
+
+// ---------------------------------------------------------------------------
 // Materialization hook (defined in haze_materialize.cpp, task 03).
 // Returns HAZE_SUCCESS as a no-op stub until task 03 is implemented.
 // ---------------------------------------------------------------------------

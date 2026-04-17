@@ -1,0 +1,48 @@
+{
+  "nodes": {
+    "niobium-compiler": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1776729330,
+        "narHash": "sha256-oYbuaOhNihflRePqkwh0qt1c955RMVPfP4rmklAlCeE=",
+        "ref": "refs/heads/fix/fhetch-output-address-double-compaction",
+        "rev": "21d90d2e46689f935fe415d3e6f5d512f6117547",
+        "revCount": 2258,
+        "type": "git",
+        "url": "file:///work/niobium-compiler"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///work/niobium-compiler"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1776548001,
+        "narHash": "sha256-ZSK0NL4a1BwVbbTBoSnWgbJy9HeZFXLYQizjb2DPF24=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "b12141ef619e0a9c1c84dc8c684040326f27cdcc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "niobium-compiler": "niobium-compiler",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

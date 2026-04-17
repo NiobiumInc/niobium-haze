@@ -101,6 +101,7 @@ find_package(Catch2 3 REQUIRED)
 add_executable(haze_tests
   test/test_build.cpp
   test/test_memory.cpp
+  test/test_config.cpp
 )
 
 target_include_directories(haze_tests PRIVATE
