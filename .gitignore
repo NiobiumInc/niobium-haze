@@ -1,0 +1,48 @@
+# Build directories
+build/
+build-*/
+build-asan/
+build-tsan/
+build-release/
+cmake-build-*/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled output
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.profraw
+*.profdata
+
+# Nix build output
+result
+result-*
+
+# clangd / compile commands
+compile_commands.json
+.cache/
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# JJ / jujutsu
+.jj/

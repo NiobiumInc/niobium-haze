@@ -1,0 +1,129 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+// The contents of this file and all related materials provided herein (the
+// "Product") may not be used except pursuant to a separate written
+// agreement signed by a duly authorized officer of Niobium Microsystems,
+// Inc. (a "License Agreement").
+// Without limiting the foregoing, you may not, at any time or for any
+// reason, directly or indirectly, in whole or in part: (i) copy, modify,
+// or create derivative works of the Product; (ii) rent, lease, lend, sell,
+// sublicense, assign, distribute, publish, transfer, or otherwise make
+// available the Product; (iii) reverse engineer, disassemble, decompile,
+// decode, or adapt the Product; or (iv) remove any proprietary notices
+// from the Product.
+#ifndef HAZE_TYPES_H
+#define HAZE_TYPES_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+// ---------------------------------------------------------------------------
+// Symbol visibility
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+#  ifdef HAZE_BUILDING_LIBRARY
+#    define HAZE_API __declspec(dllexport)
+#  else
+#    define HAZE_API __declspec(dllimport)
+#  endif
+#elif defined(__GNUC__) || defined(__clang__)
+#  define HAZE_API __attribute__((visibility("default")))
+#else
+#  define HAZE_API
+#endif
+
+// Marks a return value that must not be silently discarded.
+#if defined(__cplusplus)
+#  define HAZE_NODISCARD [[nodiscard]]
+#elif defined(__GNUC__) || defined(__clang__)
+#  define HAZE_NODISCARD __attribute__((warn_unused_result))
+#else
+#  define HAZE_NODISCARD
+#endif
+
+// Expands to noexcept in C++, empty in C (for use in public headers).
+#ifdef __cplusplus
+#  define HAZE_NOEXCEPT noexcept
+#else
+#  define HAZE_NOEXCEPT
+#endif
+
+// ---------------------------------------------------------------------------
+// Opaque handle types (distinct pointer types, not void*)
+// ---------------------------------------------------------------------------
+
+typedef struct haze_stream_s* hazeStream_t;
+typedef struct haze_event_s*  hazeEvent_t;
+typedef struct haze_graph_s*  hazeGraph_t;
+typedef struct haze_exec_s*   hazeGraphExec_t;
+
+// ---------------------------------------------------------------------------
+// Error codes
+// Hardware status register bit mappings: dmemerr, imemerr, instrerr,
+// configerr, iseqerr.
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    HAZE_SUCCESS             = 0,
+    HAZE_ERROR_INVALID_HANDLE,
+    HAZE_ERROR_INVALID_VALUE,
+    HAZE_ERROR_OUT_OF_MEMORY,
+    HAZE_ERROR_NOT_SUPPORTED,
+    HAZE_ERROR_NOT_READY,
+    HAZE_ERROR_LAUNCH_FAILURE,
+    HAZE_ERROR_DMEMERR,
+    HAZE_ERROR_IMEMERR,
+    HAZE_ERROR_INSTRERR,
+    HAZE_ERROR_CONFIGERR,
+    HAZE_ERROR_ISEQERR,
+} hazeError_t;
+
+// ---------------------------------------------------------------------------
+// Memory-compute overlap capability flags
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    HAZE_OVERLAP_NONE  = 0,
+    HAZE_OVERLAP_LOAD  = 1u << 0,
+    HAZE_OVERLAP_STORE = 1u << 1,
+    HAZE_OVERLAP_FULL  = (1u << 0) | (1u << 1),
+} hazeOverlapFlags;
+
+// ---------------------------------------------------------------------------
+// DMA direction
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    HAZE_MEMCPY_HOST_TO_DEVICE   = 0,
+    HAZE_MEMCPY_DEVICE_TO_HOST   = 1,
+    HAZE_MEMCPY_DEVICE_TO_DEVICE = 2,
+} hazeMemcpyKind;
+
+// ---------------------------------------------------------------------------
+// Device properties (Section 4.1 of architecture document)
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    char             name[256];
+    size_t           hbmSize;
+    int              numRegisters;
+    int              numSupportedRingDims;
+    int              supportedRingDimExponents[32];
+    int              maxCiphertextModuli;
+    int              numHBMBanks;
+    hazeOverlapFlags overlapCaps;
+    int              instructionFIFODepth;
+} hazeDeviceProp;
+
+// ---------------------------------------------------------------------------
+// Pointer attribute query result (stub)
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    int   type;
+    int   device;
+    void* devicePointer;
+    void* hostPointer;
+} hazePointerAttributes;
+
+#endif /* HAZE_TYPES_H */
