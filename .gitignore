@@ -1,10 +1,10 @@
 # Build directories
 build/
 build-*/
-build-asan/
-build-tsan/
-build-release/
 cmake-build-*/
+out/
+_build/
+dbuild/
 
 # CMake generated files
 CMakeCache.txt
@@ -12,20 +12,60 @@ CMakeFiles/
 cmake_install.cmake
 CPackConfig.cmake
 CPackSourceConfig.cmake
+CTestTestfile.cmake
 Makefile
 *.cmake
 !CMakeLists.txt
+install_manifest.txt
+_deps/
+
+# Ninja
+build.ninja
+.ninja_log
+.ninja_deps
 
 # Compiled output
 *.o
+*.obj
+*.lo
+*.la
 *.a
+*.lib
 *.so
 *.so.*
 *.dylib
 *.dll
 *.exe
+*.pdb
+*.ilk
+*.exp
+*.gch
+*.pch
+
+# Coverage / profiling
+*.gcno
+*.gcda
 *.profraw
 *.profdata
+coverage/
+*.lcov
+*.coverage
+
+# Sanitizer crash dumps and runtime artefacts
+*.asan
+*.tsan
+*.ubsan
+*.lsan
+*.sanitizer.log
+core
+core.*
+vgcore.*
+
+# Test runner artefacts
+Testing/
+LastTest.log
+LastTestsFailed.log
+*.log
 
 # Nix build output
 result
@@ -34,8 +74,9 @@ result-*
 # clangd / compile commands
 compile_commands.json
 .cache/
+.clangd/
 
-# Editor artifacts
+# Editor artefacts
 .vscode/
 .idea/
 *.swp
@@ -46,3 +87,7 @@ Thumbs.db
 
 # JJ / jujutsu
 .jj/
+
+# HAZE runtime artefacts (compiler recordings written during tests)
+/haze/
+/my-program/

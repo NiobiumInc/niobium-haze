@@ -10,49 +10,51 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_internal.hpp"
+#include "haze_device.hpp"
 
+#include <haze/haze_types.h>
+
+#include <cstddef>
 #include <cstring>
 
-static constexpr int kDeviceCount = 1;
-static constexpr size_t kHbmSize = 16ULL * 1024 * 1024 * 1024;  // 16 GB
-static constexpr int kNumRegisters = 64;
-static constexpr int kMaxCiphertextModuli = 64;
-static constexpr int kNumHbmBanks = 8;
-// Ring dimension exponents 10..16 → N = 1024..65536
-static constexpr int kSupportedRingDimExponents[] = {10, 11, 12, 13, 14, 15, 16};
-static constexpr int kNumSupportedRingDims =
+namespace haze::detail {
+
+namespace {
+inline constexpr int kDeviceCount = 1;
+inline constexpr size_t kHbmSize = 16ULL * 1024 * 1024 * 1024; // 16 GB
+inline constexpr int kNumRegisters = 64;
+inline constexpr int kMaxCiphertextModuli = 64;
+inline constexpr int kNumHbmBanks = 8;
+// Ring dimension exponents 10..16 → N = 1024..65536.
+inline constexpr int kSupportedRingDimExponents[] = {10, 11, 12, 13, 14, 15, 16};
+inline constexpr int kNumSupportedRingDims =
     static_cast<int>(sizeof(kSupportedRingDimExponents) / sizeof(kSupportedRingDimExponents[0]));
 
-static int g_active_device = 0;
+// Single-device runtime: only one piece of mutable state.
+int g_active_device = 0;
+} // namespace
 
-extern "C" hazeError_t hazeGetDeviceCount(int* count) noexcept {
-    if (!count) return set_error(HAZE_ERROR_INVALID_VALUE);
-    *count = kDeviceCount;
-    return HAZE_SUCCESS;
-}
+int device_count() noexcept { return kDeviceCount; }
 
-extern "C" hazeError_t hazeSetDevice(int device) noexcept {
-    if (device != 0) return set_error(HAZE_ERROR_INVALID_VALUE);
+int device_active() noexcept { return g_active_device; }
+
+hazeError_t device_set_active(int device) noexcept {
+    if (device != 0)
+        return HAZE_ERROR_INVALID_VALUE;
     g_active_device = device;
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeGetDevice(int* device) noexcept {
-    if (!device) return set_error(HAZE_ERROR_INVALID_VALUE);
-    *device = g_active_device;
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp* prop,
-                                                int device) noexcept {
-    if (!prop) return set_error(HAZE_ERROR_INVALID_VALUE);
-    if (device != 0) return set_error(HAZE_ERROR_INVALID_VALUE);
+hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept {
+    if (prop == nullptr)
+        return HAZE_ERROR_INVALID_VALUE;
+    if (device != 0)
+        return HAZE_ERROR_INVALID_VALUE;
 
     *prop = {};
     std::strncpy(prop->name, "Niobium FPGA", sizeof(prop->name) - 1);
     prop->name[sizeof(prop->name) - 1] = '\0';
-    prop->hbmSize = kHbmSize;
+    prop->totalGlobalMem = kHbmSize;
     prop->numRegisters = kNumRegisters;
     prop->numSupportedRingDims = kNumSupportedRingDims;
     for (int i = 0; i < kNumSupportedRingDims; i++) {
@@ -65,22 +67,6 @@ extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp* prop,
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeDeviceSynchronize() noexcept {
-    return HAZE_SUCCESS;
-}
+void device_reset() noexcept { g_active_device = 0; }
 
-extern "C" hazeError_t hazeDeviceEnablePeerAccess(int /*peer*/,
-                                                   unsigned int /*flags*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeDeviceCanAccessPeer(int* can_access,
-                                                int /*device*/,
-                                                int /*peer*/) noexcept {
-    if (can_access) *can_access = 0;
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGetPerformanceCounters(void* /*counters*/) noexcept {
-    return HAZE_SUCCESS;
-}
+} // namespace haze::detail

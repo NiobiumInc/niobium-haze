@@ -10,7 +10,10 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_internal.hpp"
+#include "haze_errors.hpp"
+
+#include <haze/haze.h>
+#include <haze/haze_types.h>
 
 thread_local hazeError_t g_last_error = HAZE_SUCCESS;
 

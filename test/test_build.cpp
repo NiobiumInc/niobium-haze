@@ -12,7 +12,8 @@
 // from the Product.
 #include <catch2/catch_test_macros.hpp>
 
-#include <haze/haze.h>
+#include <haze/haze.h>        // IWYU pragma: keep
+#include <haze/haze_types.h>  // IWYU pragma: keep
 
 #include <cstring>
 #include <string_view>
@@ -24,7 +25,7 @@ TEST_CASE("hazeGetLastError returns HAZE_SUCCESS by default") {
 
 TEST_CASE("hazeGetLastError clears after read") {
     // Use a graph stub to set a real error, then verify clear-on-read semantics.
-    const hazeError_t ignored = hazeBeginCapture(nullptr);
+    const hazeError_t ignored = hazeStreamBeginCapture(nullptr);
     (void)ignored;
     REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
@@ -47,14 +48,14 @@ TEST_CASE("hazeGetDeviceCount compiles and links") {
 }
 
 // Graph capture returns NOT_SUPPORTED rather than silently no-op'ing on
-// purpose: a no-op hazeBeginCapture would hand back a bogus SUCCESS, and
-// the eventual hazeEndCapture would give the caller a null/empty graph
+// purpose: a no-op hazeStreamBeginCapture would hand back a bogus SUCCESS, and
+// the eventual hazeStreamEndCapture would give the caller a null/empty graph
 // that looks real — corrupting any graph-replay code path. An explicit
 // error surfaces the missing feature immediately.
 TEST_CASE("graph API returns HAZE_ERROR_NOT_SUPPORTED") {
-    REQUIRE(hazeBeginCapture(nullptr)          == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeStreamBeginCapture(nullptr)          == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
-    REQUIRE(hazeEndCapture(nullptr, nullptr)   == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeStreamEndCapture(nullptr, nullptr)   == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
     REQUIRE(hazeGraphDestroy(nullptr)          == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
@@ -70,10 +71,11 @@ TEST_CASE("multi-device stubs return HAZE_ERROR_NOT_SUPPORTED") {
 
 TEST_CASE("successful stubs do not pollute error state") {
     // Ensure a sequence of successful calls leaves hazeGetLastError as HAZE_SUCCESS.
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void* ptr = nullptr;
-    REQUIRE(hazeMalloc(&ptr, 1024)   == HAZE_SUCCESS);
-    REQUIRE(hazeFree(ptr)            == HAZE_SUCCESS);
-    REQUIRE(hazeGetLastError()       == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&ptr, 32768) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(ptr)           == HAZE_SUCCESS);
+    REQUIRE(hazeGetLastError()      == HAZE_SUCCESS);
 }
 
 // CUDA exposes a thread-local error state via cudaGetLastError with
@@ -83,7 +85,7 @@ TEST_CASE("successful stubs do not pollute error state") {
 // Reference: https://parallelprogrammer.substack.com/p/cuda-error-handling-a-definitive
 TEST_CASE("error state is thread-local") {
     // Set an error in the main thread.
-    hazeBeginCapture(nullptr);
+    hazeStreamBeginCapture(nullptr);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
 
     // Error from another thread must not bleed into main thread.
@@ -92,7 +94,7 @@ TEST_CASE("error state is thread-local") {
         // Child thread has its own clean error state.
         child_err = hazeGetLastError();
         // Set an error from the child; main thread must not see it.
-        hazeBeginCapture(nullptr);
+        hazeStreamBeginCapture(nullptr);
     });
     t.join();
 

@@ -1,7 +1,8 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include <catch2/catch_test_macros.hpp>
 
-#include <haze/haze.h>
+#include <haze/haze.h>        // IWYU pragma: keep
+#include <haze/haze_types.h>  // IWYU pragma: keep
 
 TEST_CASE("hazeSetRingDimension accepts valid power-of-2 dimensions") {
     REQUIRE(hazeSetRingDimension(4096)  == HAZE_SUCCESS);
@@ -56,6 +57,38 @@ TEST_CASE("hazeConfigureDevice fails without ring dimension") {
 }
 
 TEST_CASE("hazeConfigureDevice succeeds when ring dimension is set") {
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeSetProgramInfo accepts well-formed strings") {
+    REQUIRE(hazeSetProgramInfo("my-program", "1.2.3", "experimental run") == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeSetProgramInfo rejects null arguments") {
+    REQUIRE(hazeSetProgramInfo(nullptr, "1.0", "desc") == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeSetProgramInfo("name", nullptr, "desc") == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeSetProgramInfo("name", "1.0", nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeSetTarget accepts a target string") {
+    REQUIRE(hazeSetTarget("FHE_SIM") == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeSetTarget rejects null") {
+    REQUIRE(hazeSetTarget(nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeDeviceReset returns success and re-permits configuration") {
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // After reset, configure_device should fail again until ring_dim re-set.
+    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }

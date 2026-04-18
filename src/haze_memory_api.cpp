@@ -1,0 +1,129 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+// The contents of this file and all related materials provided herein (the
+// "Product") may not be used except pursuant to a separate written
+// agreement signed by a duly authorized officer of Niobium Microsystems,
+// Inc. (a "License Agreement").
+// Without limiting the foregoing, you may not, at any time or for any
+// reason, directly or indirectly, in whole or in part: (i) copy, modify,
+// or create derivative works of the Product; (ii) rent, lease, lend, sell,
+// sublicense, assign, distribute, publish, transfer, or otherwise make
+// available the Product; (iii) reverse engineer, disassemble, decompile,
+// decode, or adapt the Product; or (iv) remove any proprietary notices
+// from the Product.
+#include "haze_allocator.hpp"
+#include "haze_epoch.hpp"
+#include "haze_errors.hpp"
+#include "haze_handle.hpp"
+
+#include <haze/haze.h>
+#include <haze/haze_types.h>
+
+#include <cstdint>
+#include <cstdlib>
+#include <expected>
+
+extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
+    if (ptr == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::detail::allocator().allocate(size);
+    if (!result)
+        return set_error(haze::detail::to_public_error(result.error()));
+    *ptr = haze::detail::to_void_ptr(*result);
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazeFree(void *ptr) noexcept {
+    if (ptr != nullptr)
+        haze::detail::epoch().invalidate(haze::detail::to_dev_addr(ptr));
+    return set_error(haze::detail::allocator().free(haze::detail::to_dev_addr(ptr)));
+}
+
+extern "C" hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t /*stream*/) noexcept {
+    return hazeMalloc(ptr, size);
+}
+
+extern "C" hazeError_t hazeFreeAsync(void *ptr, hazeStream_t /*stream*/) noexcept {
+    return hazeFree(ptr);
+}
+
+extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*flags*/) noexcept {
+    if (ptr == nullptr || size == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    void *p = nullptr;
+    if (posix_memalign(&p, 4096, size) != 0)
+        return set_error(HAZE_ERROR_OUT_OF_MEMORY);
+    haze::detail::allocator().register_host_pointer(p);
+    *ptr = p;
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
+    haze::detail::allocator().unregister_host_pointer(ptr);
+    free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
+                                                const void *ptr) noexcept {
+    return set_error(haze::detail::allocator().pointer_attributes(attrs, ptr));
+}
+
+extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
+                                  hazeMemcpyKind kind) noexcept {
+    if (dst == nullptr || src == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+
+    auto &alloc = haze::detail::allocator();
+
+    if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
+        const haze::detail::DevAddr dev = haze::detail::to_dev_addr(dst);
+        const hazeError_t err = alloc.copy_h2d(dev, src, count);
+        if (err == HAZE_SUCCESS)
+            haze::detail::epoch().invalidate(dev);
+        return set_error(err);
+    }
+
+    if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
+        // copy_to_host_with_flush triggers any pending materialization,
+        // then reads bytes from the shadow into dst.
+        return set_error(
+            haze::detail::copy_to_host_with_flush(dst, haze::detail::to_dev_addr(src), count));
+    }
+
+    if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {
+        const haze::detail::DevAddr dev_dst = haze::detail::to_dev_addr(dst);
+        const haze::detail::DevAddr dev_src = haze::detail::to_dev_addr(src);
+        const hazeError_t err = alloc.copy_d2d(dev_dst, dev_src, count);
+        if (err == HAZE_SUCCESS)
+            haze::detail::epoch().invalidate(dev_dst);
+        return set_error(err);
+    }
+
+    return set_error(HAZE_ERROR_INVALID_VALUE);
+}
+
+extern "C" hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count,
+                                       hazeMemcpyKind kind, hazeStream_t /*stream*/) noexcept {
+    return hazeMemcpy(dst, src, count, kind);
+}
+
+extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
+    if (dev_ptr == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    const haze::detail::DevAddr dev = haze::detail::to_dev_addr(dev_ptr);
+    const hazeError_t err = haze::detail::allocator().memset(dev, value, count);
+    if (err == HAZE_SUCCESS)
+        haze::detail::epoch().invalidate(dev);
+    return set_error(err);
+}
+
+extern "C" hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
+                                       hazeStream_t /*stream*/) noexcept {
+    return hazeMemset(dev_ptr, value, count);
+}
+
+extern "C" hazeError_t hazeMemcpyPeerAsync(void * /*dst*/, int /*dst_device*/, const void * /*src*/,
+                                           int /*src_device*/, size_t /*count*/,
+                                           hazeStream_t /*stream*/) noexcept {
+    return set_error(HAZE_ERROR_NOT_SUPPORTED);
+}

@@ -3,10 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # TODO(task-06): niobium-compiler is not open-source but HAZE is intended
-    # to be. Before publishing, swap this flake input for a pre-built, versioned
-    # shared-object artifact (see how CUDA ships a closed runtime alongside
-    # open-source consumers via stub libs + ICD loader for the pattern).
+    # niobium-compiler and niobium-fhetch are tracked as git submodules
+    # under vendor/ (see .gitmodules). For Nix flake purity reasons we still
+    # take the input via an absolute file URL today; when the repo is
+    # published this becomes `git+file:./vendor/niobium-compiler` (or a
+    # GitHub URL for niobium-compiler once it is open-sourced).
     niobium-compiler = {
       url = "git+file:///work/niobium-compiler";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -60,13 +61,16 @@
           pkgs = nixpkgs.legacyPackages.${system};
           llvm = pkgs.llvmPackages_19;
 
-          # TODO: when we make the niobium compiler a submodule we should be able to remove these external paths.
-          niobiumVendor = "/work/niobium-compiler/vendor/lib/niobium-compiler";
-          openfheVendor = "/work/niobium-compiler/vendor/lib/openfhe";
+          # Paths inside the niobium-compiler submodule. These pick up the
+          # in-tree build artifacts produced by `make build` /
+          # `make build-release` over in vendor/niobium-compiler.
+          niobiumRoot = toString ./vendor/niobium-compiler;
+          niobiumVendor = "${niobiumRoot}/vendor/lib/niobium-compiler";
+          openfheVendor = "${niobiumRoot}/vendor/lib/openfhe";
           # Transitive runtime deps of libnbcc (not installed to vendor, built in-tree)
-          replayLib = "/work/niobium-compiler/build";
-          photovLib = "/work/niobium-compiler/deps/photovoltaic/dbuild";
-          ntlLib = "/work/niobium-compiler/deps/photovoltaic/dbuild/ntl/lib";
+          replayLib = "${niobiumRoot}/build";
+          photovLib = "${niobiumRoot}/deps/photovoltaic/dbuild";
+          ntlLib = "${niobiumRoot}/deps/photovoltaic/dbuild/ntl/lib";
         in {
           default = pkgs.mkShell {
             name = "haze-dev";

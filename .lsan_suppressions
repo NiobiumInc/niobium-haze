@@ -1,0 +1,18 @@
+# LeakSanitizer suppressions for HAZE tests.
+#
+# Allocations inside libnbcc (niobium-compiler) leak under ASAN — every
+# stop_epoch() invocation drops ~2.5 KB inside the optimization passes.
+# These leaks are upstream and outside HAZE's control. Suppressing them
+# here lets `detect_leaks=1` runs surface any HAZE-side leak immediately.
+#
+# Usage: LSAN_OPTIONS=suppressions=$(pwd)/.lsan_suppressions ./build-asan/haze_tests
+#
+# To audit upstream impact, run with the suppression off:
+# LSAN_OPTIONS=detect_leaks=1 ./build-asan/haze_tests
+#
+# When libnbcc fixes these, delete this file and re-run a clean leak pass.
+
+leak:niobium::llvm::optimization::RegisterAllocationPass::transform
+leak:niobium::llvm::optimization::OptimizationPass::run
+leak:niobium::llvm::Generator::execute
+leak:libnbcc.so

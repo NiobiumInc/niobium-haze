@@ -10,116 +10,60 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_internal.hpp"
+#include "haze_stream.hpp"
 
 #include <atomic>
-#include <mutex>
+#include <cstdint>
+#include <new>
 
-// ---------------------------------------------------------------------------
-// Opaque struct definitions (match forward-declared C handles)
-// ---------------------------------------------------------------------------
+namespace haze::detail {
 
-struct haze_stream_s {
-    uint64_t id;
-    bool is_default;
-};
+namespace {
+std::atomic<uint64_t> g_next_stream_id{1};
+std::atomic<uint64_t> g_next_event_id{1};
+} // namespace
 
-struct haze_event_s {
-    uint64_t id;
-    bool recorded;
-};
-
-static std::atomic<uint64_t> g_next_stream_id{1};  // NOLINT
-static std::atomic<uint64_t> g_next_event_id{1};   // NOLINT
-
-// Default stream: created lazily, never destroyed.
-static std::mutex g_default_stream_mutex;               // NOLINT
-static haze_stream_s* g_default_stream = nullptr;       // NOLINT
-
-static haze_stream_s* get_default_stream() noexcept {
-    std::lock_guard lock(g_default_stream_mutex);
-    if (!g_default_stream) {
-        g_default_stream = new haze_stream_s{0, true};  // id=0 for default stream
-    }
-    return g_default_stream;
+hazeStream_t stream_create() noexcept {
+    return new (std::nothrow)
+        haze_stream_s{g_next_stream_id.fetch_add(1, std::memory_order_relaxed), false};
 }
 
-// ---------------------------------------------------------------------------
-// Stream API
-// ---------------------------------------------------------------------------
-
-extern "C" hazeError_t hazeStreamCreate(hazeStream_t* stream) noexcept {
-    // Mirrors CUDA's cudaStreamCreate contract: allocate a handle and write
-    // it through the out-pointer on success. Fails with INVALID_VALUE on a
-    // null out-pointer and OUT_OF_MEMORY if allocation throws.
-    if (!stream) return set_error(HAZE_ERROR_INVALID_VALUE);
-    try {
-        *stream = new haze_stream_s{g_next_stream_id.fetch_add(1, std::memory_order_relaxed),
-                                    false};
-    } catch (...) {
-        return set_error(HAZE_ERROR_OUT_OF_MEMORY);
-    }
-    return HAZE_SUCCESS;
+void stream_destroy(hazeStream_t s) noexcept {
+    if (s == nullptr)
+        return;
+    if (s->is_default)
+        return; // never destroy the default stream
+    delete s;
 }
 
-extern "C" hazeError_t hazeStreamCreateWithPriority(hazeStream_t* stream,
-                                                      unsigned int /*flags*/,
-                                                      int /*priority*/) noexcept {
-    return hazeStreamCreate(stream);
+hazeStream_t stream_default() noexcept {
+    // id=0 mirrors CUDA's default-stream convention. The instance has
+    // static storage duration — initialised once on first call (C++11
+    // magic statics handle the thread-safe init), destroyed at normal
+    // process exit. No heap allocation, no leak, no mutex needed for
+    // the lazy init.
+    static haze_stream_s instance{0, true};
+    return &instance;
 }
 
-extern "C" hazeError_t hazeStreamDestroy(hazeStream_t stream) noexcept {
-    if (!stream) return HAZE_SUCCESS;
-    if (stream->is_default) return HAZE_SUCCESS;  // never destroy the default stream
-    delete stream;
-    return HAZE_SUCCESS;
+void streams_reset() noexcept {
+    // Default stream lives for the process; nothing to drop here. Only
+    // the user-stream id counter resets.
+    g_next_stream_id.store(1, std::memory_order_relaxed);
 }
 
-extern "C" hazeError_t hazeStreamSynchronize(hazeStream_t /*stream*/) noexcept {
-    return HAZE_SUCCESS;
+hazeEvent_t event_create() noexcept {
+    return new (std::nothrow)
+        haze_event_s{g_next_event_id.fetch_add(1, std::memory_order_relaxed), false};
 }
 
-extern "C" hazeError_t hazeStreamWaitEvent(hazeStream_t /*stream*/,
-                                             hazeEvent_t /*event*/,
-                                             unsigned int /*flags*/) noexcept {
-    return HAZE_SUCCESS;
+void event_destroy(hazeEvent_t e) noexcept { delete e; }
+
+void event_record(hazeEvent_t e) noexcept {
+    if (e != nullptr)
+        e->recorded = true;
 }
 
-// ---------------------------------------------------------------------------
-// Event API
-// ---------------------------------------------------------------------------
+void events_reset() noexcept { g_next_event_id.store(1, std::memory_order_relaxed); }
 
-extern "C" hazeError_t hazeEventCreate(hazeEvent_t* event) noexcept {
-    if (!event) return set_error(HAZE_ERROR_INVALID_VALUE);
-    try {
-        *event = new haze_event_s{g_next_event_id.fetch_add(1, std::memory_order_relaxed),
-                                   false};
-    } catch (...) {
-        return set_error(HAZE_ERROR_OUT_OF_MEMORY);
-    }
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeEventCreateWithFlags(hazeEvent_t* event,
-                                                  unsigned int /*flags*/) noexcept {
-    return hazeEventCreate(event);
-}
-
-extern "C" hazeError_t hazeEventDestroy(hazeEvent_t event) noexcept {
-    delete event;
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeEventRecord(hazeEvent_t event,
-                                        hazeStream_t /*stream*/) noexcept {
-    if (event) event->recorded = true;
-    return HAZE_SUCCESS;
-}
-
-// ---------------------------------------------------------------------------
-// Internal accessor
-// ---------------------------------------------------------------------------
-
-hazeStream_t haze_default_stream() noexcept {
-    return get_default_stream();
-}
+} // namespace haze::detail

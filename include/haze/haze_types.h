@@ -14,7 +14,6 @@
 #define HAZE_TYPES_H
 
 #include <stddef.h>
-#include <stdint.h>
 
 // ---------------------------------------------------------------------------
 // Symbol visibility
@@ -91,39 +90,53 @@ typedef enum {
 
 // ---------------------------------------------------------------------------
 // DMA direction
+// Numbering matches CUDA's cudaMemcpyKind value-for-value so callers
+// porting from CUDA can cast cudaMemcpyKind to hazeMemcpyKind without
+// silently swapping directions.
 // ---------------------------------------------------------------------------
 
 typedef enum {
-    HAZE_MEMCPY_HOST_TO_DEVICE   = 0,
-    HAZE_MEMCPY_DEVICE_TO_HOST   = 1,
-    HAZE_MEMCPY_DEVICE_TO_DEVICE = 2,
+    HAZE_MEMCPY_HOST_TO_HOST     = 0,
+    HAZE_MEMCPY_HOST_TO_DEVICE   = 1,
+    HAZE_MEMCPY_DEVICE_TO_HOST   = 2,
+    HAZE_MEMCPY_DEVICE_TO_DEVICE = 3,
+    HAZE_MEMCPY_DEFAULT          = 4,
 } hazeMemcpyKind;
 
 // ---------------------------------------------------------------------------
-// Device properties (Section 4.1 of architecture document)
+// Device properties.
 // ---------------------------------------------------------------------------
 
 typedef struct {
     char             name[256];
-    size_t           hbmSize;
+    size_t           totalGlobalMem;             /* bytes; matches cudaDeviceProp::totalGlobalMem */
     int              numRegisters;
-    int              numSupportedRingDims;
-    int              supportedRingDimExponents[32];
-    int              maxCiphertextModuli;
-    int              numHBMBanks;
-    hazeOverlapFlags overlapCaps;
-    int              instructionFIFODepth;
+    int              numSupportedRingDims;       /* HAZE-specific, FHE param */
+    int              supportedRingDimExponents[32]; /* HAZE-specific */
+    int              maxCiphertextModuli;        /* HAZE-specific */
+    int              numHBMBanks;                /* HAZE-specific */
+    hazeOverlapFlags overlapCaps;                /* HAZE-specific */
+    int              instructionFIFODepth;       /* HAZE-specific */
 } hazeDeviceProp;
 
 // ---------------------------------------------------------------------------
-// Pointer attribute query result (stub)
+// Pointer attribute query result
 // ---------------------------------------------------------------------------
 
+// Memory-type values stored in hazePointerAttributes::type. Numbering
+// matches CUDA's cudaMemoryType for portability of CUDA-to-HAZE ports.
+typedef enum {
+    HAZE_MEMORY_TYPE_UNREGISTERED = 0,
+    HAZE_MEMORY_TYPE_HOST         = 1,
+    HAZE_MEMORY_TYPE_DEVICE       = 2,
+    HAZE_MEMORY_TYPE_MANAGED      = 4
+} hazeMemoryType;
+
 typedef struct {
-    int   type;
-    int   device;
-    void* devicePointer;
-    void* hostPointer;
+    hazeMemoryType type;
+    int            device;
+    void*          devicePointer;
+    void*          hostPointer;
 } hazePointerAttributes;
 
 #endif /* HAZE_TYPES_H */

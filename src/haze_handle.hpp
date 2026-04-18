@@ -1,0 +1,52 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+// The contents of this file and all related materials provided herein (the
+// "Product") may not be used except pursuant to a separate written
+// agreement signed by a duly authorized officer of Niobium Microsystems,
+// Inc. (a "License Agreement").
+// Without limiting the foregoing, you may not, at any time or for any
+// reason, directly or indirectly, in whole or in part: (i) copy, modify,
+// or create derivative works of the Product; (ii) rent, lease, lend, sell,
+// sublicense, assign, distribute, publish, transfer, or otherwise make
+// available the Product; (iii) reverse engineer, disassemble, decompile,
+// decode, or adapt the Product; or (iv) remove any proprietary notices
+// from the Product.
+#pragma once
+
+#include <cstdint>
+#include <functional>
+
+namespace haze::detail {
+
+// Virtual HBM address base for HAZE's DeviceAllocator.
+// Must lie above FHETCH's synthetic address range (today < 0x1000000000)
+// so HAZE-allocated DevAddr values cannot alias FHETCH-emitted synthetic
+// addresses inside the recorded IR. The specific offset (256 GiB) is
+// arbitrary within the constraint; chosen to leave generous headroom.
+inline constexpr uintptr_t kHbmBase = 0x4000000000ULL;
+
+// Strong-typed device address. Wraps the uintptr_t we cast from the
+// `void*` HAZE handed to the user via hazeMalloc. Internal HAZE code
+// works with DevAddr; the `void*` lives only at the C ABI boundary.
+enum class DevAddr : uintptr_t {};
+
+inline DevAddr to_dev_addr(const void *p) noexcept {
+    return DevAddr{reinterpret_cast<uintptr_t>(p)};
+}
+
+inline uintptr_t to_uintptr(DevAddr a) noexcept {
+    return static_cast<uintptr_t>(a);
+}
+
+inline void *to_void_ptr(DevAddr a) noexcept {
+    return reinterpret_cast<void *>(static_cast<uintptr_t>(a));
+}
+
+} // namespace haze::detail
+
+namespace std {
+template <> struct hash<haze::detail::DevAddr> {
+    size_t operator()(haze::detail::DevAddr a) const noexcept {
+        return hash<uintptr_t>{}(haze::detail::to_uintptr(a));
+    }
+};
+} // namespace std
