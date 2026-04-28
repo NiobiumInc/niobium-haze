@@ -46,6 +46,8 @@ hazeError_t Config::set_ring_dimension(uint64_t n) noexcept {
     // order is Config -> Allocator; the allocator never calls back into
     // Config, so this direction cannot deadlock.
     std::lock_guard lock(mutex_);
+    if (configured_ && ring_dim_ != n)
+        return HAZE_ERROR_CONFIGERR;
     ring_dim_ = n;
     DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
     return HAZE_SUCCESS;
@@ -57,6 +59,12 @@ hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
     if (modulus == 0)
         return HAZE_ERROR_INVALID_VALUE;
     std::lock_guard lock(mutex_);
+    if (configured_) {
+        const auto i = static_cast<size_t>(idx);
+        if (i >= moduli_.size() || moduli_[i] != modulus)
+            return HAZE_ERROR_CONFIGERR;
+        return HAZE_SUCCESS;
+    }
     // Reject sparse writes — every index from 0 to idx-1 must already
     // have been set with a non-zero modulus. Without this constraint,
     // skipping an index leaves a 0 in the table which Config::modulus()
@@ -76,6 +84,12 @@ hazeError_t Config::set_twiddle_generator(int idx, uint64_t generator) noexcept 
     if (idx < 0)
         return HAZE_ERROR_INVALID_VALUE;
     std::lock_guard lock(mutex_);
+    if (configured_) {
+        const auto i = static_cast<size_t>(idx);
+        if (i >= twiddle_generators_.size() || twiddle_generators_[i] != generator)
+            return HAZE_ERROR_CONFIGERR;
+        return HAZE_SUCCESS;
+    }
     if (static_cast<int>(twiddle_generators_.size()) <= idx) {
         twiddle_generators_.resize(static_cast<size_t>(idx) + 1, 0);
     }
