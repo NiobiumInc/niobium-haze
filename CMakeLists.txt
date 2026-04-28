@@ -93,6 +93,7 @@ add_library(haze SHARED
   src/haze_stream.cpp
   src/haze_stream_api.cpp
   src/haze_compute_api.cpp
+  src/haze_basis_convert.cpp
   src/haze_config.cpp
   src/haze_config_api.cpp
   src/haze_error.cpp
@@ -149,6 +150,7 @@ add_executable(haze_tests
   test/test_memory.cpp
   test/test_config.cpp
   test/test_compute.cpp
+  test/test_basis_convert.cpp
 )
 
 target_include_directories(haze_tests PRIVATE

@@ -7,15 +7,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1776729330,
-        "narHash": "sha256-oYbuaOhNihflRePqkwh0qt1c955RMVPfP4rmklAlCeE=",
-        "ref": "refs/heads/fix/fhetch-output-address-double-compaction",
-        "rev": "21d90d2e46689f935fe415d3e6f5d512f6117547",
-        "revCount": 2258,
+        "lastModified": 1777301788,
+        "narHash": "sha256-XHngLG/1X+yWmPa6jFyZWO/3hIT/VkciwX3RvDx9fX4=",
+        "ref": "main",
+        "rev": "fe9ccee7653c7b9d8cefb0072c43a90ead1ba2d5",
+        "revCount": 2296,
         "type": "git",
         "url": "file:///work/niobium-compiler"
       },
       "original": {
+        "ref": "main",
         "type": "git",
         "url": "file:///work/niobium-compiler"
       }

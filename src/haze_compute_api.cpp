@@ -103,22 +103,8 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
         haze::detail::to_dev_addr(dst), haze::detail::to_dev_addr(src), index);
 }
 
-// CRT basis conversion stubs (basis-conversion task supplies the impl).
-
-extern "C" hazeError_t hazeBasisConvert(void * /*dst*/, const void * /*src*/,
-                                        const void * /*params*/, hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeModDown(void * /*dst*/, const void * /*src*/, const void * /*params*/,
-                                   hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeModUp(void * /*dst*/, const void * /*src*/, const void * /*params*/,
-                                 hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
+// CRT basis conversion (hazeBasisConvert / hazeModDown / hazeModUp) is
+// implemented in haze_basis_convert.cpp.
 
 // Graph capture / execution stubs (CUDA-shape names) — not supported yet.
 

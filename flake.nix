@@ -9,7 +9,9 @@
     # published this becomes `git+file:./vendor/niobium-compiler` (or a
     # GitHub URL for niobium-compiler once it is open-sourced).
     niobium-compiler = {
-      url = "git+file:///work/niobium-compiler";
+      # Pin to main so we pick up the fast_base_convert CRT-constants fix
+      # (#1206 / 1f78da4b). Earlier pins on fix branches predate that fix.
+      url = "git+file:///work/niobium-compiler?ref=main";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
