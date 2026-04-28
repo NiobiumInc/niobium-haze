@@ -36,6 +36,13 @@ endif()
 option(HAZE_SANITIZERS "Enable ASAN + UBSAN" OFF)
 option(HAZE_TSAN       "Enable TSAN"         OFF)
 
+# Selects which FBC variant the test reference oracle invokes through
+# OpenFHE. Must match whichever variant the niobium-instrumented OpenFHE
+# was compiled with (its own WITH_REDUCED_NOISE flag). Default ON
+# matches niobium's vendored OpenFHE.
+option(HAZE_FBC_REDUCED_NOISE
+       "Test oracle uses ReducedNoise variant (OFF: Standard)" ON)
+
 if(HAZE_SANITIZERS AND HAZE_TSAN)
   message(FATAL_ERROR "HAZE_SANITIZERS and HAZE_TSAN are mutually exclusive.")
 endif()
@@ -72,6 +79,9 @@ get_filename_component(_nb_prefix "${_nb_include_dir}" DIRECTORY)
 set(NIOBIUM_OPENFHE_INCLUDE
     "${_nb_prefix}/../openfhe/include/openfhe"
     CACHE PATH "OpenFHE include root bundled with the niobium compiler")
+set(NIOBIUM_OPENFHE_LIB
+    "${_nb_prefix}/../openfhe/lib"
+    CACHE PATH "OpenFHE shared-library dir bundled with the niobium compiler")
 set(NIOBIUM_JSON_INCLUDE
     "${_nb_prefix}/../../../vendor/json/single_include"
     CACHE PATH "nlohmann/json include dir bundled with the niobium compiler")
@@ -167,7 +177,25 @@ add_executable(haze_tests
 target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# OpenFHE BigInteger headers — used by test_basis_convert.cpp's reference
+# oracle. Marked SYSTEM so OpenFHE's internal -Wunused-parameter etc.
+# warnings don't trip our -Werror.
+target_include_directories(haze_tests SYSTEM PRIVATE
+  ${NIOBIUM_OPENFHE_INCLUDE}
+  ${NIOBIUM_OPENFHE_INCLUDE}/core
+)
 
-target_link_libraries(haze_tests PRIVATE haze Catch2::Catch2WithMain)
+target_link_libraries(haze_tests PRIVATE
+  haze
+  Catch2::Catch2WithMain
+  # OPENFHEcore: BigInteger primitives used by the test reference
+  # oracle (no DCRTPoly path — that's blocked by OpenFHE's WITH_CPROBES
+  # instrumentation polluting libnbcc's recording state).
+  ${NIOBIUM_OPENFHE_LIB}/libOPENFHEcore.so
+)
+
+# Pass the FBC variant choice through to the test oracle.
+target_compile_definitions(haze_tests PRIVATE
+  HAZE_FBC_REDUCED_NOISE=$<BOOL:${HAZE_FBC_REDUCED_NOISE}>)
 
 add_test(NAME haze_tests COMMAND haze_tests)
