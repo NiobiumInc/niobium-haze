@@ -140,45 +140,47 @@ typedef struct {
     void *hostPointer;
 } hazePointerAttributes;
 
+// RYANPR: Follow the comment structure from task 3: no banners, no definitions of sections since the public repo won't have access to our planning docs.
 // ---------------------------------------------------------------------------
 // CRT basis conversion parameters (Section 5.4)
 // ---------------------------------------------------------------------------
-// Each struct describes a multi-residue polynomial (MRP) by listing its
-// component single-residue polynomials and the moduli base. The public
-// hazeBasisConvert / hazeModDown / hazeModUp keep the CUDA-style void* dst
-// and const void* src parameters for API symmetry; both are ignored when
-// a non-null params pointer is supplied — all polynomial pointers come
-// from the struct arrays. The struct layout is provisional and may
-// change after FIDESlib integration.
+// Each struct describes the moduli bases of a multi-residue polynomial
+// (MRP) operation. Polynomial pointers are passed via the matching
+// public function's `dst` / `src` arguments; the params struct carries
+// scalar / array metadata only.
 
+// Ideally use consistent `//` comment syntax throughout.
+/* `src` is an array of length `src_base_len`, one poly pointer per src
+ * modulus. `dst` is an array of length `dst_base_len`, one poly pointer
+ * per dst modulus. */
 typedef struct {
-    const void *const *src_polys; /* one src poly pointer per src modulus */
+    // RYANPR: What is this base pointer (both source and destination) on all of these structs for when we pass in src and destination in the function call? I assume these are the primes.
     const uint64_t *src_base;
     size_t src_base_len;
-    void *const *dst_polys; /* one dst poly pointer per dst modulus */
     const uint64_t *dst_base;
     size_t dst_base_len;
     uint64_t ring_dim;
 } hazeBasisConvertParams;
 
+/* `src` is an array of length `src_base_len`. `dst` is an array of
+ * length `src_base_len - rescale_base_len`, ordered by `src_base \
+ * rescale_base` in src_base's original order. */
 typedef struct {
-    const void *const *src_polys;
     const uint64_t *src_base;
     size_t src_base_len;
-    void *const *dst_polys;       /* length == src_base_len - rescale_base_len */
     const uint64_t *rescale_base; /* subset of src_base, in src_base's order */
     size_t rescale_base_len;
     uint64_t ring_dim;
 } hazeModDownParams;
 
-/* hazeModUp emits dig_decomp, which produces an MRPArray of length
- * digit_count. Each element has base (src_base ∪ p_base). dst_polys is a
- * flat array of length digit_count * (src_base_len + p_base_len), written
+/* `src` is an array of length `src_base_len`. `dst` is a flat array of
+ * length `digit_count * (src_base_len + p_base_len)`, written
  * digit-major: digit 0's polys (in src_base order, then p_base order),
- * then digit 1's polys, etc. digit_bases is a concatenation of digit_count
- * sub-bases; digit_base_lens[i] gives the length of the i-th sub-base. */
+ * then digit 1's polys, etc. `digit_bases` is a concatenation of
+ * `digit_count` sub-bases; `digit_base_lens[i]` gives the length of the
+ * i-th sub-base. hazeModUp emits dig_decomp, producing an MRPArray of
+ * length digit_count where each element has base (src_base ∪ p_base). */
 typedef struct {
-    const void *const *src_polys;
     const uint64_t *src_base;
     size_t src_base_len;
     const uint64_t *digit_bases;
@@ -186,7 +188,6 @@ typedef struct {
     size_t digit_count;
     const uint64_t *p_base;
     size_t p_base_len;
-    void *const *dst_polys;
     uint64_t ring_dim;
 } hazeModUpParams;
 

@@ -66,14 +66,12 @@ TEST_CASE("hazeBasisConvert rejects empty source base") {
     void *dst_polys[] = {dst};
 
     hazeBasisConvertParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 0; // invalid
-    p.dst_polys = dst_polys;
     p.dst_base = dst_base;
     p.dst_base_len = 1;
     p.ring_dim = kRingDim;
-    REQUIRE(hazeBasisConvert(nullptr, nullptr, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
@@ -93,14 +91,12 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
     void *dst_polys[] = {d};
 
     hazeModDownParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 2;
-    p.dst_polys = dst_polys;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
     p.ring_dim = kRingDim;
-    REQUIRE(hazeModDown(nullptr, nullptr, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     // Subsequent compute + D2H must still work (recording state is clean).
@@ -136,14 +132,12 @@ TEST_CASE("hazeModDown rejects rescale base longer than source") {
     void *dst_polys[] = {dst};
 
     hazeModDownParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 1;
-    p.dst_polys = dst_polys;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 2; // larger than src
     p.ring_dim = kRingDim;
-    REQUIRE(hazeModDown(nullptr, nullptr, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
@@ -177,14 +171,12 @@ TEST_CASE("hazeBasisConvert: 2->2 base converts and produces retrievable output"
     void *dst_polys[] = {d0, d1};
 
     hazeBasisConvertParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 2;
-    p.dst_polys = dst_polys;
     p.dst_base = dst_base;
     p.dst_base_len = 2;
     p.ring_dim = kRingDim;
-    REQUIRE(hazeBasisConvert(nullptr, nullptr, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     // Retrieve results — values are deterministic from fast_base_convert;
     // the test verifies the pipeline runs end-to-end, not specific values.
@@ -228,14 +220,12 @@ TEST_CASE("hazeModDown: 3->2 emits instructions and registers outputs") {
     void *dst_polys[] = {d0, d1};
 
     hazeModDownParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 3;
-    p.dst_polys = dst_polys;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
     p.ring_dim = kRingDim;
-    REQUIRE(hazeModDown(nullptr, nullptr, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     // Flush the recording. With FBC fix in place, D2H should succeed
     // without HAZE_ERROR_LAUNCH_FAILURE.
@@ -280,7 +270,6 @@ TEST_CASE("hazeModUp: 2 digits over Q={q0,q1} extended by P={q2}") {
                          dst_storage[3], dst_storage[4], dst_storage[5]};
 
     hazeModUpParams p{};
-    p.src_polys = src_polys;
     p.src_base = src_base;
     p.src_base_len = 2;
     p.digit_bases = digit_bases_flat;
@@ -288,9 +277,8 @@ TEST_CASE("hazeModUp: 2 digits over Q={q0,q1} extended by P={q2}") {
     p.digit_count = 2;
     p.p_base = p_base;
     p.p_base_len = 1;
-    p.dst_polys = dst_polys;
     p.ring_dim = kRingDim;
-    REQUIRE(hazeModUp(nullptr, nullptr, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     // Flush the recording via D2H of the first dst poly. With FBC fix
     // in place, this exercises the dig_decomp gadget end-to-end through

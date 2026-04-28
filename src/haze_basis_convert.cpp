@@ -24,6 +24,7 @@
 #include "haze_thread_safety.hpp"
 
 #include <cstddef>
+// RYANPR: Make sure lints are run and we don't need all of these imports (true for all files changed in this task)
 #include <cstdint>
 #include <expected>
 #include <haze/haze.h>
@@ -72,31 +73,33 @@ void store_mrp_locked(void *const *dst_polys, const fhetch::MRP &mrp, const uint
 
 } // namespace
 
+// RYANPR: Follow banner style from task 3 (as in ideally none)
 // ---------------------------------------------------------------------------
 // hazeBasisConvert — fast base conversion
 // ---------------------------------------------------------------------------
 
-extern "C" hazeError_t hazeBasisConvert(void * /*dst*/, const void * /*src*/, const void *params,
-                                        hazeStream_t /*stream*/) noexcept {
-    if (params == nullptr) {
+extern "C" hazeError_t hazeBasisConvert(void *const *dst, const void *const *src,
+                                        const void *params, hazeStream_t /*stream*/) noexcept {
+    if (params == nullptr || src == nullptr || dst == nullptr) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
     const auto *p = static_cast<const hazeBasisConvertParams *>(params);
-    if (p->src_polys == nullptr || p->src_base == nullptr || p->src_base_len == 0 ||
-        p->dst_polys == nullptr || p->dst_base == nullptr || p->dst_base_len == 0) {
+    if (p->src_base == nullptr || p->src_base_len == 0 || p->dst_base == nullptr ||
+        p->dst_base_len == 0) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
 
+    // RYANPR: In general this `detail` namespace should be removed; that name as no meaning, everything is details
     haze::detail::EpochSession session;
 
-    auto src_mrp = build_mrp_locked(p->src_polys, p->src_base, p->src_base_len);
+    auto src_mrp = build_mrp_locked(src, p->src_base, p->src_base_len);
     if (!src_mrp) {
         return set_error(haze::detail::to_public_error(src_mrp.error()));
     }
 
     const fhetch::ModuliBase target_base(p->dst_base, p->dst_base + p->dst_base_len);
     fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base);
-    store_mrp_locked(p->dst_polys, result, p->dst_base, p->dst_base_len);
+    store_mrp_locked(dst, result, p->dst_base, p->dst_base_len);
     return HAZE_SUCCESS;
 }
 
@@ -104,18 +107,22 @@ extern "C" hazeError_t hazeBasisConvert(void * /*dst*/, const void * /*src*/, co
 // hazeModDown — rescale via fast base conversion
 // ---------------------------------------------------------------------------
 
-extern "C" hazeError_t hazeModDown(void * /*dst*/, const void * /*src*/, const void *params,
+// RYANPR: I think these functions need to be in an *_api.cpp file like how the other api related functions are handled.
+// RYANPR: I would like the public API pieces to be as simple as possible (shims really), and then you can write functions to handle the cases with the right type. This change will need to be made to the compute API as well I believe.
+// RYANPR: Having an internal function also allows us to have better error types that we can convert to a hazeError_t. These could also be applied to the compute API.
+extern "C" hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
                                    hazeStream_t /*stream*/) noexcept {
-    if (params == nullptr) {
+    if (params == nullptr || src == nullptr || dst == nullptr) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
     const auto *p = static_cast<const hazeModDownParams *>(params);
-    if (p->src_polys == nullptr || p->src_base == nullptr || p->src_base_len == 0 ||
-        p->dst_polys == nullptr || p->rescale_base == nullptr || p->rescale_base_len == 0 ||
-        p->rescale_base_len > p->src_base_len) {
+    // RYANPR: I assume we do this validation in several places, in which case it should be abstracted out.
+    if (p->src_base == nullptr || p->src_base_len == 0 || p->rescale_base == nullptr ||
+        p->rescale_base_len == 0 || p->rescale_base_len > p->src_base_len) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
 
+    // RYANPR: Are you replicating functionality in the FhetchApi.cpp from the compiler?
     // Compute dst_base = src_base \ rescale_base BEFORE opening an
     // EpochSession so a foreign modulus in rescale_base aborts without
     // dirtying the recording (no inputs tagged, no instructions emitted).
@@ -140,14 +147,14 @@ extern "C" hazeError_t hazeModDown(void * /*dst*/, const void * /*src*/, const v
 
     haze::detail::EpochSession session;
 
-    auto src_mrp = build_mrp_locked(p->src_polys, p->src_base, p->src_base_len);
+    auto src_mrp = build_mrp_locked(src, p->src_base, p->src_base_len);
     if (!src_mrp) {
         return set_error(haze::detail::to_public_error(src_mrp.error()));
     }
 
     const fhetch::ModuliBase rescale_base(p->rescale_base, p->rescale_base + p->rescale_base_len);
     fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base);
-    store_mrp_locked(p->dst_polys, result, dst_base.data(), dst_base.size());
+    store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
     return HAZE_SUCCESS;
 }
 
@@ -155,21 +162,21 @@ extern "C" hazeError_t hazeModDown(void * /*dst*/, const void * /*src*/, const v
 // hazeModUp — digit decomposition for hybrid key switching
 // ---------------------------------------------------------------------------
 
-extern "C" hazeError_t hazeModUp(void * /*dst*/, const void * /*src*/, const void *params,
+extern "C" hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                  hazeStream_t /*stream*/) noexcept {
-    if (params == nullptr) {
+    if (params == nullptr || src == nullptr || dst == nullptr) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
     const auto *p = static_cast<const hazeModUpParams *>(params);
-    if (p->src_polys == nullptr || p->src_base == nullptr || p->src_base_len == 0 ||
-        p->digit_bases == nullptr || p->digit_base_lens == nullptr || p->digit_count == 0 ||
-        p->p_base == nullptr || p->p_base_len == 0 || p->dst_polys == nullptr) {
+    if (p->src_base == nullptr || p->src_base_len == 0 || p->digit_bases == nullptr ||
+        p->digit_base_lens == nullptr || p->digit_count == 0 || p->p_base == nullptr ||
+        p->p_base_len == 0) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
 
     haze::detail::EpochSession session;
 
-    auto src_mrp = build_mrp_locked(p->src_polys, p->src_base, p->src_base_len);
+    auto src_mrp = build_mrp_locked(src, p->src_base, p->src_base_len);
     if (!src_mrp) {
         return set_error(haze::detail::to_public_error(src_mrp.error()));
     }
@@ -202,7 +209,7 @@ extern "C" hazeError_t hazeModUp(void * /*dst*/, const void * /*src*/, const voi
     combined_base.insert(combined_base.end(), p->p_base, p->p_base + p->p_base_len);
 
     for (size_t d = 0; d < p->digit_count; ++d) {
-        store_mrp_locked(p->dst_polys + d * per_digit, result[d], combined_base.data(),
+        store_mrp_locked(dst + d * per_digit, result[d], combined_base.data(),
                          combined_base.size());
     }
     return HAZE_SUCCESS;

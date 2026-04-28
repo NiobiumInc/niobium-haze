@@ -166,14 +166,21 @@ HAZE_API hazeError_t hazeAutomorph(void* dst, const void* src, uint64_t index,
                                     hazeStream_t stream) HAZE_NOEXCEPT;
 
 // CRT basis conversion (composite operations: ModUp, ModDown,
-// generalised basis convert). Returns HAZE_ERROR_NOT_SUPPORTED until
-// the basis-conversion task lands.
+// generalised basis convert).
+//
+// Each operates on multi-residue polynomials whose component
+// single-residue polynomials live in separate HAZE allocations. `src`
+// is a non-null array of input poly pointers (length defined by the
+// matching params field — `src_base_len`); `dst` is a non-null array
+// of output poly pointers (length per the params, see each struct's
+// doc). `params` carries the moduli bases and other scalar metadata
+// only — never polynomial pointers.
 
-HAZE_API hazeError_t hazeBasisConvert(void* dst, const void* src,
+HAZE_API hazeError_t hazeBasisConvert(void* const* dst, const void* const* src,
                                        const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModDown(void* dst, const void* src,
+HAZE_API hazeError_t hazeModDown(void* const* dst, const void* const* src,
                                   const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModUp(void* dst, const void* src,
+HAZE_API hazeError_t hazeModUp(void* const* dst, const void* const* src,
                                 const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Graph recording and execution. Names mirror CUDA's graph API. All
