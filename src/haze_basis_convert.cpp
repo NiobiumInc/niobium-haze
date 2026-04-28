@@ -21,6 +21,7 @@
 #include "haze_epoch.hpp"
 #include "haze_errors.hpp"
 #include "haze_handle.hpp"
+#include "haze_thread_safety.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +41,8 @@ namespace {
 // EpochSession lock. Returns the underlying HazeInternalError on the
 // first lookup failure so the caller can map via to_public_error().
 std::expected<fhetch::MRP, haze::detail::HazeInternalError>
-build_mrp_locked(const void *const *polys, const uint64_t *base, size_t len) {
+build_mrp_locked(const void *const *polys, const uint64_t *base, size_t len)
+    HAZE_REQUIRES(haze::detail::epoch().mutex()) {
     using haze::detail::HazeInternalError;
 
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
@@ -61,7 +63,7 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, size_t len) {
 // any src pointer is safe because all reads complete in build_mrp_locked
 // before the first store.
 void store_mrp_locked(void *const *dst_polys, const fhetch::MRP &mrp, const uint64_t *base,
-                      size_t len) {
+                      size_t len) HAZE_REQUIRES(haze::detail::epoch().mutex()) {
     for (size_t i = 0; i < len; ++i) {
         const auto addr = haze::detail::to_dev_addr(dst_polys[i]);
         haze::detail::epoch().store_locked(addr, mrp[base[i]]);

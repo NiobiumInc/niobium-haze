@@ -23,6 +23,12 @@ add_compile_options(
   -Wshadow -Wconversion
 )
 
+# Clang's thread-safety analysis enforces the lock contracts annotated in
+# haze_thread_safety.hpp at compile time. No-op under GCC.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wthread-safety)
+endif()
+
 # ---------------------------------------------------------------------------
 # Sanitizer options (mutually exclusive)
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@
 
 #include "haze_errors.hpp"
 #include "haze_handle.hpp"
+#include "haze_thread_safety.hpp"
 
 #include <haze/haze_types.h>
 
@@ -40,45 +41,56 @@ namespace haze::detail {
 // emission. The single-mutex design preserves IR ordering as the
 // niobium target grows into multi-compute-unit configurations and
 // FIDESlib's OpenMP regions fan out with num_threads > 1.
+//
+// The mutex contract is enforced by clang's thread-safety analysis
+// (haze_thread_safety.hpp). Each `_locked` method requires the caller
+// to hold mutex_; each public method excludes it; each protected field
+// is guarded by it. Building with -Wthread-safety promotes any
+// violation to a compile-time error.
 class EpochState {
   public:
     static EpochState &instance() noexcept;
 
-    std::mutex &mutex() noexcept { return mutex_; }
+    // The mutex itself. EpochSession is the canonical caller; other
+    // callers take it via std::lock_guard (see is_recording, invalidate,
+    // flush_for_d2h, reset).
+    HazeMutex &mutex() noexcept HAZE_RETURN_CAPABILITY(mutex_) { return mutex_; }
 
     // ---- Public methods (take mutex_ internally) ----
 
-    bool is_recording() noexcept;
+    bool is_recording() noexcept HAZE_EXCLUDES(mutex_);
 
     // Drop any polymap binding for `addr`. Called by the allocator paths
     // (H2D, D2D, memset, free) so the next compute call rebuilds a fresh
     // input from new shadow data.
-    void invalidate(DevAddr addr) noexcept;
+    void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Materialize any pending compute output bound to `addr` so a
     // subsequent shadow read returns the post-replay value. No-op when
     // there is nothing to flush (not recording, or `addr` has no binding).
     // Combines the predicate and the materialization atomically under
     // mutex_ so a concurrent invalidate cannot slip between them.
-    std::expected<void, HazeInternalError> flush_for_d2h(DevAddr addr) noexcept;
+    std::expected<void, HazeInternalError> flush_for_d2h(DevAddr addr) noexcept
+        HAZE_EXCLUDES(mutex_);
 
-    void reset() noexcept;
+    void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
 
     // Initialise the compiler backend (idempotent) and start recording
     // if not already. EpochSession calls this after taking mutex_.
-    void ensure_recording_locked();
+    void ensure_recording_locked() HAZE_REQUIRES(mutex_);
 
     // Resolve `addr` to a polynomial. Returns a *copy* — required for
     // in-place compute operations (dst == src) where the destination
     // mutation must not invalidate the source. On first reference,
     // creates a Polynomial from the shadow buffer and tags it as input.
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
-    lookup_or_create_locked(DevAddr addr);
+    lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Bind `addr` to `poly` (replacing any prior binding).
-    void store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept;
+    void store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
+        HAZE_REQUIRES(mutex_);
 
   private:
     EpochState() = default;
@@ -88,20 +100,25 @@ class EpochState {
     // Internal helper: drain pending outputs through the backend. Caller
     // holds mutex_. Always resets epoch state at the end (cleared on both
     // success and failure to leave the next epoch with a clean slate).
-    std::expected<void, HazeInternalError> do_materialize_locked();
+    std::expected<void, HazeInternalError> do_materialize_locked() HAZE_REQUIRES(mutex_);
 
-    void clear_state_locked() noexcept;
+    void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
     // mutex_ protects all state below. Lock order across HAZE: any caller
     // holding mutex_ may call into DeviceAllocator (epoch → allocator).
     // The reverse direction is forbidden; allocator-side code must never
     // call back into EpochState while holding the allocator lock.
-    std::mutex mutex_;
-    std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_;
-    std::unordered_map<DevAddr, std::string> pending_outputs_;
-    uint64_t input_counter_ = 0;
-    uint64_t output_counter_ = 0;
-    bool recording_ = false;
+    HazeMutex mutex_;
+    std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
+    std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
+    uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
+    uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
+    bool recording_ HAZE_GUARDED_BY(mutex_) = false;
+
+    // Friendship so EpochSession's ACQUIRE/RELEASE attributes can name
+    // mutex_ directly — TSA needs the capability expression in the
+    // attribute to match the one used by the _locked methods.
+    friend class EpochSession;
 };
 
 inline EpochState &epoch() noexcept { return EpochState::instance(); }
@@ -115,19 +132,26 @@ inline EpochState &epoch() noexcept { return EpochState::instance(); }
 // `backend().ensure_initialized()` runs *before* the lock is taken so
 // concurrent compute callers don't serialise on the (one-time) compiler
 // init under the epoch mutex.
-class EpochSession {
+class HAZE_SCOPED_CAPABILITY EpochSession {
   public:
-    EpochSession() : guard_(prepare_lock()) {
-        EpochState::instance().ensure_recording_locked();
+    EpochSession() HAZE_ACQUIRE(epoch().mutex_) : guard_(init_then_get_mutex()) {
+        epoch().ensure_recording_locked();
     }
+    ~EpochSession() HAZE_RELEASE() = default;
 
     EpochSession(const EpochSession &) = delete;
     EpochSession &operator=(const EpochSession &) = delete;
 
   private:
-    static std::unique_lock<std::mutex> prepare_lock() noexcept;
+    // Side-effect helper: runs backend().ensure_initialized() (which has
+    // its own internal init mutex) BEFORE returning the epoch mutex
+    // reference. Sequencing matters — first-call compiler init must not
+    // happen under the epoch lock or concurrent callers serialize on it.
+    // Returning by reference to the very mutex that guard_ then locks
+    // lets TSA verify the ACQUIRE annotation on the constructor.
+    static HazeMutex &init_then_get_mutex() noexcept HAZE_RETURN_CAPABILITY(epoch().mutex_);
 
-    std::unique_lock<std::mutex> guard_;
+    HazeLockGuard guard_;
 };
 
 // D2H-side helper: copies bytes from the device shadow buffer to a host

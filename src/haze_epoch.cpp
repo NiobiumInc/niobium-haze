@@ -65,12 +65,12 @@ void EpochState::ensure_recording_locked() {
 }
 
 bool EpochState::is_recording() noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return recording_;
 }
 
 void EpochState::invalidate(DevAddr addr) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
 }
@@ -101,7 +101,7 @@ void EpochState::store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) no
 }
 
 std::expected<void, HazeInternalError> EpochState::flush_for_d2h(DevAddr addr) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (!recording_) {
         return {}; // shadow already authoritative
     }
@@ -171,11 +171,11 @@ void EpochState::clear_state_locked() noexcept {
 }
 
 void EpochState::reset() noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     clear_state_locked();
 }
 
-std::unique_lock<std::mutex> EpochSession::prepare_lock() noexcept {
+HazeMutex &EpochSession::init_then_get_mutex() noexcept {
     // ensure_initialized() has its own atomic + init mutex; safe (and
     // important) to call before acquiring the epoch lock so first-call
     // compiler init doesn't block other epoch-lock acquirers. The
@@ -185,7 +185,7 @@ std::unique_lock<std::mutex> EpochSession::prepare_lock() noexcept {
     // compute calls then fail with a coherent error from
     // lookup_or_create_locked rather than crashing inside niobium.
     [[maybe_unused]] const bool _ = backend().ensure_initialized();
-    return std::unique_lock<std::mutex>{EpochState::instance().mutex()};
+    return epoch().mutex_;
 }
 
 hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept {

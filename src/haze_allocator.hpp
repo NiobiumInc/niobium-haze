@@ -14,6 +14,7 @@
 
 #include "haze_errors.hpp"
 #include "haze_handle.hpp"
+#include "haze_thread_safety.hpp"
 
 #include <haze/haze_types.h>
 
@@ -55,6 +56,11 @@ struct Allocation {
 //  - All allocations participate in pool recycling — `hazeFree` pushes
 //    the address back to the free list; the next `allocate` pops it
 //    and zeroes the shadow.
+//
+// Thread-safety: all public methods take mutex_ themselves (annotated
+// HAZE_EXCLUDES). DeviceAllocator must NOT call back into EpochState
+// while holding mutex_ — that violates the epoch -> allocator lock
+// order and would deadlock.
 class DeviceAllocator {
   public:
     static DeviceAllocator &instance() noexcept;
@@ -62,17 +68,19 @@ class DeviceAllocator {
     // Configure the pool's polynomial size. Calling with a size different
     // from the current configuration drains the pool. Calling with size 0
     // disables pooling entirely.
-    void set_polynomial_size(size_t bytes) noexcept;
-    size_t polynomial_size() const noexcept;
+    void set_polynomial_size(size_t bytes) noexcept HAZE_EXCLUDES(mutex_);
+    size_t polynomial_size() const noexcept HAZE_EXCLUDES(mutex_);
 
-    std::expected<DevAddr, HazeInternalError> allocate(size_t bytes) noexcept;
-    hazeError_t free(DevAddr addr) noexcept;
+    std::expected<DevAddr, HazeInternalError> allocate(size_t bytes) noexcept
+        HAZE_EXCLUDES(mutex_);
+    hazeError_t free(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Bulk operations on a single allocation. Each path validates count
     // against the allocation size and sets has_data on success.
-    hazeError_t copy_h2d(DevAddr dst, const void *src, size_t count) noexcept;
-    hazeError_t copy_d2d(DevAddr dst, DevAddr src, size_t count) noexcept;
-    hazeError_t memset(DevAddr addr, int value, size_t count) noexcept;
+    hazeError_t copy_h2d(DevAddr dst, const void *src, size_t count) noexcept
+        HAZE_EXCLUDES(mutex_);
+    hazeError_t copy_d2d(DevAddr dst, DevAddr src, size_t count) noexcept HAZE_EXCLUDES(mutex_);
+    hazeError_t memset(DevAddr addr, int value, size_t count) noexcept HAZE_EXCLUDES(mutex_);
 
     // Snapshot the shadow buffer as a vector of `ring_dim` 64-bit limbs.
     // Used by EpochState::lookup_or_create_locked when promoting fresh
@@ -81,33 +89,36 @@ class DeviceAllocator {
     // ring dimension. Performs the copy under the allocator's lock so
     // there is no separate-locks race with hazeFree / copy_h2d.
     std::expected<std::vector<uint64_t>, HazeInternalError>
-    extract_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept;
+    extract_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Read shadow bytes into a host buffer. Caller is responsible for
     // any compute materialization; this only touches the staging buffer.
-    hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept;
+    hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Write bytes into the shadow buffer from a host vector. Used by
     // the materialization engine to publish replayed compute outputs.
     // Truncates to allocation size; sets has_data on success.
-    hazeError_t update_shadow(DevAddr addr, const std::vector<uint8_t> &bytes) noexcept;
+    hazeError_t update_shadow(DevAddr addr, const std::vector<uint8_t> &bytes) noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Pointer-attribute query. Reports DEVICE for hazeMalloc-allocated
     // pointers, HOST for hazeHostAlloc-allocated pointers, UNREGISTERED
     // for any other pointer (matches cudaPointerGetAttributes from
     // CUDA 11 onward).
     hazeError_t pointer_attributes(hazePointerAttributes *attrs,
-                                   const void *ptr) const noexcept;
+                                   const void *ptr) const noexcept HAZE_EXCLUDES(mutex_);
 
-    bool is_device_pointer(const void *ptr) const noexcept;
+    bool is_device_pointer(const void *ptr) const noexcept HAZE_EXCLUDES(mutex_);
 
     // Track an allocation made by hazeHostAlloc so pointer_attributes
     // can report it as HOST. The set is keyed by raw void* — pointers
     // are unique because posix_memalign returns distinct addresses.
-    void register_host_pointer(const void *ptr) noexcept;
-    void unregister_host_pointer(const void *ptr) noexcept;
+    void register_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
+    void unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
 
-    void reset() noexcept;
+    void reset() noexcept HAZE_EXCLUDES(mutex_);
 
   private:
     DeviceAllocator() = default;
@@ -115,18 +126,20 @@ class DeviceAllocator {
     DeviceAllocator &operator=(const DeviceAllocator &) = delete;
 
     // Helper (caller holds mutex_).
-    void clear_pool_locked() noexcept;
+    void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
 
     // mutex_ protects all state below. Lock order across HAZE: callers
     // already holding EpochState::mutex_ may re-enter here (epoch →
     // allocator). Allocator-side code must NOT call into EpochState
     // while holding this lock — the reverse direction is forbidden.
-    mutable std::mutex mutex_;
-    std::unordered_map<DevAddr, Allocation> map_;
-    std::vector<DevAddr> pool_free_;             // free list for poly_bytes_-sized allocations
-    std::unordered_set<const void *> host_set_;  // pointers from hazeHostAlloc
-    size_t poly_bytes_ = 0;
-    uintptr_t next_addr_ = kHbmBase;
+    mutable HazeMutex mutex_;
+    std::unordered_map<DevAddr, Allocation> map_ HAZE_GUARDED_BY(mutex_);
+    std::vector<DevAddr> pool_free_
+        HAZE_GUARDED_BY(mutex_); // free list for poly_bytes_-sized allocations
+    std::unordered_set<const void *> host_set_
+        HAZE_GUARDED_BY(mutex_); // pointers from hazeHostAlloc
+    size_t poly_bytes_ HAZE_GUARDED_BY(mutex_) = 0;
+    uintptr_t next_addr_ HAZE_GUARDED_BY(mutex_) = kHbmBase;
 };
 
 inline DeviceAllocator &allocator() noexcept { return DeviceAllocator::instance(); }

@@ -40,7 +40,7 @@ void DeviceAllocator::clear_pool_locked() noexcept {
 }
 
 void DeviceAllocator::set_polynomial_size(size_t bytes) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (poly_bytes_ == bytes)
         return;
     clear_pool_locked();
@@ -48,12 +48,12 @@ void DeviceAllocator::set_polynomial_size(size_t bytes) noexcept {
 }
 
 size_t DeviceAllocator::polynomial_size() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return poly_bytes_;
 }
 
 std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
 
     // Polynomial size must be configured (via Config::set_ring_dimension)
     // before any allocation. HAZE's device space is FHETCH-addressable
@@ -107,7 +107,7 @@ hazeError_t DeviceAllocator::free(DevAddr addr) noexcept {
     if (to_uintptr(addr) == 0)
         return HAZE_SUCCESS; // hazeFree(nullptr) matches CUDA semantics
 
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(addr);
     if (it == map_.end()) {
         record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
@@ -128,7 +128,7 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
                               "DeviceAllocator::extract_polynomial_components: ring_dim == 0");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(addr);
     if (it == map_.end()) {
         record_internal_error(HazeInternalError::UnknownAddress,
@@ -155,7 +155,7 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
 hazeError_t DeviceAllocator::copy_h2d(DevAddr dst, const void *src, size_t count) noexcept {
     if (src == nullptr)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(dst);
     if (it == map_.end())
         return HAZE_ERROR_INVALID_VALUE;
@@ -167,7 +167,7 @@ hazeError_t DeviceAllocator::copy_h2d(DevAddr dst, const void *src, size_t count
 }
 
 hazeError_t DeviceAllocator::copy_d2d(DevAddr dst, DevAddr src, size_t count) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto src_it = map_.find(src);
     auto dst_it = map_.find(dst);
     if (src_it == map_.end() || dst_it == map_.end())
@@ -180,7 +180,7 @@ hazeError_t DeviceAllocator::copy_d2d(DevAddr dst, DevAddr src, size_t count) no
 }
 
 hazeError_t DeviceAllocator::memset(DevAddr addr, int value, size_t count) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(addr);
     if (it == map_.end())
         return HAZE_ERROR_INVALID_VALUE;
@@ -194,7 +194,7 @@ hazeError_t DeviceAllocator::memset(DevAddr addr, int value, size_t count) noexc
 hazeError_t DeviceAllocator::copy_to_host(void *dst, DevAddr src, size_t count) const noexcept {
     if (dst == nullptr)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(src);
     if (it == map_.end())
         return HAZE_ERROR_INVALID_VALUE;
@@ -206,7 +206,7 @@ hazeError_t DeviceAllocator::copy_to_host(void *dst, DevAddr src, size_t count) 
 
 hazeError_t DeviceAllocator::update_shadow(DevAddr addr,
                                            const std::vector<uint8_t> &bytes) noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     auto it = map_.find(addr);
     if (it == map_.end())
         return HAZE_ERROR_INVALID_VALUE;
@@ -219,7 +219,7 @@ hazeError_t DeviceAllocator::update_shadow(DevAddr addr,
 bool DeviceAllocator::is_device_pointer(const void *ptr) const noexcept {
     if (ptr == nullptr)
         return false;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return map_.find(to_dev_addr(ptr)) != map_.end();
 }
 
@@ -234,7 +234,7 @@ hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
     // and attribute write could flip the answer.
     enum { kUnknown, kDevice, kHost } classification = kUnknown;
     if (ptr != nullptr) {
-        std::lock_guard lock(mutex_);
+        HazeLockGuard lock(mutex_);
         if (map_.find(to_dev_addr(ptr)) != map_.end()) {
             classification = kDevice;
         } else if (host_set_.find(ptr) != host_set_.end()) {
@@ -260,19 +260,19 @@ hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
 void DeviceAllocator::register_host_pointer(const void *ptr) noexcept {
     if (ptr == nullptr)
         return;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     host_set_.insert(ptr);
 }
 
 void DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
     if (ptr == nullptr)
         return;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     host_set_.erase(ptr);
 }
 
 void DeviceAllocator::reset() noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     map_.clear();
     pool_free_.clear();
     host_set_.clear();
