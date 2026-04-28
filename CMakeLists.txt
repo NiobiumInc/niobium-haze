@@ -24,7 +24,7 @@ add_compile_options(
 )
 
 # Clang's thread-safety analysis enforces the lock contracts annotated in
-# haze_thread_safety.hpp at compile time. No-op under GCC.
+# common/thread_safety.hpp at compile time. No-op under GCC.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wthread-safety)
 endif()
@@ -92,23 +92,26 @@ endif()
 # ---------------------------------------------------------------------------
 
 add_library(haze SHARED
-  src/haze_device.cpp
-  src/haze_device_api.cpp
-  src/haze_allocator.cpp
-  src/haze_memory_api.cpp
-  src/haze_stream.cpp
-  src/haze_stream_api.cpp
-  src/haze_compute_api.cpp
-  src/haze_basis_convert.cpp
-  src/haze_basis_convert_api.cpp
-  src/haze_config.cpp
-  src/haze_config_api.cpp
-  src/haze_error.cpp
-  src/haze_errors.cpp
-  src/haze_backend.cpp
-  src/haze_epoch.cpp
-  src/haze_lifecycle.cpp
-  src/haze_polynomial_io.cpp
+  # extern "C" boundary — one cpp per public-header section.
+  src/api/basis_convert.cpp
+  src/api/compute.cpp
+  src/api/config.cpp
+  src/api/device.cpp
+  src/api/error.cpp
+  src/api/lifecycle.cpp
+  src/api/memory.cpp
+  src/api/stream.cpp
+  # Internal implementation modules.
+  src/core/allocator.cpp
+  src/core/backend.cpp
+  src/core/basis_convert.cpp
+  src/core/config.cpp
+  src/core/device.cpp
+  src/core/epoch.cpp
+  src/core/polynomial_io.cpp
+  src/core/stream.cpp
+  # Shared leaf utilities.
+  src/common/errors.cpp
 )
 
 target_include_directories(haze

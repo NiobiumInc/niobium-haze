@@ -16,13 +16,13 @@
 // pending compute is dropped before the backend / allocator state is
 // torn down).
 
-#include "haze_allocator.hpp"
-#include "haze_backend.hpp"
-#include "haze_config.hpp"
-#include "haze_device.hpp"
-#include "haze_epoch.hpp"
-#include "haze_errors.hpp"
-#include "haze_stream.hpp"
+#include "core/allocator.hpp"
+#include "core/backend.hpp"
+#include "core/config.hpp"
+#include "core/device.hpp"
+#include "core/epoch.hpp"
+#include "common/errors.hpp"
+#include "core/stream.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>

@@ -10,14 +10,14 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_epoch.hpp"
+#include "core/epoch.hpp"
 
-#include "haze_allocator.hpp"
-#include "haze_backend.hpp"
-#include "haze_config.hpp"
-#include "haze_errors.hpp"
-#include "haze_handle.hpp"
-#include "haze_polynomial_io.hpp"
+#include "core/allocator.hpp"
+#include "core/backend.hpp"
+#include "core/config.hpp"
+#include "common/errors.hpp"
+#include "common/handle.hpp"
+#include "core/polynomial_io.hpp"
 
 #include <cstddef>
 #include <cstdint>

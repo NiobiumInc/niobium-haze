@@ -296,7 +296,7 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output") {
 
 TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)") {
     // Aliasing src[i] == dst[j] for any (i,j) is documented as safe in
-    // haze_basis_convert.cpp because all reads complete before any
+    // core/basis_convert.cpp because all reads complete before any
     // store. Test the simplest case: same-modulus 1->1 convert with
     // dst[0] == src[0]. dst should be unchanged from src.
     configure_three_moduli();

@@ -12,10 +12,10 @@
 // from the Product.
 #pragma once
 
-#include "haze_config.hpp"
-#include "haze_epoch.hpp"
-#include "haze_errors.hpp"
-#include "haze_handle.hpp"
+#include "core/config.hpp"
+#include "core/epoch.hpp"
+#include "common/errors.hpp"
+#include "common/handle.hpp"
 
 #include <haze/haze_types.h>
 

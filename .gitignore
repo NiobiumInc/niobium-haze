@@ -57,8 +57,10 @@ coverage/
 *.ubsan
 *.lsan
 *.sanitizer.log
-core
-core.*
+# `core` and `core.*` are anchored to the repo root so they only match
+# Linux core dumps deposited there, not the src/core/ subdirectory.
+/core
+/core.*
 vgcore.*
 
 # Test runner artefacts

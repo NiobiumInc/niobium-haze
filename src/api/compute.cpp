@@ -15,9 +15,9 @@
 // haze_compute.hpp. Each shim validates pointer arguments, casts to
 // DevAddr, and selects the matching FHETCH operation.
 
-#include "haze_compute.hpp"
-#include "haze_handle.hpp"
-#include "haze_errors.hpp"
+#include "core/compute.hpp"
+#include "common/handle.hpp"
+#include "common/errors.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>

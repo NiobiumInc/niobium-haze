@@ -11,8 +11,8 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 
-#include "haze_basis_convert.hpp"
-#include "haze_errors.hpp"
+#include "core/basis_convert.hpp"
+#include "common/errors.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>

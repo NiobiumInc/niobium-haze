@@ -10,7 +10,7 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_polynomial_io.hpp"
+#include "core/polynomial_io.hpp"
 
 #include <niobium/fhetch_api.h>
 #include <nlohmann/json.hpp>

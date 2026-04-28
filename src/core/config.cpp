@@ -10,9 +10,9 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_config.hpp"
+#include "core/config.hpp"
 
-#include "haze_allocator.hpp"
+#include "core/allocator.hpp"
 
 #include <haze/haze_types.h>
 

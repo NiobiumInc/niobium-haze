@@ -10,8 +10,8 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_errors.hpp"
-#include "haze_stream.hpp"
+#include "common/errors.hpp"
+#include "core/stream.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>

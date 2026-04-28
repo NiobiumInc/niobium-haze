@@ -11,12 +11,12 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 
-#include "haze_basis_convert.hpp"
+#include "core/basis_convert.hpp"
 
-#include "haze_epoch.hpp"
-#include "haze_errors.hpp"
-#include "haze_handle.hpp"
-#include "haze_thread_safety.hpp"
+#include "core/epoch.hpp"
+#include "common/errors.hpp"
+#include "common/handle.hpp"
+#include "common/thread_safety.hpp"
 
 #include <cstdint>
 #include <expected>

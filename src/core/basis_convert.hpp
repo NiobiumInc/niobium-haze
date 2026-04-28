@@ -12,7 +12,7 @@
 // from the Product.
 #pragma once
 
-#include "haze_errors.hpp"
+#include "common/errors.hpp"
 
 #include <cstddef>
 #include <expected>

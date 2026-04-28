@@ -18,10 +18,10 @@
 // either way — the backend only routes through niobium::compiler() which
 // resolves at link time.
 
-#include "haze_backend.hpp"
+#include "core/backend.hpp"
 
-#include "haze_config.hpp"
-#include "haze_errors.hpp"
+#include "core/config.hpp"
+#include "common/errors.hpp"
 
 #include <niobium/compiler.h>
 

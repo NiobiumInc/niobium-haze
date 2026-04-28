@@ -10,7 +10,7 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_errors.hpp"
+#include "common/errors.hpp"
 
 #include <cstdio>
 #include <cstdlib>

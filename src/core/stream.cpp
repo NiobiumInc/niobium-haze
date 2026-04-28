@@ -10,7 +10,7 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "haze_stream.hpp"
+#include "core/stream.hpp"
 
 #include <atomic>
 #include <cstdint>

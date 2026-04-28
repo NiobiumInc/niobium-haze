@@ -12,9 +12,9 @@
 // from the Product.
 #pragma once
 
-#include "haze_errors.hpp"
-#include "haze_handle.hpp"
-#include "haze_thread_safety.hpp"
+#include "common/errors.hpp"
+#include "common/handle.hpp"
+#include "common/thread_safety.hpp"
 
 #include <cstdint>
 #include <expected>
