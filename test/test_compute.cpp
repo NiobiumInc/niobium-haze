@@ -1,12 +1,10 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include <catch2/catch_test_macros.hpp>
-
-#include <haze/haze.h>
-#include <haze/haze_types.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <haze/haze.h>
+#include <haze/haze_types.h>
 #include <vector>
 
 static constexpr uint64_t kRingDim = 4096;
@@ -27,10 +25,6 @@ static void setup_compute_config() {
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
-// ---------------------------------------------------------------------------
-// Pointwise arithmetic
-// ---------------------------------------------------------------------------
-
 TEST_CASE("hazeAdd: pointwise sum retrieved after D2H") {
     setup_compute_config();
 
@@ -44,7 +38,6 @@ TEST_CASE("hazeAdd: pointwise sum retrieved after D2H") {
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    // RYANPR: How does this work? We should emit fhetch and run the add using OpenFHE, but I am unsure here how the add actually ends up happening. Where does the compiler run and execute?
     REQUIRE(hazeAdd(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
@@ -222,7 +215,7 @@ TEST_CASE("hazeAdd in-place (dst == src2) produces correct result") {
 TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)") {
     setup_compute_config();
 
-    void* d_a = nullptr;
+    void *d_a = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> a(kRingDim, 3);
