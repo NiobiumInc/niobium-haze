@@ -44,6 +44,7 @@ TEST_CASE("hazeAdd: pointwise sum retrieved after D2H") {
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
+    // RYANPR: How does this work? We should emit fhetch and run the add using OpenFHE, but I am unsure here how the add actually ends up happening. Where does the compiler run and execute?
     REQUIRE(hazeAdd(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);

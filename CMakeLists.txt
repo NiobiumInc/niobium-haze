@@ -161,6 +161,7 @@ add_executable(haze_tests
   test/test_config.cpp
   test/test_compute.cpp
   test/test_basis_convert.cpp
+  test/test_ring_dim_consistency.cpp
 )
 
 target_include_directories(haze_tests PRIVATE

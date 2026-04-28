@@ -442,3 +442,6 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits") {
         REQUIRE(hazeFree(slot) == HAZE_SUCCESS);
     }
 }
+
+// RYANPR: You need a test with a real sized polynomial (say 12 limbs) that goes through a fast base conversion. You will need to check that you get the right answer by comparing the test results. You can do this by comparing the results to running just a fast base convert call to OpenFHE and make sure you get out the right polynomial.
+// RYANPR: You would do the same real ized polynomial test for modulus up and modulus down as well. Research thoroughly the mathematics behind these operations and how to call them from OpenFHE.

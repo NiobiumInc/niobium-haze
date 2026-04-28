@@ -7,6 +7,7 @@
 TEST_CASE("hazeSetRingDimension accepts valid power-of-2 dimensions") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096)  == HAZE_SUCCESS);
+    // RYANPR: You should be able to check here that you get the right answer
     REQUIRE(hazeSetRingDimension(8192)  == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(16384) == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(32768) == HAZE_SUCCESS);
@@ -16,6 +17,7 @@ TEST_CASE("hazeSetRingDimension accepts valid power-of-2 dimensions") {
 TEST_CASE("hazeSetRingDimension rejects unsupported dimensions") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(0)    == HAZE_ERROR_INVALID_VALUE);
+    // RYANPR: Check that this is the correct last error.
     hazeGetLastError();
     REQUIRE(hazeSetRingDimension(3000) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
@@ -29,18 +31,21 @@ TEST_CASE("hazeSetCiphertextModulus stores values") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     constexpr uint64_t kQ0 = 576460752303415297ULL;  // a typical CKKS prime
     REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    // RYANPR: This might not be a prime, use a second one. Also be able to get the prime to check it is actually set.
     REQUIRE(hazeSetCiphertextModulus(1, kQ0 - 2) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeSetCiphertextModulus rejects negative index") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(-1, 1) == HAZE_ERROR_INVALID_VALUE);
+    // RYANPR: Check the error is HAZE_ERROR_INVALID_VALUE
     hazeGetLastError();
 }
 
 TEST_CASE("hazeSetCiphertextModulus rejects zero modulus") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(0, 0) == HAZE_ERROR_INVALID_VALUE);
+    // RYANPR: Check the error is HAZE_ERROR_INVALID_VALUE. Do that with all tests in this file.
     hazeGetLastError();
 }
 
@@ -70,6 +75,7 @@ TEST_CASE("hazeConfigureDevice succeeds when ring dimension is set") {
 
 TEST_CASE("hazeSetProgramInfo accepts well-formed strings") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // RYANPR: Check that this is correctly set
     REQUIRE(hazeSetProgramInfo("my-program", "1.2.3", "experimental run") == HAZE_SUCCESS);
 }
 
@@ -85,6 +91,7 @@ TEST_CASE("hazeSetProgramInfo rejects null arguments") {
 
 TEST_CASE("hazeSetTarget accepts a target string") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // RYANPR: Check this is correctly set
     REQUIRE(hazeSetTarget("FHE_SIM") == HAZE_SUCCESS);
 }
 

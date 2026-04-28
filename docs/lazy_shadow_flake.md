@@ -105,6 +105,99 @@ hit more frequently.
   cause. The resets are kept anyway as defensive hygiene — they
   cost nothing per test and rule out the hypothesis cleanly.
 
+- **Bisect across the task-04 stack (5×, then 20× on boundaries,
+  50× endpoints).** task-03 (compute API only) is provably clean
+  at 20/20. The flake first appears at `e8eeed6` (the first task-04
+  commit that adds basis-convert composites), at ~15% fail rate,
+  and stays there through `cf27c34`. Lazy shadows (`1c1b0f5`)
+  worsens it ~4× to ~60% fail. Layout reorg (`e5ecc24`) pushes it
+  further to ~75% fail. **Removing `test_basis_convert.cpp` from
+  the build at `1c1b0f5` takes the rate from 40% pass back to
+  20/20 = 100% pass.** So basis-convert (multi-output materialization)
+  is the dominant trigger; the rest is heap-layout amplification of
+  the same underlying bug.
+
+- **HAZE-side `recording_ring_dim_` validation.** Pinned ring_dim
+  at recording start; validated every cached and freshly-constructed
+  `fhetch::Polynomial` in `lookup_or_create_locked` against it,
+  with a stderr drift warning + evict-and-rebuild path. Ran 30×
+  with the validation in place: **the warning never fired** on
+  either passing or failing runs. Pass rate moved from ~25% to
+  ~99% incidentally — heap-layout shift from the new field /
+  branches / stderr formatting, not the validation logic doing
+  any work. This proved that **every Polynomial HAZE tags as input
+  carries `ring_dim == config().ring_dim()` at the moment of
+  `tag_input`** — the corruption is downstream of HAZE's handoff,
+  inside libnbcc. The validation code was reverted as confirmed
+  dead code; the `test_ring_dim_consistency.cpp` positive tests
+  it motivated were kept.
+
+## Smoking gun: OpenFHE `m = 962` exception
+
+With basis-convert tests included and the (now-reverted) HAZE-side
+validation in place, residual failures hit ~1/100. The captured
+trace shows a consistent signature:
+
+```
+terminate called after throwing an instance of 'lbcrypto::OpenFHEException'
+  what():  vendor/lib/openfhe/include/openfhe/core/math/nbtheory-impl.h:l.192:
+  RootOfUnity(): Please provide a primeModulus(q) and a cyclotomic
+  number(m) satisfying the condition: (q-1)/m is an integer. The
+  values of primeModulus = 576460752303415297 and m = 962 do not
+  satisfy this condition
+```
+
+`m = 962 = 2 × 481`. For our test `ring_dim = 4096`, `m` should be
+`8192`. **`481` is not a power of 2 — it's not anything HAZE ever
+sets for ring_dim.** Tracing the chain:
+
+- `niobium-compiler/src/Record.cpp:1677` calls
+  `ntt_tables::compute_omega(ring_dimension, modulus_val)` during
+  `stop_epoch`'s NTT-table generation.
+- `ring_dimension` at line 1603 = `m_crypto_context_info.ring_dim`.
+- In FHETCH mode (`Record.cpp:1567-1574`), that's populated from
+  `niobium::fhetch::get_input_ring_dimension()`, which returns the
+  first registered input's `Polynomial::ring_dimension()`.
+- `compute_omega` in `NttTables.h:57` calls
+  `RootOfUnity<BigInteger>(2 * ring_dim, mod)` — so `m = 2 *
+  ring_dim`.
+
+For `m = 962` to reach OpenFHE, the first Polynomial in fhetch's
+`input_registry()` must report `ring_dimension() == 481` at the
+moment `Record.cpp:1454` reads it. **HAZE-side instrumentation
+proved the Polynomial we hand to `tag_input` always has
+`ring_dim = 4096`.** Conclusion: between HAZE's `tag_input` call
+and niobium's `get_input_ring_dimension()` read inside
+`stop_epoch`, *something inside niobium's process state changes
+the ring_dim that's seen*.
+
+Most plausible candidates (in niobium-compiler / niobium-fhetch):
+
+- **Stale state surviving `hazeDeviceReset`.** `Compiler::stop_epoch`
+  (`Compiler.cpp:880-938`) does clean `m_inputs`, `m_outputs`,
+  `m_pending_input_poly_ids`, etc., and calls
+  `niobium::fhetch::reset_for_epoch()` which clears
+  `input_registry`. But `m_crypto_context_info`, the
+  function-local-static `compute_omega` cache at
+  `FhetchApi.cpp:1108`, and other process-lifetime state are *not*
+  in any reset path. After `hazeDeviceReset`, HAZE flips its
+  `initialized_` flag; the next compute call re-runs
+  `niobium::compiler().init()` on the *same* singleton instance
+  whose process-wide caches still hold values from before the reset.
+- **Cross-test caching bug we found independently.** The
+  multi-N reset/configure tests in `test_ring_dim_consistency.cpp`
+  expose a deterministic version of the same family of issue: the
+  replay subprocess reports `Ring dimension: 2048` (the value
+  configured by the *first* test in the process) regardless of
+  what later tests configure, and rejects mismatched memory data.
+  Same root: niobium-compiler caches per-init values and doesn't
+  refresh them across `hazeDeviceReset` boundaries.
+
+What we don't yet know: which specific cache or static within
+niobium-compiler is the source of `481`. The HAZE-side trace ends
+at the `tag_input` boundary with the correct value; reproducing
+the corruption requires instrumenting inside niobium itself.
+
 ## What to try next
 
 In rough order of expected effort vs payoff:
