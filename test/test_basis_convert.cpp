@@ -25,7 +25,10 @@ static constexpr uint64_t kQ0 = 576460752303415297ULL;
 static constexpr uint64_t kQ1 = 576460752303439873ULL;
 static constexpr uint64_t kQ2 = 576460752303702017ULL;
 
+// Reset HAZE state up front so test ordering does not leak epoch /
+// allocator state between cases under --order rand.
 static void configure_three_moduli() {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
@@ -33,9 +36,7 @@ static void configure_three_moduli() {
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
-// ---------------------------------------------------------------------------
-// Parameter validation
-// ---------------------------------------------------------------------------
+// Parameter validation.
 
 TEST_CASE("hazeBasisConvert rejects null params") {
     configure_three_moduli();
@@ -70,7 +71,6 @@ TEST_CASE("hazeBasisConvert rejects empty source base") {
     p.src_base_len = 0; // invalid
     p.dst_base = dst_base;
     p.dst_base_len = 1;
-    p.ring_dim = kRingDim;
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -95,7 +95,6 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
     p.src_base_len = 2;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
-    p.ring_dim = kRingDim;
     REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -121,36 +120,140 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
     REQUIRE(hazeFree(d) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown rejects rescale base longer than source") {
+TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len") {
+    // Equal-length rescale would leave dst empty (FhetchApi.cpp:1660
+    // asserts rescale must be a *proper* subset). Strictly-greater is
+    // outright invalid. Both must surface as INVALID_VALUE before any
+    // backend call.
     configure_three_moduli();
     void *dst = nullptr;
     REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0};
-    const uint64_t rescale_base[] = {kQ0, kQ1};
+    const uint64_t rescale_base_eq[] = {kQ0};
+    const uint64_t rescale_base_gt[] = {kQ0, kQ1};
     const void *src_polys[] = {nullptr};
     void *dst_polys[] = {dst};
 
     hazeModDownParams p{};
     p.src_base = src_base;
     p.src_base_len = 1;
-    p.rescale_base = rescale_base;
-    p.rescale_base_len = 2; // larger than src
-    p.ring_dim = kRingDim;
+    p.rescale_base = rescale_base_eq;
+    p.rescale_base_len = 1; // equal to src_base_len — would yield empty dst
+    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+
+    p.rescale_base = rescale_base_gt;
+    p.rescale_base_len = 2; // strictly greater than src_base_len
     REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
 }
 
-// ---------------------------------------------------------------------------
-// End-to-end: basis convert and retrieve results
-// ---------------------------------------------------------------------------
-
-TEST_CASE("hazeBasisConvert: 2->2 base converts and produces retrievable output") {
+TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len") {
+    // digit_bases is flat; sum of digit_base_lens must equal
+    // digit_bases_total_len, else slicing reads out of bounds.
     configure_three_moduli();
 
-    // Source MRP: 2 residues at q0, q1
+    void *src = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    const void *src_polys[] = {src};
+
+    const uint64_t src_base[] = {kQ0};
+    const uint64_t digit_bases[] = {kQ0};
+    const size_t digit_base_lens[] = {1};
+    const uint64_t p_base[] = {kQ2};
+
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    void *dst_polys[] = {dst};
+
+    hazeModUpParams p{};
+    p.src_base = src_base;
+    p.src_base_len = 1;
+    p.digit_bases = digit_bases;
+    p.digit_bases_total_len = 7; // does not match sum(digit_base_lens) == 1
+    p.digit_base_lens = digit_base_lens;
+    p.digit_count = 1;
+    p.p_base = p_base;
+    p.p_base_len = 1;
+    REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+
+    REQUIRE(hazeFree(src) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+}
+
+// End-to-end: basis-convert and retrieve results.
+//
+// Tests use inputs whose expected outputs are exactly knowable from the
+// CRT semantics — no FBC arithmetic is performed in the test itself.
+// Two patterns:
+//   1. Shared moduli — primes that appear in both src_base and dst_base
+//      pass through as same-modulus copies (FhetchApi.cpp:1585-1588).
+//   2. Zero inputs — every CRT operation on zero polynomials yields
+//      zero polynomials.
+// Cross-checking non-trivial FBC values against an OpenFHE reference
+// is deferred to integration tests (FIDESlib examples).
+
+TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values") {
+    // src_base = {q0, q1}, dst_base = {q0, q1, q2}. Every prime in
+    // src_base is also in dst_base, so the first two dst residues are
+    // same-modulus copies of the corresponding src residues. The third
+    // (q2) is FBC-derived; not asserted on value but D2H must succeed
+    // and the materialization path must persist its shadow alongside
+    // d0/d1 so subsequent D2Hs in this epoch see fresh data.
+    configure_three_moduli();
+
+    void *s0 = nullptr;
+    void *s1 = nullptr;
+    void *d0 = nullptr;
+    void *d1 = nullptr;
+    void *d2 = nullptr;
+    REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d2, kBytes) == HAZE_SUCCESS);
+
+    constexpr uint64_t kInput0 = 17;
+    constexpr uint64_t kInput1 = 42;
+    std::vector<uint64_t> poly_a(kRingDim, kInput0);
+    std::vector<uint64_t> poly_b(kRingDim, kInput1);
+    REQUIRE(hazeMemcpy(s0, poly_a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(s1, poly_b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    const uint64_t src_base[] = {kQ0, kQ1};
+    const uint64_t dst_base[] = {kQ0, kQ1, kQ2};
+    const void *src_polys[] = {s0, s1};
+    void *dst_polys[] = {d0, d1, d2};
+
+    hazeBasisConvertParams p{};
+    p.src_base = src_base;
+    p.src_base_len = 2;
+    p.dst_base = dst_base;
+    p.dst_base_len = 3;
+    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out0(kRingDim, 0);
+    std::vector<uint64_t> out1(kRingDim, 0);
+    std::vector<uint64_t> out2(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(out2.data(), d2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+
+    // Same-modulus copies: dst residue == src residue, every coefficient.
+    for (uint64_t i = 0; i < kRingDim; ++i) {
+        REQUIRE(out0[i] == kInput0);
+        REQUIRE(out1[i] == kInput1);
+    }
+}
+
+TEST_CASE("hazeBasisConvert: zero input produces zero output") {
+    // FBC of zero polynomials is zero on every target modulus, so we
+    // can verify the non-trivial dst residues without computing FBC.
+    configure_three_moduli();
+
     void *s0 = nullptr;
     void *s1 = nullptr;
     void *d0 = nullptr;
@@ -160,10 +263,9 @@ TEST_CASE("hazeBasisConvert: 2->2 base converts and produces retrievable output"
     REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> poly_a(kRingDim, 1);
-    std::vector<uint64_t> poly_b(kRingDim, 2);
-    REQUIRE(hazeMemcpy(s0, poly_a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, poly_b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    std::vector<uint64_t> zeros(kRingDim, 0);
+    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t dst_base[] = {kQ0, kQ2};
@@ -175,27 +277,64 @@ TEST_CASE("hazeBasisConvert: 2->2 base converts and produces retrievable output"
     p.src_base_len = 2;
     p.dst_base = dst_base;
     p.dst_base_len = 2;
-    p.ring_dim = kRingDim;
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    // Retrieve results — values are deterministic from fast_base_convert;
-    // the test verifies the pipeline runs end-to-end, not specific values.
-    std::vector<uint64_t> out0(kRingDim, 0);
-    std::vector<uint64_t> out1(kRingDim, 0);
+    std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
+    std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
-    REQUIRE(hazeFree(s0) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(s1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d0) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d1) == HAZE_SUCCESS);
+    // Catches both (a) a backend that writes garbage and (b) the
+    // multi-D2H staleness regression where the second D2H would read
+    // uninitialised (post-allocator-reset) shadow rather than the
+    // computed zero.
+    for (uint64_t i = 0; i < kRingDim; ++i) {
+        REQUIRE(out0[i] == 0);
+        REQUIRE(out1[i] == 0);
+    }
 }
 
-TEST_CASE("hazeModDown: 3->2 emits instructions and registers outputs") {
-    // The original task-04 test tolerated wrong numeric output because of
-    // a placeholder rescale_fbc gadget in the niobium compiler. PR #1206
-    // (1f78da4b) corrects fast_base_convert's CRT constants, so this test
-    // can now assert that the full pipeline (ModDown + D2H) succeeds.
+TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)") {
+    // Aliasing src[i] == dst[j] for any (i,j) is documented as safe in
+    // haze_basis_convert.cpp because all reads complete before any
+    // store. Test the simplest case: same-modulus 1->1 convert with
+    // dst[0] == src[0]. dst should be unchanged from src.
+    configure_three_moduli();
+
+    void *p0 = nullptr;
+    REQUIRE(hazeMalloc(&p0, kBytes) == HAZE_SUCCESS);
+
+    std::vector<uint64_t> input(kRingDim, 42);
+    REQUIRE(hazeMemcpy(p0, input.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    const uint64_t base[] = {kQ0};
+    const void *src_polys[] = {p0};
+    void *dst_polys[] = {p0}; // alias
+
+    hazeBasisConvertParams p{};
+    p.src_base = base;
+    p.src_base_len = 1;
+    p.dst_base = base;
+    p.dst_base_len = 1;
+    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(out[0] == 42);
+
+    REQUIRE(hazeFree(p0) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeModDown: zero input rescales to zero output") {
+    // ApproxModDown is rescale_fbc(x, rescale_base): CRT-divide x by
+    // P=prod(rescale_base) with rounding. For x identically zero on
+    // every residue, every output is also zero — we can assert exact
+    // values without doing any FBC arithmetic.
+    //
+    // Multi-output verification: with the EpochState::flush_for_d2h
+    // fix, both d0 and d1 shadow buffers are persisted on the first
+    // D2H, so reading both back returns the materialized result, not
+    // stale post-allocator-reset memory.
     configure_three_moduli();
 
     void *s0 = nullptr;
@@ -209,10 +348,10 @@ TEST_CASE("hazeModDown: 3->2 emits instructions and registers outputs") {
     REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> vals(kRingDim, 7);
-    REQUIRE(hazeMemcpy(s0, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s2, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    std::vector<uint64_t> zeros(kRingDim, 0);
+    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(s2, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1, kQ2};
     const uint64_t rescale_base[] = {kQ2};
@@ -224,13 +363,17 @@ TEST_CASE("hazeModDown: 3->2 emits instructions and registers outputs") {
     p.src_base_len = 3;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
-    p.ring_dim = kRingDim;
     REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    // Flush the recording. With FBC fix in place, D2H should succeed
-    // without HAZE_ERROR_LAUNCH_FAILURE.
-    std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    // Initialise to non-zero so a no-op D2H would surface as a failure.
+    std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
+    std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
+    REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    for (uint64_t i = 0; i < kRingDim; ++i) {
+        REQUIRE(out0[i] == 0);
+        REQUIRE(out1[i] == 0);
+    }
 
     REQUIRE(hazeFree(s0) == HAZE_SUCCESS);
     REQUIRE(hazeFree(s1) == HAZE_SUCCESS);
@@ -239,12 +382,15 @@ TEST_CASE("hazeModDown: 3->2 emits instructions and registers outputs") {
     REQUIRE(hazeFree(d1) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModUp: 2 digits over Q={q0,q1} extended by P={q2}") {
-    // Smoke test for the dig_decomp dispatch: 2-residue src in Q, two
-    // digits each covering one Q residue, extended by a single-residue
-    // P base. Output is digit_count * (src_base_len + p_base_len) =
-    // 2 * (2 + 1) = 6 polynomials, written in src_base-then-p_base
-    // order per digit.
+TEST_CASE("hazeModUp: zero input produces zero output across both digits") {
+    // dig_decomp(x, digit_bases, p_base): for each digit i, take the
+    // x|_{digit_bases[i]} subset and FBC-extend it onto src_base ∪
+    // p_base. For x identically zero, every digit's every output is
+    // zero, so we can assert exact values across all 6 dst slots.
+    // This exercises the digit-major flatten arithmetic at d=0 and d=1
+    // (catching off-by-one on the per_digit stride) and the multi-D2H
+    // materialization fix (every poly_map_ entry persisted on the first
+    // flush).
     configure_three_moduli();
 
     void *s0 = nullptr;
@@ -257,9 +403,9 @@ TEST_CASE("hazeModUp: 2 digits over Q={q0,q1} extended by P={q2}") {
         REQUIRE(hazeMalloc(&slot, kBytes) == HAZE_SUCCESS);
     }
 
-    std::vector<uint64_t> vals(kRingDim, 5);
-    REQUIRE(hazeMemcpy(s0, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    std::vector<uint64_t> zeros(kRingDim, 0);
+    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t digit_bases_flat[] = {kQ0, kQ1};
@@ -273,20 +419,23 @@ TEST_CASE("hazeModUp: 2 digits over Q={q0,q1} extended by P={q2}") {
     p.src_base = src_base;
     p.src_base_len = 2;
     p.digit_bases = digit_bases_flat;
+    p.digit_bases_total_len = 2;
     p.digit_base_lens = digit_base_lens;
     p.digit_count = 2;
     p.p_base = p_base;
     p.p_base_len = 1;
-    p.ring_dim = kRingDim;
     REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    // Flush the recording via D2H of the first dst poly. With FBC fix
-    // in place, this exercises the dig_decomp gadget end-to-end through
-    // the materialization pipeline.
-    std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), dst_storage[0], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-            HAZE_SUCCESS);
-
+    // D2H every output and verify exact zero. Initialise the host
+    // buffer to a sentinel so a skipped D2H is detectable.
+    for (size_t slot = 0; slot < 6; ++slot) {
+        std::vector<uint64_t> out(kRingDim, 0xDEADBEEF);
+        REQUIRE(hazeMemcpy(out.data(), dst_storage[slot], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+        for (uint64_t i = 0; i < kRingDim; ++i) {
+            REQUIRE(out[i] == 0);
+        }
+    }
     REQUIRE(hazeFree(s0) == HAZE_SUCCESS);
     REQUIRE(hazeFree(s1) == HAZE_SUCCESS);
     for (auto *slot : dst_storage) {

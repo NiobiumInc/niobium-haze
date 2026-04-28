@@ -12,10 +12,9 @@
 // from the Product.
 #include "haze_errors.hpp"
 
-#include <haze/haze_types.h>
-
 #include <cstdio>
 #include <cstdlib>
+#include <haze/haze_types.h>
 
 namespace haze::detail {
 
@@ -23,6 +22,7 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     switch (err) {
     case HazeInternalError::NotConfigured:
         return HAZE_ERROR_CONFIGERR;
+    case HazeInternalError::InvalidArgument:
     case HazeInternalError::UnknownAddress:
     case HazeInternalError::NoData:
     case HazeInternalError::AllocTooSmall:
@@ -37,6 +37,8 @@ namespace {
 
 const char *internal_error_name(HazeInternalError err) noexcept {
     switch (err) {
+    case HazeInternalError::InvalidArgument:
+        return "invalid argument";
     case HazeInternalError::NotConfigured:
         return "not configured";
     case HazeInternalError::UnknownAddress:

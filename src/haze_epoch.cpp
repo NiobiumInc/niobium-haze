@@ -19,16 +19,14 @@
 #include "haze_handle.hpp"
 #include "haze_polynomial_io.hpp"
 
-#include <haze/haze_types.h>
-
-#include <niobium/fhetch_api.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <expected>
+#include <haze/haze_types.h>
 #include <iostream>
 #include <mutex>
+#include <niobium/fhetch_api.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,6 +70,7 @@ bool EpochState::is_recording() noexcept {
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
     poly_map_.erase(addr);
+    compute_results_.erase(addr);
     pending_outputs_.erase(addr);
 }
 
@@ -98,6 +97,11 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 
 void EpochState::store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
+    // Track this address as a compute result so flush_for_d2h knows to
+    // materialize it on the first flush (input polys, added via
+    // lookup_or_create_locked, are excluded — tagging them as fhetch
+    // outputs would confuse stop_epoch).
+    compute_results_.insert(addr);
 }
 
 std::expected<void, HazeInternalError> EpochState::flush_for_d2h(DevAddr addr) noexcept {
@@ -109,9 +113,25 @@ std::expected<void, HazeInternalError> EpochState::flush_for_d2h(DevAddr addr) n
         return {}; // address has no compute output bound
     }
 
-    if (pending_outputs_.find(addr) == pending_outputs_.end()) {
-        const std::string name = "haze_out_" + std::to_string(output_counter_++);
-        pending_outputs_.emplace(addr, name);
+    // Tag every compute result as a pending output, not just `addr`.
+    // do_materialize_locked() runs stop_epoch + clear_state, so any
+    // result not captured here would lose its value to subsequent D2H
+    // calls in the same epoch — they would early-return on !recording_
+    // and read uninitialised shadow. Multi-output ops (hazeBasisConvert,
+    // hazeModDown, hazeModUp) routinely produce several bound polys
+    // per call and the caller D2Hs each in turn, so capturing the
+    // whole live set on the first flush is the only way that pattern
+    // works without HAZE_PERSIST_WRITES.
+    //
+    // Inputs (poly_map_ entries created via lookup_or_create_locked)
+    // are deliberately excluded — their shadow is already authoritative
+    // (set by H2D), and tagging them as fhetch outputs causes
+    // stop_epoch to fail with BackendError.
+    for (DevAddr result_addr : compute_results_) {
+        if (pending_outputs_.find(result_addr) == pending_outputs_.end()) {
+            const std::string name = "haze_out_" + std::to_string(output_counter_++);
+            pending_outputs_.emplace(result_addr, name);
+        }
     }
 
     return do_materialize_locked();
@@ -164,6 +184,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
 
 void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
+    compute_results_.clear();
     pending_outputs_.clear();
     recording_ = false;
     input_counter_ = 0;

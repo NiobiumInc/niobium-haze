@@ -31,11 +31,12 @@ namespace haze::detail {
 // erase information internal callers and debug logs need. Keep the
 // typed enum for that discrimination; map at the C ABI boundary only.
 enum class HazeInternalError {
-    NotConfigured,  // ring_dim / modulus not set when required
-    UnknownAddress, // DevAddr not in the allocator's table
-    NoData,         // address allocated but no H2D / compute output present
-    AllocTooSmall,  // allocation size < polynomial size
-    BackendError,   // niobium::compiler() / fhetch returned failure
+    InvalidArgument, // params struct field violates the API contract
+    NotConfigured,   // ring_dim / modulus not set when required
+    UnknownAddress,  // DevAddr not in the allocator's table
+    NoData,          // address allocated but no H2D / compute output present
+    AllocTooSmall,   // allocation size < polynomial size
+    BackendError,    // niobium::compiler() / fhetch returned failure
 };
 
 // Map an internal error to the public hazeError_t the C ABI returns.

@@ -140,55 +140,57 @@ typedef struct {
     void *hostPointer;
 } hazePointerAttributes;
 
-// RYANPR: Follow the comment structure from task 3: no banners, no definitions of sections since the public repo won't have access to our planning docs.
-// ---------------------------------------------------------------------------
-// CRT basis conversion parameters (Section 5.4)
-// ---------------------------------------------------------------------------
-// Each struct describes the moduli bases of a multi-residue polynomial
-// (MRP) operation. Polynomial pointers are passed via the matching
-// public function's `dst` / `src` arguments; the params struct carries
-// scalar / array metadata only.
+// CRT basis-conversion parameter structs.
+//
+// Each struct describes a multi-residue polynomial (MRP) operation by
+// listing its prime moduli (the CRT base) and any auxiliary metadata.
+// All `*_base` arrays are arrays of `uint64_t` prime values that match
+// the primes passed to hazeSetCiphertextModulus.
+//
+// Polynomial pointers are passed via the matching public function's
+// `dst` / `src` arguments — never inside the params struct.
 
-// Ideally use consistent `//` comment syntax throughout.
-/* `src` is an array of length `src_base_len`, one poly pointer per src
- * modulus. `dst` is an array of length `dst_base_len`, one poly pointer
- * per dst modulus. */
+// hazeBasisConvert: convert an MRP from src_base to dst_base.
+//   src: array of src_base_len input poly pointers.
+//   dst: array of dst_base_len output poly pointers.
 typedef struct {
-    // RYANPR: What is this base pointer (both source and destination) on all of these structs for when we pass in src and destination in the function call? I assume these are the primes.
     const uint64_t *src_base;
-    size_t src_base_len;
+    size_t          src_base_len;
     const uint64_t *dst_base;
-    size_t dst_base_len;
-    uint64_t ring_dim;
+    size_t          dst_base_len;
 } hazeBasisConvertParams;
 
-/* `src` is an array of length `src_base_len`. `dst` is an array of
- * length `src_base_len - rescale_base_len`, ordered by `src_base \
- * rescale_base` in src_base's original order. */
+// hazeModDown: rescale by removing rescale_base from src_base.
+//   src: array of src_base_len input poly pointers.
+//   dst: array of (src_base_len - rescale_base_len) output poly pointers,
+//        ordered by src_base \ rescale_base in src_base's original order.
+//   rescale_base: a proper subset of src_base.
 typedef struct {
     const uint64_t *src_base;
-    size_t src_base_len;
-    const uint64_t *rescale_base; /* subset of src_base, in src_base's order */
-    size_t rescale_base_len;
-    uint64_t ring_dim;
+    size_t          src_base_len;
+    const uint64_t *rescale_base;
+    size_t          rescale_base_len;
 } hazeModDownParams;
 
-/* `src` is an array of length `src_base_len`. `dst` is a flat array of
- * length `digit_count * (src_base_len + p_base_len)`, written
- * digit-major: digit 0's polys (in src_base order, then p_base order),
- * then digit 1's polys, etc. `digit_bases` is a concatenation of
- * `digit_count` sub-bases; `digit_base_lens[i]` gives the length of the
- * i-th sub-base. hazeModUp emits dig_decomp, producing an MRPArray of
- * length digit_count where each element has base (src_base ∪ p_base). */
+// hazeModUp: digit decomposition for hybrid key switching.
+//   src: array of src_base_len input poly pointers.
+//   dst: flat array of digit_count * (src_base_len + p_base_len) output
+//        poly pointers, written digit-major. Each digit covers the union
+//        src_base ∪ p_base, in src_base order followed by p_base order.
+//   digit_bases: concatenation of digit_count sub-bases.
+//   digit_bases_total_len: total length of digit_bases (must equal
+//                          digit_base_lens[0] + ... + digit_base_lens[digit_count-1]).
+//   digit_base_lens: length of each sub-base.
+//   p_base: auxiliary primes appended to every digit's output base.
 typedef struct {
     const uint64_t *src_base;
-    size_t src_base_len;
+    size_t          src_base_len;
     const uint64_t *digit_bases;
-    const size_t *digit_base_lens;
-    size_t digit_count;
+    size_t          digit_bases_total_len;
+    const size_t   *digit_base_lens;
+    size_t          digit_count;
     const uint64_t *p_base;
-    size_t p_base_len;
-    uint64_t ring_dim;
+    size_t          p_base_len;
 } hazeModUpParams;
 
 #endif /* HAZE_TYPES_H */

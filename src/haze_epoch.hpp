@@ -16,16 +16,15 @@
 #include "haze_handle.hpp"
 #include "haze_thread_safety.hpp"
 
-#include <haze/haze_types.h>
-
-#include <niobium/fhetch_api.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <haze/haze_types.h>
 #include <mutex>
+#include <niobium/fhetch_api.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace haze::detail {
 
@@ -110,6 +109,12 @@ class EpochState {
     // call back into EpochState while holding the allocator lock.
     HazeMutex mutex_;
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
+    // Subset of poly_map_ populated by store_locked (i.e. compute
+    // outputs) — distinct from input polys created via
+    // lookup_or_create_locked. Used by flush_for_d2h to materialize
+    // every in-flight result on the first D2H per epoch so subsequent
+    // D2Hs in the same epoch don't read stale shadow.
+    std::unordered_set<DevAddr> compute_results_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
@@ -121,7 +126,9 @@ class EpochState {
     friend class EpochSession;
 };
 
-inline EpochState &epoch() noexcept { return EpochState::instance(); }
+inline EpochState &epoch() noexcept {
+    return EpochState::instance();
+}
 
 // RAII helper used by the compute API entry points: ensures the backend
 // is initialised, then takes the epoch mutex and ensures the recording
@@ -137,6 +144,9 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     EpochSession() HAZE_ACQUIRE(epoch().mutex_) : guard_(init_then_get_mutex()) {
         epoch().ensure_recording_locked();
     }
+    // Defaulted destructor: the actual unlock runs in HazeLockGuard's
+    // destructor (member guard_). HAZE_RELEASE here just declares the
+    // capability hand-off to TSA; no body work is needed.
     ~EpochSession() HAZE_RELEASE() = default;
 
     EpochSession(const EpochSession &) = delete;
@@ -156,7 +166,9 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 
 // D2H-side helper: copies bytes from the device shadow buffer to a host
 // destination after triggering any pending materialization. Called by
-// hazeMemcpy(D2H).
-hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept;
+// hazeMemcpy(D2H). Must NOT be invoked from inside an EpochSession —
+// flush_for_d2h takes the epoch mutex itself.
+hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept
+    HAZE_EXCLUDES(epoch().mutex());
 
 } // namespace haze::detail
