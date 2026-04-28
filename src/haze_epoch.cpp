@@ -82,13 +82,22 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 
     const uint64_t ring_dim = config().ring_dim();
     auto components = allocator().extract_polynomial_components(addr, ring_dim);
-    if (!components) {
+
+    fhetch::Polynomial poly;
+    if (components) {
+        poly = fhetch::Polynomial::from_data(*components, ring_dim, fhetch::Format::Evaluation);
+    } else if (components.error() == HazeInternalError::NoData) {
+        // Address allocated but no bytes ever written. Construct a fresh
+        // zero polynomial via fhetch — its shared_ptr<MRPImpl> storage
+        // owns the data, so HAZE never fabricates zero bytes itself.
+        // Matches the FIDESlib pattern of using SPECIAL limb buffers
+        // before their explicit zero_out memset (per task-5 design).
+        poly = fhetch::Polynomial::zeros(ring_dim);
+    } else {
         return std::unexpected(components.error());
     }
 
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
-    fhetch::Polynomial poly =
-        fhetch::Polynomial::from_data(*components, ring_dim, fhetch::Format::Evaluation);
     fhetch::tag_input(name, poly);
 
     poly_map_.emplace(addr, poly);

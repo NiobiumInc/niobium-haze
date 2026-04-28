@@ -16,7 +16,12 @@ static constexpr int kModIdx = 0;
 
 // Ensures ring dim and modulus are set before each compute test.
 // Called explicitly in each test case because global state persists.
+// hazeDeviceReset() runs first so each test starts from a clean
+// allocator/epoch state — see docs/lazy_shadow_flake.md for the
+// open intermittent-failure investigation that motivated uniform
+// reset across the suite.
 static void setup_compute_config() {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);

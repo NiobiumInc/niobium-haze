@@ -15,12 +15,11 @@
 #include "haze_errors.hpp"
 #include "haze_handle.hpp"
 
-#include <haze/haze_types.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <expected>
+#include <haze/haze_types.h>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -35,6 +34,7 @@ DeviceAllocator &DeviceAllocator::instance() noexcept {
 void DeviceAllocator::clear_pool_locked() noexcept {
     for (DevAddr addr : pool_free_) {
         map_.erase(addr);
+        shadow_data_.erase(addr);
     }
     pool_free_.clear();
 }
@@ -75,14 +75,13 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
         return std::unexpected(HazeInternalError::AllocTooSmall);
     }
 
-    // Recycle from the free list when available.
+    // Recycle from the free list when available. The shadow_data_
+    // entry was already evicted at hazeFree time; the recycled DevAddr
+    // starts in the same "no shadow, no data" state as a fresh one.
     if (!pool_free_.empty()) {
         DevAddr addr = pool_free_.back();
         pool_free_.pop_back();
-        auto it = map_.find(addr);
-        if (it != map_.end()) {
-            std::fill(it->second.host_shadow.begin(), it->second.host_shadow.end(), uint8_t{0});
-            it->second.has_data = false;
+        if (map_.find(addr) != map_.end()) {
             return addr;
         }
         // Pool free list out of sync with the map — fall through to a
@@ -90,16 +89,16 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
     }
 
     // Fresh allocation: bump the address counter by exactly poly_bytes_.
+    // No shadow bytes are allocated. shadow_data_ stays empty for this
+    // DevAddr until the first H2D / memset / D2D / update_shadow.
     DevAddr addr{next_addr_};
     next_addr_ += poly_bytes_;
 
     Allocation a{};
     a.addr = addr;
     a.size = poly_bytes_;
-    a.host_shadow.resize(poly_bytes_, 0);
-    a.has_data = false;
     a.pooled = true;
-    map_.emplace(addr, std::move(a));
+    map_.emplace(addr, a);
     return addr;
 }
 
@@ -113,6 +112,10 @@ hazeError_t DeviceAllocator::free(DevAddr addr) noexcept {
         record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
         return HAZE_ERROR_INVALID_VALUE;
     }
+    // Always evict the shadow on free — the bytes (if any) are no
+    // longer the user's to read. For pooled addresses the metadata
+    // stays in map_ for recycling; for non-pooled it goes too.
+    shadow_data_.erase(addr);
     if (it->second.pooled) {
         pool_free_.push_back(addr);
     } else {
@@ -122,7 +125,7 @@ hazeError_t DeviceAllocator::free(DevAddr addr) noexcept {
 }
 
 std::expected<std::vector<uint64_t>, HazeInternalError>
-DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept {
+DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept {
     if (ring_dim == 0) {
         record_internal_error(HazeInternalError::NotConfigured,
                               "DeviceAllocator::extract_polynomial_components: ring_dim == 0");
@@ -135,20 +138,27 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::UnknownAddress);
     }
-    const Allocation &a = it->second;
-    if (!a.has_data) {
-        record_internal_error(HazeInternalError::NoData,
-                              "DeviceAllocator::extract_polynomial_components");
-        return std::unexpected(HazeInternalError::NoData);
-    }
     const size_t expected_bytes = ring_dim * sizeof(uint64_t);
-    if (a.size < expected_bytes) {
+    if (it->second.size < expected_bytes) {
         record_internal_error(HazeInternalError::AllocTooSmall,
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::AllocTooSmall);
     }
+    auto data_it = shadow_data_.find(addr);
+    if (data_it == shadow_data_.end()) {
+        // Address allocated but no bytes ever written — caller decides
+        // whether to fall through to a zero polynomial via fhetch.
+        record_internal_error(HazeInternalError::NoData,
+                              "DeviceAllocator::extract_polynomial_components");
+        return std::unexpected(HazeInternalError::NoData);
+    }
     std::vector<uint64_t> components(ring_dim);
-    std::memcpy(components.data(), a.host_shadow.data(), expected_bytes);
+    std::memcpy(components.data(), data_it->second.data(), expected_bytes);
+    // Evict the shadow — fhetch::Polynomial::from_data (the caller's
+    // next move) takes ownership of the bytes via shared_ptr<MRPImpl>.
+    // The HAZE-side shadow becomes redundant; releasing it here frees
+    // memory mid-program, before hazeFree.
+    shadow_data_.erase(data_it);
     return components;
 }
 
@@ -161,8 +171,14 @@ hazeError_t DeviceAllocator::copy_h2d(DevAddr dst, const void *src, size_t count
         return HAZE_ERROR_INVALID_VALUE;
     if (count > it->second.size)
         return HAZE_ERROR_INVALID_VALUE;
-    std::memcpy(it->second.host_shadow.data(), src, count);
-    it->second.has_data = true;
+    // Lazy-create or overwrite the shadow entry. Sized to the full
+    // allocation so partial writes leave the tail at zero (matches
+    // prior eager-zero semantics for the unwritten tail).
+    auto &shadow = shadow_data_[dst];
+    if (shadow.size() != it->second.size) {
+        shadow.assign(it->second.size, uint8_t{0});
+    }
+    std::memcpy(shadow.data(), src, count);
     return HAZE_SUCCESS;
 }
 
@@ -174,8 +190,18 @@ hazeError_t DeviceAllocator::copy_d2d(DevAddr dst, DevAddr src, size_t count) no
         return HAZE_ERROR_INVALID_VALUE;
     if (count > src_it->second.size || count > dst_it->second.size)
         return HAZE_ERROR_INVALID_VALUE;
-    std::memcpy(dst_it->second.host_shadow.data(), src_it->second.host_shadow.data(), count);
-    dst_it->second.has_data = src_it->second.has_data;
+    auto src_data = shadow_data_.find(src);
+    if (src_data == shadow_data_.end()) {
+        // D2D from an address with no live shadow → dst inherits the
+        // "no shadow" state. Evict whatever dst had (if anything).
+        shadow_data_.erase(dst);
+        return HAZE_SUCCESS;
+    }
+    auto &dst_shadow = shadow_data_[dst];
+    if (dst_shadow.size() != dst_it->second.size) {
+        dst_shadow.assign(dst_it->second.size, uint8_t{0});
+    }
+    std::memcpy(dst_shadow.data(), src_data->second.data(), count);
     return HAZE_SUCCESS;
 }
 
@@ -186,8 +212,11 @@ hazeError_t DeviceAllocator::memset(DevAddr addr, int value, size_t count) noexc
         return HAZE_ERROR_INVALID_VALUE;
     if (count > it->second.size)
         return HAZE_ERROR_INVALID_VALUE;
-    std::memset(it->second.host_shadow.data(), value, count);
-    it->second.has_data = true;
+    auto &shadow = shadow_data_[addr];
+    if (shadow.size() != it->second.size) {
+        shadow.assign(it->second.size, uint8_t{0});
+    }
+    std::memset(shadow.data(), value, count);
     return HAZE_SUCCESS;
 }
 
@@ -200,7 +229,15 @@ hazeError_t DeviceAllocator::copy_to_host(void *dst, DevAddr src, size_t count) 
         return HAZE_ERROR_INVALID_VALUE;
     if (count > it->second.size)
         return HAZE_ERROR_INVALID_VALUE;
-    std::memcpy(dst, it->second.host_shadow.data(), count);
+    auto data_it = shadow_data_.find(src);
+    if (data_it == shadow_data_.end()) {
+        // Address allocated but no bytes ever written or already
+        // consumed by compute. Match the prior eager-zero semantic:
+        // return zeros, success. Do not erase any state.
+        std::memset(dst, 0, count);
+        return HAZE_SUCCESS;
+    }
+    std::memcpy(dst, data_it->second.data(), count);
     return HAZE_SUCCESS;
 }
 
@@ -210,9 +247,12 @@ hazeError_t DeviceAllocator::update_shadow(DevAddr addr,
     auto it = map_.find(addr);
     if (it == map_.end())
         return HAZE_ERROR_INVALID_VALUE;
-    const size_t copy_len = std::min(bytes.size(), it->second.host_shadow.size());
-    std::memcpy(it->second.host_shadow.data(), bytes.data(), copy_len);
-    it->second.has_data = true;
+    auto &shadow = shadow_data_[addr];
+    if (shadow.size() != it->second.size) {
+        shadow.assign(it->second.size, uint8_t{0});
+    }
+    const size_t copy_len = std::min(bytes.size(), shadow.size());
+    std::memcpy(shadow.data(), bytes.data(), copy_len);
     return HAZE_SUCCESS;
 }
 
@@ -274,6 +314,7 @@ void DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
 void DeviceAllocator::reset() noexcept {
     HazeLockGuard lock(mutex_);
     map_.clear();
+    shadow_data_.clear();
     pool_free_.clear();
     host_set_.clear();
     next_addr_ = kHbmBase;
