@@ -16,7 +16,7 @@
 #include <cstdlib>
 #include <haze/haze_types.h>
 
-namespace haze::detail {
+namespace haze {
 
 hazeError_t to_public_error(HazeInternalError err) noexcept {
     switch (err) {
@@ -73,4 +73,4 @@ void record_internal_error(HazeInternalError err, const char *context) noexcept 
     }
 }
 
-} // namespace haze::detail
+} // namespace haze

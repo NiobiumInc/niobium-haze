@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 DeviceAllocator &DeviceAllocator::instance() noexcept {
     static DeviceAllocator inst;
@@ -280,4 +280,4 @@ void DeviceAllocator::reset() noexcept {
     poly_bytes_ = 0;
 }
 
-} // namespace haze::detail
+} // namespace haze

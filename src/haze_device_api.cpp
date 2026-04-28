@@ -19,23 +19,23 @@
 extern "C" hazeError_t hazeGetDeviceCount(int *count) noexcept {
     if (count == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    *count = haze::detail::device_count();
+    *count = haze::device_count();
     return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeSetDevice(int device) noexcept {
-    return set_error(haze::detail::device_set_active(device));
+    return set_error(haze::device_set_active(device));
 }
 
 extern "C" hazeError_t hazeGetDevice(int *device) noexcept {
     if (device == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    *device = haze::detail::device_active();
+    *device = haze::device_active();
     return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp *prop, int device) noexcept {
-    return set_error(haze::detail::device_fill_properties(prop, device));
+    return set_error(haze::device_fill_properties(prop, device));
 }
 
 extern "C" hazeError_t hazeDeviceSynchronize() noexcept { return HAZE_SUCCESS; }

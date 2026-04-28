@@ -19,7 +19,7 @@
 extern "C" hazeError_t hazeStreamCreate(hazeStream_t *stream) noexcept {
     if (stream == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    *stream = haze::detail::stream_create();
+    *stream = haze::stream_create();
     if (*stream == nullptr)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     return HAZE_SUCCESS;
@@ -32,7 +32,7 @@ extern "C" hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream,
 }
 
 extern "C" hazeError_t hazeStreamDestroy(hazeStream_t stream) noexcept {
-    haze::detail::stream_destroy(stream);
+    haze::stream_destroy(stream);
     return HAZE_SUCCESS;
 }
 
@@ -48,7 +48,7 @@ extern "C" hazeError_t hazeStreamWaitEvent(hazeStream_t /*stream*/, hazeEvent_t 
 extern "C" hazeError_t hazeEventCreate(hazeEvent_t *event) noexcept {
     if (event == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    *event = haze::detail::event_create();
+    *event = haze::event_create();
     if (*event == nullptr)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     return HAZE_SUCCESS;
@@ -60,11 +60,11 @@ extern "C" hazeError_t hazeEventCreateWithFlags(hazeEvent_t *event,
 }
 
 extern "C" hazeError_t hazeEventDestroy(hazeEvent_t event) noexcept {
-    haze::detail::event_destroy(event);
+    haze::event_destroy(event);
     return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeEventRecord(hazeEvent_t event, hazeStream_t /*stream*/) noexcept {
-    haze::detail::event_record(event);
+    haze::event_record(event);
     return HAZE_SUCCESS;
 }

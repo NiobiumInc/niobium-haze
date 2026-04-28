@@ -27,7 +27,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 
-namespace haze::detail {
+namespace haze {
 
 void reset_all() noexcept {
     epoch().reset();
@@ -39,10 +39,10 @@ void reset_all() noexcept {
     device_reset();
 }
 
-} // namespace haze::detail
+} // namespace haze
 
 extern "C" hazeError_t hazeDeviceReset(void) noexcept {
-    haze::detail::reset_all();
+    haze::reset_all();
     // Match cudaDeviceReset: also clear the thread-local last-error so
     // callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;

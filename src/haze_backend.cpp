@@ -29,7 +29,7 @@
 #include <mutex>
 #include <string>
 
-namespace haze::detail {
+namespace haze {
 
 CompilerBackend &CompilerBackend::instance() noexcept {
     static CompilerBackend inst;
@@ -97,4 +97,4 @@ void CompilerBackend::reset() noexcept {
     argv_[1] = nullptr;
 }
 
-} // namespace haze::detail
+} // namespace haze

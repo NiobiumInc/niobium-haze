@@ -65,7 +65,7 @@
 
 #include <mutex>
 
-namespace haze::detail {
+namespace haze {
 
 // Thin wrapper around std::mutex annotated as a clang TSA capability.
 // libstdc++'s std::mutex carries no annotations, so without this
@@ -109,4 +109,4 @@ class HAZE_SCOPED_CAPABILITY HazeLockGuard {
     HazeMutex &mutex_;
 };
 
-} // namespace haze::detail
+} // namespace haze

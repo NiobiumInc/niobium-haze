@@ -29,7 +29,7 @@ struct haze_event_s {
     bool recorded;
 };
 
-namespace haze::detail {
+namespace haze {
 
 // Free functions instead of registry classes — state is just two
 // counters and a default-stream singleton, not enough invariants to
@@ -45,4 +45,4 @@ void event_destroy(hazeEvent_t e) noexcept;
 void event_record(hazeEvent_t e) noexcept;
 void events_reset() noexcept;
 
-} // namespace haze::detail
+} // namespace haze

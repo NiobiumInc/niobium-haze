@@ -22,7 +22,7 @@
 #include <string_view>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 namespace fhetch = niobium::fhetch;
 namespace fs = std::filesystem;
@@ -87,4 +87,4 @@ bool extract_polynomial_values(const fhetch::Polynomial &p, std::string_view tag
     return !out.empty();
 }
 
-} // namespace haze::detail
+} // namespace haze

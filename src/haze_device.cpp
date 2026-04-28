@@ -17,7 +17,7 @@
 #include <cstddef>
 #include <cstring>
 
-namespace haze::detail {
+namespace haze {
 
 namespace {
 inline constexpr int kDeviceCount = 1;
@@ -69,4 +69,4 @@ hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept {
 
 void device_reset() noexcept { g_active_device = 0; }
 
-} // namespace haze::detail
+} // namespace haze

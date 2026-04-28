@@ -18,7 +18,7 @@
 #include <expected>
 #include <haze/haze_types.h>
 
-namespace haze::detail {
+namespace haze {
 
 // Internal C++ entry points for the CRT basis-conversion composites.
 // extern "C" shims in haze_basis_convert_api.cpp validate pointer
@@ -35,4 +35,4 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
                                               const hazeModUpParams &params) noexcept;
 
-} // namespace haze::detail
+} // namespace haze

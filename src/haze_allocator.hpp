@@ -25,7 +25,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 // Backing storage for one DevAddr. Data lives in host_shadow until a
 // compute call promotes it to a recorded polynomial input.
@@ -144,4 +144,4 @@ class DeviceAllocator {
 
 inline DeviceAllocator &allocator() noexcept { return DeviceAllocator::instance(); }
 
-} // namespace haze::detail
+} // namespace haze

@@ -16,7 +16,7 @@
 #include <mutex>
 #include <string>
 
-namespace haze::detail {
+namespace haze {
 
 // Control surface for the niobium::compiler() singleton. HAZE records
 // FHETCH IR via fhetch::sr_*, fhetch::tag_input, and fhetch::result;
@@ -74,4 +74,4 @@ class CompilerBackend {
 
 inline CompilerBackend &backend() noexcept { return CompilerBackend::instance(); }
 
-} // namespace haze::detail
+} // namespace haze

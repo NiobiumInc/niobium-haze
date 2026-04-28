@@ -23,7 +23,7 @@ extern thread_local hazeError_t g_last_error;
     return err;
 }
 
-namespace haze::detail {
+namespace haze {
 
 // Internal error type. Multiple internal causes can map to the same
 // public hazeError_t code (e.g. UnknownAddress / NoData / AllocTooSmall
@@ -47,4 +47,4 @@ hazeError_t to_public_error(HazeInternalError) noexcept;
 // when the env var is set. The context string is unowned and short-lived.
 void record_internal_error(HazeInternalError err, const char *context = nullptr) noexcept;
 
-} // namespace haze::detail
+} // namespace haze

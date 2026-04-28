@@ -26,7 +26,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace haze::detail {
+namespace haze {
 
 // Epoch state is the single point of contact between the compute API
 // and the niobium compiler's recording window. It tracks the active
@@ -171,4 +171,4 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept
     HAZE_EXCLUDES(epoch().mutex());
 
-} // namespace haze::detail
+} // namespace haze

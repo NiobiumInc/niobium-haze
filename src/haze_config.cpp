@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 namespace {
 
@@ -176,4 +176,4 @@ void Config::reset() noexcept {
     target_set_ = false;
 }
 
-} // namespace haze::detail
+} // namespace haze

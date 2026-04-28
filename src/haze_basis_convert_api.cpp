@@ -26,7 +26,7 @@ hazeError_t dispatch(void *const *dst, const void *const *src, const void *param
     }
     auto result = OpFn(dst, src, *static_cast<const ParamsT *>(params));
     if (!result) {
-        return set_error(haze::detail::to_public_error(result.error()));
+        return set_error(haze::to_public_error(result.error()));
     }
     return HAZE_SUCCESS;
 }
@@ -35,15 +35,15 @@ hazeError_t dispatch(void *const *dst, const void *const *src, const void *param
 
 extern "C" hazeError_t hazeBasisConvert(void *const *dst, const void *const *src,
                                         const void *params, hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeBasisConvertParams, haze::detail::basis_convert>(dst, src, params);
+    return dispatch<hazeBasisConvertParams, haze::basis_convert>(dst, src, params);
 }
 
 extern "C" hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
                                    hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeModDownParams, haze::detail::mod_down>(dst, src, params);
+    return dispatch<hazeModDownParams, haze::mod_down>(dst, src, params);
 }
 
 extern "C" hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                  hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeModUpParams, haze::detail::mod_up>(dst, src, params);
+    return dispatch<hazeModUpParams, haze::mod_up>(dst, src, params);
 }

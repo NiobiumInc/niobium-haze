@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 // Read the integer-component values out of a fhetch::Polynomial.
 //
@@ -40,4 +40,4 @@ namespace haze::detail {
 bool extract_polynomial_values(const niobium::fhetch::Polynomial &p, std::string_view tag,
                                std::vector<uint64_t> &out);
 
-} // namespace haze::detail
+} // namespace haze

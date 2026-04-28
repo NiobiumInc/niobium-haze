@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
@@ -209,4 +209,4 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     return {};
 }
 
-} // namespace haze::detail
+} // namespace haze

@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <expected>
 
-namespace haze::detail {
+namespace haze {
 
 // Each compute entry point shares the same prelude: open an EpochSession
 // (lock + ensure_recording), resolve the modulus, copy each source poly
@@ -89,4 +89,4 @@ hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t index) noexcept {
     return HAZE_SUCCESS;
 }
 
-} // namespace haze::detail
+} // namespace haze

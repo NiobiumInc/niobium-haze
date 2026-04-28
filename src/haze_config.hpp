@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
 // twiddle generators. Plus the program/target metadata fed to the
@@ -78,4 +78,4 @@ class Config {
 
 inline Config &config() noexcept { return Config::instance(); }
 
-} // namespace haze::detail
+} // namespace haze

@@ -14,7 +14,7 @@
 
 #include <haze/haze_types.h>
 
-namespace haze::detail {
+namespace haze {
 
 // Single-device runtime state. The active-device selector is the only
 // mutable field; everything else (count, properties) is constexpr in
@@ -28,4 +28,4 @@ hazeError_t device_set_active(int device) noexcept;
 hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept;
 void device_reset() noexcept;
 
-} // namespace haze::detail
+} // namespace haze

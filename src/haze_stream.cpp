@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <new>
 
-namespace haze::detail {
+namespace haze {
 
 namespace {
 std::atomic<uint64_t> g_next_stream_id{1};
@@ -66,4 +66,4 @@ void event_record(hazeEvent_t e) noexcept {
 
 void events_reset() noexcept { g_next_event_id.store(1, std::memory_order_relaxed); }
 
-} // namespace haze::detail
+} // namespace haze

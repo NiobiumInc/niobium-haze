@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-namespace haze::detail {
+namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
@@ -219,4 +219,4 @@ hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexce
     return allocator().copy_to_host(dst, src, count);
 }
 
-} // namespace haze::detail
+} // namespace haze

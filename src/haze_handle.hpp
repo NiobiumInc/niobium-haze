@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace haze::detail {
+namespace haze {
 
 // Virtual HBM address base for HAZE's DeviceAllocator.
 // Must lie above FHETCH's synthetic address range (today < 0x1000000000)
@@ -41,12 +41,12 @@ inline void *to_void_ptr(DevAddr a) noexcept {
     return reinterpret_cast<void *>(static_cast<uintptr_t>(a));
 }
 
-} // namespace haze::detail
+} // namespace haze
 
 namespace std {
-template <> struct hash<haze::detail::DevAddr> {
-    size_t operator()(haze::detail::DevAddr a) const noexcept {
-        return hash<uintptr_t>{}(haze::detail::to_uintptr(a));
+template <> struct hash<haze::DevAddr> {
+    size_t operator()(haze::DevAddr a) const noexcept {
+        return hash<uintptr_t>{}(haze::to_uintptr(a));
     }
 };
 } // namespace std
