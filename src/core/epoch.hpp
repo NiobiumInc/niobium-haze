@@ -30,7 +30,9 @@ namespace haze {
 // Epoch state is the single point of contact between the compute API
 // and the niobium compiler's recording window. It tracks the active
 // polymap (DevAddr → fhetch::Polynomial), pending output names for the
-// next D2H, and the recording lifecycle flags.
+// next D2H, and the recording lifecycle flags. The next D2H drives
+// replay_and_populate(), which finalises the trace and writes every
+// pending output back into the shadow buffer.
 //
 // Mutex contract: most public methods take `mutex_` themselves; the
 // `_locked` variants assume the caller has already taken it via an
@@ -169,11 +171,13 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     HazeLockGuard guard_;
 };
 
-// D2H-side helper: copies bytes from the device shadow buffer to a host
-// destination. Plain shadow read — does NOT trigger any recording
-// finalization or replay. Callers that need post-compute values must
-// invoke hazeReplay() (haze::epoch().replay_and_populate()) first to
-// materialize results into the shadow buffer.
+// D2H-side helper: finalises any active recording via
+// replay_and_populate() (no-op when not recording), then copies bytes
+// from the device shadow buffer to a host destination. D2H is the
+// sole flush trigger; there is no separate explicit-replay entry point.
+// Returns a public hazeError_t (already translated via to_public_error);
+// the caller in src/api/ is responsible for routing the value through
+// set_error() so hazeGetLastError() reflects the failure.
 hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
 } // namespace haze

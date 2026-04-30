@@ -257,8 +257,8 @@ option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
 # Unit suite: in-process, no server, no compiler-side binary.
 # HAZE_TARGET=local pins the compiler target so haze never attempts to
 # dispatch to nbcc_fhetch_replay during unit tests. Unit tests observe
-# state-machine and recording behaviour only -- they do not call
-# hazeReplay() and do not validate FHE math results.
+# state-machine and recording behaviour only -- they do not perform a
+# D2H (which would trigger replay) and do not validate FHE math results.
 add_test(NAME haze_unit_tests
          COMMAND haze_tests "~[integration]")
 set_tests_properties(haze_unit_tests PROPERTIES

@@ -30,7 +30,6 @@ TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]") {
     REQUIRE(hazeAdd(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -58,7 +57,6 @@ TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]") 
     REQUIRE(hazeSub(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -84,7 +82,6 @@ TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H", "[integ
     REQUIRE(hazeMulScalar(d_dst, d_a, 4, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -109,7 +106,6 @@ TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[inte
     REQUIRE(hazeAddScalar(d_dst, d_a, 3, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -140,7 +136,6 @@ TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]") {
     REQUIRE(hazeINTT(d_intt, d_ntt, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_intt, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -171,7 +166,6 @@ TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integratio
     REQUIRE(hazeAdd(d_a, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -197,7 +191,6 @@ TEST_CASE("hazeAdd in-place (dst == src2) produces correct result", "[integratio
     REQUIRE(hazeAdd(d_b, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_b, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -221,7 +214,6 @@ TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[integration
     REQUIRE(hazeAdd(d_a, d_a, d_a, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -253,7 +245,6 @@ TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integr
     REQUIRE(hazeMulScalar(d_dst, d_t, 2, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -286,7 +277,6 @@ TEST_CASE("multiple materializations: two independent D2H cycles", "[integration
     REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> r1(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(r1.data(), d_dst1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -301,7 +291,6 @@ TEST_CASE("multiple materializations: two independent D2H cycles", "[integration
     REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -335,7 +324,6 @@ TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integratio
     REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     // If sync had flushed state, result would be stale/zero. Correct: 6.
@@ -429,7 +417,6 @@ TEST_CASE("H2D after compute invalidates the polymap binding", "[integration]") 
     REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(r2[i] == 23);
@@ -461,7 +448,6 @@ TEST_CASE("memset after compute invalidates the polymap binding", "[integration]
     REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(r2[i] == 5);

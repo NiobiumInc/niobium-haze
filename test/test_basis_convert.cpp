@@ -81,7 +81,7 @@ TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
 }
 
 // The [!mayfail] cases below are blocked on multi-residue support in the
-// replay bridge. Recording succeeds, but `hazeReplay()` returns
+// replay bridge. Recording succeeds, but the D2H-triggered replay returns
 // HAZE_ERROR_NOT_SUPPORTED because the bridge cannot synthesise an OpenFHE
 // CryptoContext for multi-modulus traces yet. They run and report assertion
 // failures, but Catch2 does not propagate those as suite failures. Remove the
@@ -120,7 +120,6 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration][
     REQUIRE(hazeMemcpy(b, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 3);
 
@@ -249,11 +248,8 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values",
     std::vector<uint64_t> out0(kRingDim, 0);
     std::vector<uint64_t> out1(kRingDim, 0);
     std::vector<uint64_t> out2(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out2.data(), d2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     // Same-modulus copies: dst residue == src residue, every coefficient.
@@ -295,9 +291,7 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration][!m
 
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     // Catches both (a) a backend that writes garbage and (b) the
@@ -335,7 +329,6 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integr
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 42);
 
@@ -385,9 +378,7 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration][!may
     // Initialise to non-zero so a no-op D2H would surface as a failure.
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(out0[i] == 0);
@@ -448,7 +439,6 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits",
 
     // D2H every output and verify exact zero. Initialise the host
     // buffer to a sentinel so a skipped D2H is detectable.
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     for (size_t slot = 0; slot < 6; ++slot) {
         std::vector<uint64_t> out(kRingDim, 0xDEADBEEF);
         REQUIRE(hazeMemcpy(out.data(), dst_storage[slot], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
@@ -762,7 +752,6 @@ static void check_against_reference(const std::vector<void *> &dst,
     REQUIRE(dst.size() == dst_base.size());
     for (size_t j = 0; j < dst.size(); ++j) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeReplay() == HAZE_SUCCESS);
         REQUIRE(hazeMemcpy(got.data(), dst[j], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t s = 0; s < kRingDim; ++s) {
             INFO("dst index " << j << " (mod " << dst_base[j] << ") slot " << s);

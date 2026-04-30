@@ -48,13 +48,13 @@ constexpr size_t kBytes = kN * sizeof(uint64_t);
 // Routes through haze_replay_bridge so the test runs end-to-end via
 // the FHETCH transport: bridge picks the actual tower modulus near
 // 2^bits(kQ), aligns haze's ciphertext modulus, sets target=FUNC_SIM
-// so hazeReplay() dispatches to nbcc_fhetch_replay rather than no-op'ing.
+// so the D2H-triggered replay dispatches to nbcc_fhetch_replay rather
+// than no-op'ing.
 void setup_4096() {
     haze::test::setup_integration_compute_config(kN, kQ, 0);
 }
 
 inline void d2h(std::vector<uint64_t> &dst, const void *dev) {
-    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(dst.data(), dev, dst.size() * sizeof(uint64_t),
                        HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 }

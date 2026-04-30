@@ -5,13 +5,12 @@
 //   2. Bridge auto-synthesizes a CryptoContext + per-input cereal-binary
 //      .bin files + per-output ciphertext templates at recording-finalize
 //      time (see haze_replay_bridge's post_recording_hook).
-//   3. Call hazeReplay() to dispatch the recorded project to a
-//      niobium-compiler-built nbcc_fhetch_replay over the FHETCH HTTP
-//      transport.
+//   3. The first hazeMemcpy(D2H) finalises the recording, dispatches the
+//      project to a niobium-compiler-built nbcc_fhetch_replay over the
+//      FHETCH HTTP transport, and reads the materialized values back.
 //   4. The simulator-computed values flow back as serialized_probes/*.ct,
 //      which fhetch::result reads and replay_and_populate writes into the
-//      haze shadow buffers.
-//   5. hazeMemcpy(D2H) returns the materialized values from shadow.
+//      haze shadow buffers; D2H then returns those values.
 //
 // Orchestration of the server + client-side forwarder lives in
 // scripts/test_haze_integration.sh.
@@ -44,9 +43,10 @@ namespace haze::test {
 // with the .ct round-trip, we feed the picked value back into
 // hazeSetCiphertextModulus before any compute.
 //
-// After this call returns, tests do compute + hazeReplay() + hazeMemcpy(D2H).
-// The bridge's post_recording_hook auto-writes the .bin / .ids / .template
-// artifacts during stop(); tests do not need to call WriteTemplate or
+// After this call returns, tests do compute + hazeMemcpy(D2H); the D2H
+// triggers replay before reading the shadow buffer. The bridge's
+// post_recording_hook auto-writes the .bin / .ids / .template artifacts
+// during stop(); tests do not need to call WriteTemplate or
 // WriteInputBin explicitly.
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t desired_modulus = 576460752303415297ULL,

@@ -127,24 +127,14 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
  *
  * Resolution order:
  *   1. hazeSetTarget(target)  - explicit programmatic call.
- *   2. HAZE_TARGET env var    - read on first hazeReplay if (1) unset.
+ *   2. HAZE_TARGET env var    - read on the first replay-triggering D2H
+ *                                if (1) is unset.
  *   3. "local"                - default if both above are unset.
  *
- * See hazeReplay() for behaviour-by-target dispatch. */
+ * Behaviour-by-target dispatch happens inside the next hazeMemcpy(D2H),
+ * which finalises the recording, runs the replay, and populates the
+ * shadow buffer before returning bytes to the host. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
-
-/* Trigger replay of the recorded operations.
- *
- * Finalises the current epoch's .fhetch trace and dispatches it
- * according to the configured target (see hazeSetTarget for the
- * two-tier table and resolution order). At a glance:
- *
- *   target == "local":   in-process simulator populates shadows.
- *   target == <other>:   HTTP transport to nbcc_fhetch_replay.
- *
- * Calling hazeReplay() with no recording in progress is a no-op
- * returning HAZE_SUCCESS. */
-HAZE_API hazeError_t hazeReplay(void) HAZE_NOEXCEPT;
 
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer
 // that emits FHETCH IR; nothing executes until hazeMemcpy(D2H) flushes

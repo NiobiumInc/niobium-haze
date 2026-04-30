@@ -229,13 +229,16 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
 }
 
 hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    // D2H is a plain shadow read. Recording finalization + replay live
-    // in haze::epoch().replay_and_populate() (exposed as hazeReplay()),
-    // which the user must call explicitly before reading post-compute
-    // values back. This separation is intentional: replay incurs an
-    // HTTP transport round-trip to the compiler-side nbcc_fhetch_replay,
-    // which is a heavy operation that should be triggered explicitly,
-    // not as a side-effect of a memcpy.
+    // D2H is the sole flush trigger: finalise any active recording,
+    // dispatch replay (potentially an HTTP round-trip to nbcc_fhetch_replay
+    // for non-local targets), and populate shadow buffers before reading.
+    // replay_and_populate() is a no-op when no recording is in flight, so
+    // plain H2D-then-D2H round-trips elide the cost, and subsequent D2H
+    // calls within the same epoch are free (the first D2H clears
+    // recording_).
+    auto replay_result = epoch().replay_and_populate();
+    if (!replay_result)
+        return to_public_error(replay_result.error());
     return allocator().copy_to_host(dst, src, count);
 }
 

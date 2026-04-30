@@ -11,10 +11,12 @@ shapes one-for-one (`cudaMalloc` → `hazeMalloc`, `cudaMemcpy` → `hazeMemcpy`
 against CUDA — primarily FIDESlib — can port by mechanical prefix substitution.
 
 The implementation does not execute polynomial math. Every compute call records
-a node into FHETCH IR via `niobium::fhetch::sr_*`; an explicit `hazeReplay()`
+a node into FHETCH IR via `niobium::fhetch::sr_*`; the next `hazeMemcpy(D2H)`
 finalizes the trace, dispatches it to a backend (in-process simulator or HTTP
-transport to `nbcc_fhetch_replay`), and writes the simulator-computed values
-into shadow buffers. `hazeMemcpy(D2H)` then reads from the shadow.
+transport to `nbcc_fhetch_replay`), writes the simulator-computed values into
+shadow buffers, and only then copies the shadow bytes to the host destination.
+D2H is therefore the sole flush trigger; there is no separate explicit-replay
+entry point.
 
 ## Toolchain
 
@@ -222,21 +224,23 @@ guard that:
 No hardware, simulator, or polynomial math runs at this point. The
 recording phase only appends nodes to the FHETCH trace.
 
-Materialization is triggered explicitly via `hazeReplay()`:
+Materialization is triggered implicitly by `hazeMemcpy(D2H)`. The D2H
+path in `haze::copy_to_host` (src/core/epoch.cpp) calls
+`EpochState::replay_and_populate()` before reading the shadow buffer:
 
 1. `EpochState::replay_and_populate()` tags every output binding for
-   `fhetch::tag_output`.
+   `fhetch::tag_output`. No-op when no recording is in flight, so plain
+   H2D-then-D2H round-trips elide it for free.
 2. `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch` trace.
 3. `CompilerBackend::replay()` dispatches per the configured target.
 4. `niobium::fhetch::result(...)` is called for each tagged output to read
    the simulator-computed polynomial back, and `update_shadow` writes the
    bytes into the allocator's sparse `shadow_data_` map.
+5. `copy_to_host` then performs the shadow read into the host buffer.
 
-After replay, `hazeMemcpy(D2H)` is a plain shadow read via
-`copy_to_host`. `hazeDeviceSynchronize` and `hazeStreamSynchronize` are
-no-ops returning `HAZE_SUCCESS` — synchronization is implicit in the
-explicit `hazeReplay()` call. Streams and events exist for CUDA-shape
-parity but do not model ordering.
+`hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops returning
+`HAZE_SUCCESS` — synchronization is implicit in the D2H itself. Streams
+and events exist for CUDA-shape parity but do not model ordering.
 
 ### Shadow storage model
 
