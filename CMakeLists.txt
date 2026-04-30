@@ -160,8 +160,6 @@ target_include_directories(haze
 
 target_compile_definitions(haze PRIVATE HAZE_BUILDING_LIBRARY)
 
-target_link_libraries(haze PRIVATE Niobium::fhetch)
-
 set_target_properties(haze PROPERTIES
   CXX_VISIBILITY_PRESET     hidden
   VISIBILITY_INLINES_HIDDEN ON
@@ -169,13 +167,16 @@ set_target_properties(haze PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
-# Replay bridge — OpenFHE-using helper for synthesizing the CryptoContext +
-# ciphertext templates the compiler-side replay needs. Lives in its own
-# subdirectory and target so libhaze stays FHETCH-only; only haze_tests
-# (and any other replay-aware harness) link it in.
+# Replay bridge — OpenFHE-using helper that synthesizes CryptoContext +
+# ciphertext templates the compiler-side replay needs, and provides the
+# niobium::fhetch::result(...) overloads libhaze references from epoch.cpp.
+# Lives in its own subdirectory and target so the OpenFHE includes stay
+# out of libhaze sources; libhaze pulls the bridge in for symbol resolution.
 # ---------------------------------------------------------------------------
 
 add_subdirectory(replay_bridge)
+
+target_link_libraries(haze PRIVATE Niobium::fhetch haze_replay_bridge)
 
 # ---------------------------------------------------------------------------
 # Tests

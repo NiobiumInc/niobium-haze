@@ -23,9 +23,9 @@
 // nbcc_fhetch_replay does the same). The bridge is therefore agnostic
 // to which replay tier the caller selects.
 //
-// The bridge is laser-decoupled from haze proper: haze stays FHETCH-only;
-// the bridge links OpenFHE (transitively, via Niobium::fhetch) and is
-// linked exclusively by haze_tests, never by libhaze itself.
+// The bridge is the OpenFHE boundary for haze: libhaze sources stay
+// FHETCH-only (no OpenFHE includes), but libhaze links the bridge to
+// resolve niobium::fhetch::result(...) references from epoch.cpp.
 //
 // Usage (in an integration test):
 //
