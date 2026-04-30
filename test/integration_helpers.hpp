@@ -24,14 +24,20 @@
 #include <haze/replay_bridge.h>
 
 #include <cstdint>
+#include <cstdlib>
 
 namespace haze::test {
 
-// Combined integration setup: reset, ring dim, target=FUNC_SIM, bridge
-// CryptoContext init (which writes <program_dir>/cryptocontext.dat),
-// align haze's ciphertext modulus with OpenFHE's picked tower prime,
-// then configure the device. Returns the picked modulus so callers can
-// keep using it consistently with what haze recorded.
+// Combined integration setup: reset, ring dim, bridge CryptoContext init
+// (which writes <program_dir>/cryptocontext.dat), align haze's ciphertext
+// modulus with OpenFHE's picked tower prime, then configure the device.
+// Returns the picked modulus so callers can keep using it consistently
+// with what haze recorded.
+//
+// Target selection: the test Makefile (test-sim / test-transport) sets
+// HAZE_TARGET to whichever string the surrounding suite needs. The
+// helper honours that env var; if unset, falls back to haze's own
+// default (the in-process fhetch_sim, per hazeSetTarget docs).
 //
 // Modulus alignment: OpenFHE's CKKS GenCryptoContext picks a prime near
 // 2^bits(desired). The picked value rarely matches `desired_modulus`
@@ -44,10 +50,15 @@ namespace haze::test {
 // artifacts during stop(); tests do not need to call WriteTemplate or
 // WriteInputBin explicitly.
 inline uint64_t setup_integration_compute_config(
-    uint64_t ring_dim, uint64_t desired_modulus, int mod_idx) {
+    uint64_t ring_dim = 4096,
+    uint64_t desired_modulus = 576460752303415297ULL,
+    int mod_idx = 0) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
+    if (const char* env_target = std::getenv("HAZE_TARGET");
+        env_target != nullptr && *env_target != '\0') {
+        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
+    }
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus,
                                               &picked) == HAZE_SUCCESS);
