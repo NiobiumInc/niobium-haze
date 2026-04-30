@@ -71,24 +71,6 @@ TEST_CASE("free then re-allocate recycles pooled address", "[unit]") {
     REQUIRE(hazeFree(p2) == HAZE_SUCCESS);
 }
 
-TEST_CASE("H2D memcpy stores data in shadow buffer", "[unit]") {
-    constexpr size_t kN = 4096;
-    constexpr size_t kBytes = kN * sizeof(uint64_t);
-
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
-    void* dev = nullptr;
-    REQUIRE(hazeMalloc(&dev, kBytes) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> src(kN);
-    for (size_t i = 0; i < kN; ++i) src[i] = static_cast<uint64_t>(i * 3 + 7);
-
-    REQUIRE(hazeMemcpy(dev, src.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE)
-            == HAZE_SUCCESS);
-
-    REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
-}
-
 TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
     constexpr size_t kN = 4096;
     constexpr size_t kBytes = kN * sizeof(uint64_t);
