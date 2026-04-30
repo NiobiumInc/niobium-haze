@@ -43,17 +43,13 @@
 // libnbfhetch's PRIVATE src/ tree and including it from a downstream
 // library would couple the bridge to libnbfhetch's source layout.
 //
-// TODO(fhetch-publish): the four detail symbols below resolve in
-// libnbfhetch's TU because cereal polymorphic-type registrations are
-// per-shared-library — calling lbcrypto::Serial::SerializeToFile from
-// here directly would trip "unregistered polymorphic type" on
-// CryptoContextImpl / Ciphertext. Long-term, ask niobium-fhetch to
-// publish a stable C++ API for write_ciphertext_template,
-// write_ciphertext_input_bin, for_each_captured_input, and
-// for_each_captured_output, then replace the externs with that header
-// include. niobium-client's auto-facade routes through the same
-// libnbfhetch TU (auto_facade.cpp's serialize helpers) so a published
-// API would also let niobium-client drop its own forwarder shims.
+// Cereal's polymorphic-type registrations are per-shared-library on macOS:
+// inlining Serial::SerializeToFile here throws "unregistered polymorphic
+// type" on intnat::NativeVectorT (input bin path) and CryptoContextImpl
+// (template path) — empirically confirmed. The four detail symbols below
+// route the cereal calls through libnbfhetch's TU where the registrations
+// are live. Long-term, niobium-fhetch could publish a stable C++ API for
+// these so the bridge can include a header instead of forward-declaring.
 namespace niobium::detail {
 
 // Serialize an empty Ciphertext<DCRTPoly> shell to
