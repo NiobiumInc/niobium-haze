@@ -1,0 +1,48 @@
+name: clang-format
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  # Manual re-run from the Actions tab. Useful after touching .clang-format
+  # without bumping a code commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clang-format-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-format:
+    name: Check clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install clang-format-19
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-19
+          sudo update-alternatives --install /usr/bin/clang-format \
+            clang-format /usr/bin/clang-format-19 100
+
+      - name: Verify clang-format version
+        run: clang-format --version
+
+      - name: Run clang-format --dry-run -Werror
+        # First-party C/C++ trees only. vendor/ is third-party / submodule
+        # territory and uses upstream's own formatting. The .clang-format at
+        # repo root governs every match here.
+        # --dry-run -Werror prints diffs and exits non-zero if any file
+        # needs reformatting.
+        run: |
+          find src include replay_bridge test \
+            \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
+            -print0 | xargs -0 clang-format --dry-run -Werror
