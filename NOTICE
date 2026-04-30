@@ -4,7 +4,7 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 Project: niobium-haze
 Generated: 2026-04-30
 Tool: SCANOSS (snippet detection with License dataset)
-Components: 75
+Components: 80
 
 This file lists all third-party software components detected
 in this repository, along with their licenses and copyright
@@ -29,7 +29,7 @@ LICENSE SUMMARY
   AFL-2.1: 1 component(s)
   AFL-3.0 AND GPL-2.0-only AND AFL-2.1 AND GPL-2.0-or-later AND MIT AND GPL-1.0-or-later: 1 component(s)
   AGPL-3.0-only [COPYLEFT]: 1 component(s)
-  Apache-2.0: 16 component(s)
+  Apache-2.0: 17 component(s)
   Apache-2.0 AND Apache-2.0 AND OpenSSL: 1 component(s)
   Apache-2.0 WITH LLVM-exception: 2 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA: 3 component(s)
@@ -37,7 +37,7 @@ LICENSE SUMMARY
   Artistic-1.0-Perl: 1 component(s)
   Artistic-1.0-Perl OR GPL-1.0-or-later: 1 component(s)
   Artistic-2.0: 1 component(s)
-  BSD-2-Clause: 7 component(s)
+  BSD-2-Clause: 9 component(s)
   BSD-2-Clause AND BSD-3-Clause: 1 component(s)
   BSD-2-Clause AND LGPL-2.1-only: 1 component(s)
   BSD-2-Clause-Darwin: 1 component(s)
@@ -82,7 +82,7 @@ LICENSE SUMMARY
   CC-BY-SA-3.0-AT: 1 component(s)
   CC-BY-SA-4.0: 1 component(s)
   CC-PDDC: 1 component(s)
-  CC0-1.0: 2 component(s)
+  CC0-1.0: 3 component(s)
   CC0-1.0 OR Apache-2.0 AND CC0-1.0 AND Apache-2.0 AND CC0-1.0 AND Apache-2.0: 1 component(s)
   CDDL-1.0 [COPYLEFT]: 1 component(s)
   CDDL-1.1 [COPYLEFT]: 1 component(s)
@@ -106,7 +106,7 @@ LICENSE SUMMARY
   GPL-2.0-or-later [COPYLEFT]: 2 component(s)
   GPL-3.0-linking-exception: 1 component(s)
   GPL-3.0-linking-source-exception: 1 component(s)
-  GPL-3.0-only [COPYLEFT]: 3 component(s)
+  GPL-3.0-only [COPYLEFT]: 4 component(s)
   GPL-3.0-only AND BSD-3-Clause AND GPL-1.0-or-later AND GPL-2.0-only: 1 component(s)
   GPL-3.0-only AND GPL-1.0-or-later AND BSD-3-Clause: 1 component(s)
   GPL-3.0-or-later AND FSFAP: 1 component(s)
@@ -143,7 +143,7 @@ LICENSE SUMMARY
   LPPL-1.3c: 1 component(s)
   Libpng: 1 component(s)
   Linux-syscall-note: 1 component(s)
-  MIT: 18 component(s)
+  MIT: 20 component(s)
   MIT AND Apache-2.0: 1 component(s)
   MIT AND GPL-2.0-only AND GPL-1.0-or-later AND MIT AND GPL-1.0-or-later AND MIT AND Boehm-GC AND GPL-1.0-or-later: 1 component(s)
   MIT AND GPL-3.0-only: 1 component(s)
@@ -158,7 +158,7 @@ LICENSE SUMMARY
   MIT-open-group AND X11: 1 component(s)
   MPL-1.0: 1 component(s)
   MPL-1.1 [COPYLEFT]: 1 component(s)
-  MPL-2.0 [COPYLEFT]: 2 component(s)
+  MPL-2.0 [COPYLEFT]: 3 component(s)
   MPL-2.0 AND Apache-2.0: 1 component(s)
   NCSA: 4 component(s)
   OFL-1.1 [COPYLEFT]: 1 component(s)
@@ -351,6 +351,7 @@ COMPONENT ATTRIBUTIONS
     Copyright 2005 Google Inc.
     Copyright 2005 Google Inc. All Rights Reserved.
     Copyright 2005; Google Inc.
+    Copyright 2007; Google Inc.
     Copyright 2008; Google Inc.
     Copyright 2017 Google Inc.
     Copyright 2025; Google Inc.
@@ -464,6 +465,15 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2016-2023 Viktor Kirilov
   License: MPL-2.0
 
+  emacs
+  Version: emacs-24.3.90
+  Source: https://github.com/emacs-mirror/emacs
+  PURL: pkg:github/emacs-mirror/emacs
+  Copyright:
+    Copyright (C) 2002-2014 Free Software Foundation; Inc.
+    Copyright (c) 2002-2014 Free Software Foundation; Inc.
+  License: GPL-3.0-only
+
   Fall_Semester_programing
   Version: 67
   Source: https://github.com/Kirya23/Fall_Semester_programing
@@ -506,6 +516,7 @@ COMPONENT ATTRIBUTIONS
     (C) 1996; 1997; 1998; 1999; 2000; 2001; 2003; 2004; 2005; 2006;
     Copyright 1996 Gordon Matzigkeit  gord@gnu.ai.mit.edu
     Copyright 1996-2014 Free Software Foundation Inc
+    Copyright (C) 1994 X Consortium
     Copyright (C) 1996-2014 Free Software Foundation; Inc.
     Copyright (C) 1996; 1997; 1998; 1999; 2000; 2001; 2003; 2004; 2005; 2006;
     Copyright (C) 2002-2014 Free Software Foundation; Inc.
@@ -543,6 +554,16 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright 2007; Google Inc.
   License: BSD-3-Clause
+
+  github.com/ianlancetaylor/libbacktrace
+  Version: v0.0.0-20200513181113-9b7f216e8679
+  Source: https://proxy.golang.org/github.com/ianlancetaylor/libbacktrace/@v/v0.0.0-20200513181113-9b7f216e8679.zip
+  PURL: pkg:golang/github.com/ianlancetaylor/libbacktrace
+  Copyright:
+    Copyright 2012-2018 Free Software Foundation Inc
+    Copyright (C) 2012-2018 Free Software Foundation; Inc.
+    Copyright (c) 2012-2018 Free Software Foundation; Inc.
+  License: BSD-2-Clause
 
   github.com/USCiLab/cereal
   Version: v1.3.3-0.20220327215417-ddd467244713
@@ -751,10 +772,8 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/ianlancetaylor/libbacktrace
   Copyright:
     Copyright 2012-2016 Free Software Foundation Inc
-    Copyright 2012-2018 Free Software Foundation Inc
     Copyright 2012-2024 Free Software Foundation Inc
     Copyright (C) 2012-2016 Free Software Foundation; Inc.
-    Copyright (C) 2012-2018 Free Software Foundation; Inc.
     Copyright (C) 2012-2024 Free Software Foundation; Inc.
     Copyright (C) 2013-2024 Free Software Foundation; Inc.
     Copyright (C) 2015-2024 Free Software Foundation; Inc.
@@ -762,7 +781,6 @@ COMPONENT ATTRIBUTIONS
     Copyright (C) 2018-2024 Free Software Foundation; Inc.
     Copyright (C) 2020-2024 Free Software Foundation; Inc.
     Copyright (C) 2022-2024 Free Software Foundation; Inc.
-    Copyright (c) 2012-2018 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc. Adapted
     Copyright (c) 2013-2024 Free Software Foundation; Inc.
@@ -828,6 +846,7 @@ COMPONENT ATTRIBUTIONS
     Copyright 2017 ; Mozilla
     Copyright 2017 ; The Android Open Source Project
     Copyright 2017 ; The CRC32C Authors.
+    Copyright 2017 Roman Lebedev. All rights reserved
     Copyright 2019 Zenichi Amano
     Copyright 2022 ; Google Inc.
     Copyright 2023 The Chromium Authors
@@ -835,6 +854,7 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2011; The WebRTC project authors. All rights reserved..
     Copyright 2016 Ismael Jimenez Martinez
     Copyright 2016 Ismael Jimenez Martinez. All rights reserved.
+    Copyright 2017 Roman Lebedev. All rights reserved.
     Copyright copyright owner or entity authorized by
   License: Apache-2.0
 
@@ -968,14 +988,43 @@ COMPONENT ATTRIBUTIONS
     Copyright 2006; Google Inc.
   License: BSD-3-Clause
 
+  nlohmann
+  Version: v3.10.5
+  Source: https://bitbucket.org/smi_multivet/nlohmann/get/v3.10.5.zip
+  PURL: pkg:bitbucket/smi_multivet/nlohmann
+  Copyright:
+    Copyright 2013-2022 Niels Lohmann
+    Copyright (c) 2013-2022 Niels Lohmann
+  License: MIT
+
+  Nuparu
+  Version: v0.7.23.11
+  Source: https://github.com/betajippity/Nuparu
+  PURL: pkg:github/betajippity/nuparu
+  Copyright:
+    Copyright (c) 2014; Randolph Voorhies; Shane Grant
+  License: Apache-2.0, CC0-1.0, MIT, MPL-2.0
+
   nurikit
   Version: v0.1.0a14.post0
   Source: https://github.com/seoklab/nurikit
   PURL: pkg:github/seoklab/nurikit
   Copyright:
+    Copyright 1998 -2024
+    Copyright 1999-2024 ; The Biopython Contributors
+    Copyright 2001-2002 Enthought; Inc. 2003-2024; SciPy Developers.
+    Copyright 2003-2012 Egervary Jeno Kombinatorikus Optimalizalasi
+    Copyright 2008 ; Google Inc.
+    Copyright 2009-2016 Pu Liu and Douglas L. Theobald
+    Copyright 2009-present ; Homebrew contributors
+    Copyright 2011 Ciyou Zhu; Richard Byrd; Jorge Nocedal and Jose Luis Morales.
+    Copyright 2016 Wenzel Jakob <wenzel.jakob@epfl.ch>; All rights reserved.
     Copyright 2017 Google Inc
+    Copyright 2023 Lab of Computational Biology and Biomolecular Engineering SNU
+    Copyright 2023 Lab of Computational Biology and Biomolecular Engineering; SNU
     Copyright 2007; Google Inc.
     Copyright 2017 Google Inc.
+    Copyright 2020; Google Inc.
   License: Apache-2.0
 
   objektinis-prog-class
@@ -1080,8 +1129,8 @@ COMPONENT ATTRIBUTIONS
   License: Apache-2.0, Jam
 
   platform/external/googletest
-  Version: aml_ads_351121120
-  Source: https://android.googlesource.com/platform/external/googletest/+archive/aml_ads_351121120.tar.gz
+  Version: aml_ads_351017080
+  Source: https://android.googlesource.com/platform/external/googletest/+archive/aml_ads_351017080.tar.gz
   PURL: pkg:googlesource/android/platform/external/googletest
   Copyright:
     Copyright 2008 Google Inc
@@ -1192,17 +1241,23 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/upx/upx
   PURL: pkg:github/upx/upx
   Copyright:
+    Copyright 1996-2014 Free Software Foundation Inc
     Copyright 1999-2017 Free Software Foundation Inc
     Copyright (C) 1994 X Consortium
+    Copyright (C) 1996-2014 Free Software Foundation; Inc.
     Copyright (C) 1999-2017 Free Software Foundation; Inc.
+    Copyright (c) 1996-2014 Free Software Foundation; Inc.
     Copyright (c) 1999-2017 Free Software Foundation; Inc.
   License: GPL-2.0-or-later
 
   uthenticode
-  Version: v1.0.6
+  Version: v1.0.7
   Source: https://github.com/trailofbits/uthenticode
   PURL: pkg:github/trailofbits/uthenticode
   Copyright:
+    Copyright (c) 2020 William Woodruff <william @ yossarian.net>
+    Copyright 2008; Google Inc.
+    Copyright 2008; Google Inc..
     Copyright 2015; Google Inc.
     Copyright 2015; Google Inc..
   License: MIT
@@ -1234,6 +1289,15 @@ COMPONENT ATTRIBUTIONS
     Copyright 2018; Google Inc.
     Copyright 2019; Google LLC.
   License: Apache-2.0
+
+  xmlf90
+  Version: 1.5
+  Source: https://launchpad.net/xmlf90/trunk/1.5/+download/xmlf90-1.5.1.tar.gz
+  PURL: pkg:deb/xmlf90
+  Copyright:
+    Copyright (C) 2011-2017 Free Software Foundation; Inc.
+    Copyright (c) 2011-2017 Free Software Foundation; Inc.
+  License: BSD-2-Clause
 
 ------------------------------------------------------------
 
