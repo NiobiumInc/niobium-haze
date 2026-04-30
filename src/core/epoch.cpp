@@ -213,8 +213,7 @@ void EpochState::clear_state_locked() noexcept {
     // EpochSession's start-of-cycle ensure_recording_locked() — both
     // ends of the recording window are now responsible for keeping the
     // libnbfhetch-side state in lockstep with haze-side epoch state.
-    niobium::compiler().clear_captured_inputs();
-    niobium::compiler().clear_captured_outputs();
+    niobium::compiler().clear_captured();
 }
 
 void EpochState::reset() noexcept {
