@@ -11,12 +11,12 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 #include "core/config.hpp"
+
 #include "common/errors.hpp"
 
+#include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-
-#include <cstdint>
 
 extern "C" hazeError_t hazeSetRingDimension(uint64_t n) noexcept {
     return set_error(haze::config().set_ring_dimension(n));

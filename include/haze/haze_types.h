@@ -155,9 +155,9 @@ typedef struct {
 //   dst: array of dst_base_len output poly pointers.
 typedef struct {
     const uint64_t *src_base;
-    size_t          src_base_len;
+    size_t src_base_len;
     const uint64_t *dst_base;
-    size_t          dst_base_len;
+    size_t dst_base_len;
 } hazeBasisConvertParams;
 
 // hazeModDown: rescale by removing rescale_base from src_base.
@@ -167,9 +167,9 @@ typedef struct {
 //   rescale_base: a proper subset of src_base.
 typedef struct {
     const uint64_t *src_base;
-    size_t          src_base_len;
+    size_t src_base_len;
     const uint64_t *rescale_base;
-    size_t          rescale_base_len;
+    size_t rescale_base_len;
 } hazeModDownParams;
 
 // hazeModUp: digit decomposition for hybrid key switching.
@@ -184,13 +184,13 @@ typedef struct {
 //   p_base: auxiliary primes appended to every digit's output base.
 typedef struct {
     const uint64_t *src_base;
-    size_t          src_base_len;
+    size_t src_base_len;
     const uint64_t *digit_bases;
-    size_t          digit_bases_total_len;
-    const size_t   *digit_base_lens;
-    size_t          digit_count;
+    size_t digit_bases_total_len;
+    const size_t *digit_base_lens;
+    size_t digit_count;
     const uint64_t *p_base;
-    size_t          p_base_len;
+    size_t p_base_len;
 } hazeModUpParams;
 
 #endif /* HAZE_TYPES_H */

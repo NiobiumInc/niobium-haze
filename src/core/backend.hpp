@@ -77,6 +77,8 @@ class CompilerBackend {
     std::mutex init_mutex_;
 };
 
-inline CompilerBackend &backend() noexcept { return CompilerBackend::instance(); }
+inline CompilerBackend &backend() noexcept {
+    return CompilerBackend::instance();
+}
 
 } // namespace haze

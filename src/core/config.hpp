@@ -12,9 +12,8 @@
 // from the Product.
 #pragma once
 
-#include <haze/haze_types.h>
-
 #include <cstdint>
+#include <haze/haze_types.h>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -91,6 +90,8 @@ class Config {
     bool target_set_ = false;
 };
 
-inline Config &config() noexcept { return Config::instance(); }
+inline Config &config() noexcept {
+    return Config::instance();
+}
 
 } // namespace haze

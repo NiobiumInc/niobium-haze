@@ -19,12 +19,11 @@
 #pragma once
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
-
-#include <cstdint>
-#include <cstdlib>
 
 namespace haze::test {
 
@@ -49,19 +48,17 @@ namespace haze::test {
 // The bridge's post_recording_hook auto-writes the .bin / .ids / .template
 // artifacts during stop(); tests do not need to call WriteTemplate or
 // WriteInputBin explicitly.
-inline uint64_t setup_integration_compute_config(
-    uint64_t ring_dim = 4096,
-    uint64_t desired_modulus = 576460752303415297ULL,
-    int mod_idx = 0) {
+inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
+                                                 uint64_t desired_modulus = 576460752303415297ULL,
+                                                 int mod_idx = 0) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    if (const char* env_target = std::getenv("HAZE_TARGET");
+    if (const char *env_target = std::getenv("HAZE_TARGET");
         env_target != nullptr && *env_target != '\0') {
         REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
     }
     uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus,
-                                              &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus, &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);
     REQUIRE(hazeSetCiphertextModulus(mod_idx, picked) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);

@@ -12,6 +12,7 @@
 // from the Product.
 
 #include "core/basis_convert.hpp"
+
 #include "common/errors.hpp"
 
 #include <haze/haze.h>

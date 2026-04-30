@@ -23,20 +23,33 @@ extern "C" hazeError_t hazeGetLastError() noexcept {
     return err;
 }
 
-extern "C" const char* hazeGetErrorString(hazeError_t error) noexcept {
+extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
     switch (error) {
-        case HAZE_SUCCESS:              return "no error";
-        case HAZE_ERROR_INVALID_HANDLE: return "invalid handle";
-        case HAZE_ERROR_INVALID_VALUE:  return "invalid value";
-        case HAZE_ERROR_OUT_OF_MEMORY:  return "out of memory";
-        case HAZE_ERROR_NOT_SUPPORTED:  return "not supported";
-        case HAZE_ERROR_NOT_READY:      return "device not ready";
-        case HAZE_ERROR_LAUNCH_FAILURE: return "compilation or execution failure";
-        case HAZE_ERROR_DMEMERR:        return "data memory error";
-        case HAZE_ERROR_IMEMERR:        return "instruction memory error";
-        case HAZE_ERROR_INSTRERR:       return "instruction error";
-        case HAZE_ERROR_CONFIGERR:      return "configuration error";
-        case HAZE_ERROR_ISEQERR:        return "instruction sequence error";
-        default:                        return "unknown error";
+    case HAZE_SUCCESS:
+        return "no error";
+    case HAZE_ERROR_INVALID_HANDLE:
+        return "invalid handle";
+    case HAZE_ERROR_INVALID_VALUE:
+        return "invalid value";
+    case HAZE_ERROR_OUT_OF_MEMORY:
+        return "out of memory";
+    case HAZE_ERROR_NOT_SUPPORTED:
+        return "not supported";
+    case HAZE_ERROR_NOT_READY:
+        return "device not ready";
+    case HAZE_ERROR_LAUNCH_FAILURE:
+        return "compilation or execution failure";
+    case HAZE_ERROR_DMEMERR:
+        return "data memory error";
+    case HAZE_ERROR_IMEMERR:
+        return "instruction memory error";
+    case HAZE_ERROR_INSTRERR:
+        return "instruction error";
+    case HAZE_ERROR_CONFIGERR:
+        return "configuration error";
+    case HAZE_ERROR_ISEQERR:
+        return "instruction sequence error";
+    default:
+        return "unknown error";
     }
 }

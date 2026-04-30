@@ -14,10 +14,9 @@
 
 #include "core/allocator.hpp"
 
-#include <haze/haze_types.h>
-
 #include <cstdint>
 #include <cstdlib>
+#include <haze/haze_types.h>
 #include <mutex>
 #include <string>
 #include <vector>

@@ -86,8 +86,7 @@ TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
 // CryptoContext for multi-modulus traces yet. They run and report assertion
 // failures, but Catch2 does not propagate those as suite failures. Remove the
 // tag from each marked TEST_CASE once the bridge gains MRP support.
-TEST_CASE("hazeModDown rejects foreign modulus in rescale_base",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration][!mayfail]") {
     // rescale_base contains a prime not present in src_base. The HAZE
     // layer must reject this BEFORE opening an EpochSession — otherwise
     // the next D2H would replay a dirty recording and crash.
@@ -264,8 +263,7 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values",
     }
 }
 
-TEST_CASE("hazeBasisConvert: zero input produces zero output",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration][!mayfail]") {
     // FBC of zero polynomials is zero on every target modulus, so we
     // can verify the non-trivial dst residues without computing FBC.
     configure_three_moduli();
@@ -312,8 +310,7 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output",
     }
 }
 
-TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integration][!mayfail]") {
     // Aliasing src[i] == dst[j] for any (i,j) is documented as safe in
     // core/basis_convert.cpp because all reads complete before any
     // store. Test the simplest case: same-modulus 1->1 convert with
@@ -345,8 +342,7 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)",
     REQUIRE(hazeFree(p0) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown: zero input rescales to zero output",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration][!mayfail]") {
     // ApproxModDown is rescale_fbc(x, rescale_base): CRT-divide x by
     // P=prod(rescale_base) with rounding. For x identically zero on
     // every residue, every output is also zero — we can assert exact
@@ -812,8 +808,7 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference",
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModDown: 12-limb rescale matches reference",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration][!mayfail]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
@@ -850,8 +845,7 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference",
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration][!mayfail]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);

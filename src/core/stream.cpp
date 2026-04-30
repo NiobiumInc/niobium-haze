@@ -57,13 +57,17 @@ hazeEvent_t event_create() noexcept {
         haze_event_s{g_next_event_id.fetch_add(1, std::memory_order_relaxed), false};
 }
 
-void event_destroy(hazeEvent_t e) noexcept { delete e; }
+void event_destroy(hazeEvent_t e) noexcept {
+    delete e;
+}
 
 void event_record(hazeEvent_t e) noexcept {
     if (e != nullptr)
         e->recorded = true;
 }
 
-void events_reset() noexcept { g_next_event_id.store(1, std::memory_order_relaxed); }
+void events_reset() noexcept {
+    g_next_event_id.store(1, std::memory_order_relaxed);
+}
 
 } // namespace haze

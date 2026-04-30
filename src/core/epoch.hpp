@@ -72,8 +72,7 @@ class EpochState {
     // After this call returns, hazeMemcpy(D2H) on any bound output
     // address reads the materialized value from the shadow buffer.
     // No-op when not recording.
-    std::expected<void, HazeInternalError> replay_and_populate() noexcept
-        HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> replay_and_populate() noexcept HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
@@ -96,8 +95,7 @@ class EpochState {
     // addr keep their original name (insert-no-overwrite); an
     // intervening invalidate() wipes pending_outputs_, so a fresh store
     // after H2D / memset gets a new name.
-    void store_compute_result_locked(DevAddr addr,
-                                     niobium::fhetch::Polynomial poly) noexcept
+    void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
 
   private:

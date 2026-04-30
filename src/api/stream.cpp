@@ -10,8 +10,9 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "common/errors.hpp"
 #include "core/stream.hpp"
+
+#include "common/errors.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
@@ -25,8 +26,7 @@ extern "C" hazeError_t hazeStreamCreate(hazeStream_t *stream) noexcept {
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream,
-                                                    unsigned int /*flags*/,
+extern "C" hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream, unsigned int /*flags*/,
                                                     int /*priority*/) noexcept {
     return hazeStreamCreate(stream);
 }
