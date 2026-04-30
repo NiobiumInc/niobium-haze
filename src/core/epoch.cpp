@@ -12,11 +12,12 @@
 // from the Product.
 #include "core/epoch.hpp"
 
+#include "common/errors.hpp"
+#include "common/handle.hpp"
+#include "common/log.hpp"
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
-#include "common/errors.hpp"
-#include "common/handle.hpp"
 #include "core/polynomial_io.hpp"
 
 #include <cstddef>
@@ -24,10 +25,9 @@
 #include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
-#include <iostream>
-#include <mutex>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,9 +70,10 @@ bool EpochState::is_recording() noexcept {
 
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
-    // RYANPR: Is erase walking all of these maps? It would seem nice to be able to just know which one to erase from (as in device addresses also had a tag of which map they were in). On refactoring, make sure not to overengineer such a map of device address to which map it is in.
+    // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1)
+    // (hash hit + immediate not-found return). Tagging addresses with
+    // their owning map would add complexity for no measurable benefit.
     poly_map_.erase(addr);
-    compute_results_.erase(addr);
     pending_outputs_.erase(addr);
 }
 
@@ -106,14 +107,20 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     return poly;
 }
 
-void EpochState::store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept {
+void EpochState::store_compute_result_locked(
+    DevAddr addr, niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // Track this address as a compute result so replay_and_populate
-    // tags it as a fhetch output before stop()/replay() run. Input
-    // polys created via lookup_or_create_locked are excluded — tagging
-    // them as fhetch outputs would confuse the niobium compiler.
-    // RYANPR: Not all stores are compute results, no?
-    compute_results_.insert(addr);
+    // Authoritative output registration: every compute store gets a
+    // pending output name on first store. Re-stores at the same addr
+    // keep their original name (insert-no-overwrite); an intervening
+    // invalidate() wipes pending_outputs_, so a fresh store after H2D
+    // / memset gets a new name. Input polys created via
+    // lookup_or_create_locked never reach this path, so they are
+    // never tagged as fhetch outputs.
+    if (pending_outputs_.find(addr) == pending_outputs_.end()) {
+        pending_outputs_.emplace(addr,
+            "haze_out_" + std::to_string(output_counter_++));
+    }
 }
 
 std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
@@ -122,18 +129,9 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
         return {}; // nothing to replay
     }
 
-    // Tag every bound compute result as a fhetch output. Inputs
-    // (poly_map_ entries created by lookup_or_create_locked) are
-    // deliberately excluded — their shadow data is already authoritative.
-    // RYANPR: Since we have an authoritative place for inputs, why do we not have an authorative place for outputs? Then we wouldn't have to scan for them.
-    for (DevAddr result_addr : compute_results_) {
-        if (pending_outputs_.find(result_addr) == pending_outputs_.end()) {
-            const std::string name = "haze_out_" + std::to_string(output_counter_++);
-            pending_outputs_.emplace(result_addr, name);
-        }
-    }
-
-    // RYANPR: Seems like we could collapse this with the prior for loop.
+    // Tag every authoritative output for fhetch. Inputs already carry
+    // tag_input from lookup_or_create_locked; pending_outputs_ contains
+    // exactly the addresses that store_compute_result_locked emitted.
     for (auto &[addr, name] : pending_outputs_) {
         auto it = poly_map_.find(addr);
         if (it == poly_map_.end())
@@ -159,12 +157,11 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BackendError);
     }
 
-    // Step 2: dispatch replay. For target=="local" this is a no-op
-    // success (the .fhetch trace is the only artifact). For non-local
-    // targets it spawns nbcc_fhetch_replay via the FHETCH HTTP transport
-    // (forwarder on PATH -> server -> compiler-side binary running the
-    // OpenFHE simulator) and writes ciphertext probes back to disk.
-    // RYANPR: We have a mode where we test against local but if we are only writing out the fhetch IR how are we actually populating the shadow buffer?
+    // Step 2: dispatch replay. Behaviour depends on the configured
+    // target — local is a no-op success, fhetch_sim runs the in-process
+    // simulator, anything else spawns nbcc_fhetch_replay over the HTTP
+    // transport. Non-local paths produce serialized_probes/<name>.ct
+    // for fhetch::result to read in step 3.
     const bool replay_ok = backend().replay();
     if (!replay_ok) {
         clear_state_locked();
@@ -173,55 +170,51 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BackendError);
     }
 
-    // Step 3: populate the host shadow buffer for each output address
-    // so subsequent hazeMemcpy(D2H) reads pick up the computed values.
-    // fhetch::result(name, Polynomial&) reads
-    // <program_dir>/serialized_probes/<name>.ct (written by the
-    // compiler-side nbcc_fhetch_replay) and unwraps the first NativePoly
-    // into a fhetch::Polynomial. extract_polynomial_values rehydrates
-    // the values via fhetch::save_polynomial_json, and update_shadow
-    // commits them to the device shadow buffer at `addr`.
-    for (auto &[addr, name] : pending_outputs_) {
-        fhetch::Polynomial result_poly;
-        if (!fhetch::result(name, result_poly)) {
-            std::cerr << "[haze] result('" << name << "') unavailable; "
-                      << "shadow at addr 0x" << std::hex << to_uintptr(addr) << std::dec
-                      << " is stale\n";
-            continue;
+    // Step 3 (non-local targets only): populate host shadow buffers
+    // from <program_dir>/serialized_probes/<name>.ct. In local mode no
+    // probes are produced; the .fhetch trace is the only artifact and
+    // shadow buffers retain their pre-compute (H2D) values.
+    if (config().target() != kLocalTarget) {
+        for (auto &[addr, name] : pending_outputs_) {
+            fhetch::Polynomial result_poly;
+            if (!fhetch::result(name, result_poly)) {
+                std::ostringstream body;
+                body << "result('" << name << "') unavailable; shadow at addr 0x"
+                     << std::hex << to_uintptr(addr) << std::dec << " is stale";
+                log_error("epoch", body.str());
+                continue;
+            }
+            std::vector<uint64_t> values;
+            if (!extract_polynomial_values(result_poly, name, values)) {
+                std::ostringstream body;
+                body << "failed to extract values for output '" << name
+                     << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+                log_error("epoch", body.str());
+                continue;
+            }
+            std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
+            std::memcpy(bytes.data(), values.data(), bytes.size());
+            allocator().update_shadow(addr, bytes);
         }
-        std::vector<uint64_t> values;
-        if (!extract_polynomial_values(result_poly, name, values)) {
-            // RYANPR: Since we are doing these error operations in the same way every time we should make an `error.{cpp,hpp}` that encapsulates how we write out things and then takes a string to do it. We could replace this with more detailed logging later. All strings seem to start with `[haze]`.
-            std::cerr << "[haze] failed to extract values for output '" << name
-                      << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec << '\n';
-            continue;
-        }
-        std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
-        std::memcpy(bytes.data(), values.data(), bytes.size());
-        allocator().update_shadow(addr, bytes);
     }
 
-    // Clear niobium::compiler()'s captured input/output state so the next
-    // recording-replay cycle inside the same hazeDeviceReset window starts
-    // from an empty slate. Without this, captured_inputs/outputs accumulate
-    // across cycles — multi-cycle tests like
-    // "multiple materializations: two independent D2H cycles" would see
-    // stale data shipped to the compiler-side replay.
-    // RYANPR: Why is this called so late? It would seem that for error cases we are not clearing the captured inputs and outputs, which could lead to a screwed up compiler state if we then tried to recover from a failed run and succeeded the next time (or ran a second computation that succeeded when the first did not).
-    niobium::compiler().clear_captured_inputs();
-    niobium::compiler().clear_captured_outputs();
-
-    clear_state_locked();
+    clear_state_locked();   // also clears captured inputs/outputs (E7).
     return {};
 }
 
 void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
-    compute_results_.clear();
     pending_outputs_.clear();
     recording_ = false;
     input_counter_ = 0;
     output_counter_ = 0;
+    // Mirror to compiler-captured state so a failed materialise can't
+    // leak inputs/outputs into the next recording cycle. Pairs with
+    // EpochSession's start-of-cycle ensure_recording_locked() — both
+    // ends of the recording window are now responsible for keeping the
+    // libnbfhetch-side state in lockstep with haze-side epoch state.
+    niobium::compiler().clear_captured_inputs();
+    niobium::compiler().clear_captured_outputs();
 }
 
 void EpochState::reset() noexcept {

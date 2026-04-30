@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <unistd.h>
 
 extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
     if (ptr == nullptr)
@@ -49,9 +50,13 @@ extern "C" hazeError_t hazeFreeAsync(void *ptr, hazeStream_t /*stream*/) noexcep
 extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*flags*/) noexcept {
     if (ptr == nullptr || size == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Page-aligned allocation for DMA / O_DIRECT compatibility on
+    // pinned-host buffers. Apple Silicon uses 16K pages, Linux x86_64
+    // uses 4K — sysconf returns the right value either way.
+    static const size_t kHostAllocAlignment =
+        static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void *p = nullptr;
-    // RYANPR: What is this 4096 constant? That seems like a random and probably bad choice.
-    if (posix_memalign(&p, 4096, size) != 0)
+    if (posix_memalign(&p, kHostAllocAlignment, size) != 0)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     haze::allocator().register_host_pointer(p);
     *ptr = p;
@@ -60,7 +65,7 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
 
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
     haze::allocator().unregister_host_pointer(ptr);
-    // RYANPR: Why are we calling the real life free? That seems like a bug.
+    // posix_memalign-allocated; libc free is the matched deallocator.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;
 }
