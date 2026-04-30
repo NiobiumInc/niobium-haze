@@ -12,14 +12,20 @@
 // from the Product.
 //
 // CompilerBackend is the link-time-selected control surface for the
-// niobium::compiler() singleton (libnbfhetch). Recording happens locally;
-// the configured target string is forwarded to fhetch's compiler via
-// --target=<value> in argv. fhetch interprets "local" as trace-only,
-// "fhetch_sim" as in-process simulator, and any other value as a hand-off
-// to nbcc_fhetch_replay over the FHETCH transport — see niobium-fhetch's
-// compiler.cpp Compiler::replay() for the dispatch switch. Haze itself
-// never compares against "local" by literal; the kLocalTarget /
-// kFhetchSimTarget constants in core/config.hpp keep target comparisons
+// niobium::compiler() singleton (libnbfhetch). Recording happens
+// locally; replay is dispatched according to the configured target.
+//
+// libnbfhetch knows two tiers: "local" runs the in-process FHETCH
+// simulator, anything else is forwarded to nbcc_fhetch_replay over the
+// HTTP transport. Haze exposes the same two tiers and forwards the
+// configured target string verbatim:
+//
+//   - kLocalTarget — runs the in-process FHETCH simulator end-to-end.
+//   - other (e.g. "FUNC_SIM", "FPGA_TRI", "fhetch_sim") — HTTP dispatch;
+//                    the string selects a backend on the compiler side.
+//
+// Haze itself never compares against the libnbfhetch literal "local";
+// the kLocalTarget constant in core/config.hpp keeps target comparisons
 // symbolic.
 
 #include "core/backend.hpp"
@@ -67,6 +73,11 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // well-formed invocation. niobium-fhetch's compiler.h does not
         // expose a set_target() setter; the only way to configure the
         // replay target is through init()'s --target= flag.
+        //
+        // The configured target is forwarded verbatim. libnbfhetch
+        // interprets "local" as the in-process simulator and treats
+        // anything else as an HTTP target string handed to
+        // nbcc_fhetch_replay.
         //
         // argv lifetime: fhetch's Compiler::init copies parsed values
         // into impl_ (the target string lands as a std::string field) and

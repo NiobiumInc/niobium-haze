@@ -22,25 +22,19 @@
 
 namespace haze {
 
-// Canonical target strings dispatched through libnbfhetch's compiler.
+// Canonical target string dispatched through libnbfhetch's compiler.
+// kLocalTarget runs the in-process FHETCH instruction-set simulator:
+// libnbfhetch loads the .fhetch trace into fhetch_sim::Simulator,
+// executes it, and writes <program_dir>/serialized_probes/<name>.ct
+// so epoch.cpp's result-population loop fills shadow buffers with
+// computed values. No compiler-side binary or HTTP transport needed.
 //
-//   kLocalTarget     — trace-only; replay() is a no-op success and
-//                      hazeMemcpy(D2H) returns whatever the shadow
-//                      buffer held before compute. No FHE math.
-//   kFhetchSimTarget — in-process FHETCH instruction-set simulator.
-//                      libnbfhetch loads the .fhetch trace into
-//                      fhetch_sim::Simulator, executes it, and writes
-//                      <program_dir>/serialized_probes/<name>.ct so
-//                      epoch.cpp's result-population loop populates
-//                      shadow buffers with computed values. No
-//                      compiler-side binary or HTTP transport needed.
-//
-// Anything else is forwarded to nbcc_fhetch_replay over the HTTP
-// transport (e.g. "FUNC_SIM", "FHE_SIM", "FPGA_TRI"). Keep these
-// strings symbolic so a future rename in libnbfhetch flows through
-// every comparison site in haze.
-constexpr std::string_view kLocalTarget     = "local";
-constexpr std::string_view kFhetchSimTarget = "fhetch_sim";
+// Anything else (e.g. "FUNC_SIM", "FHE_SIM", "FPGA_TRI", "fhetch_sim")
+// is forwarded verbatim to nbcc_fhetch_replay over the HTTP transport
+// — those strings select a backend on the compiler side. Keep
+// kLocalTarget symbolic so a future rename in libnbfhetch flows
+// through every comparison site in haze.
+constexpr std::string_view kLocalTarget = "local";
 
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
 // twiddle generators. Plus the program/target metadata fed to the
@@ -65,7 +59,7 @@ class Config {
 
     // Program / target metadata fed to the compiler during init.
     // Defaults: name="haze", version="0.1", description="HAZE runtime",
-    // target=kFhetchSimTarget (overridable by HAZE_TARGET env var unless
+    // target=kLocalTarget (overridable by HAZE_TARGET env var unless
     // an explicit hazeSetTarget call has been made).
     hazeError_t set_program_info(const char *name, const char *version,
                                  const char *description) noexcept;

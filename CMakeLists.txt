@@ -182,11 +182,13 @@ add_subdirectory(replay_bridge)
 # ---------------------------------------------------------------------------
 # One executable, three ctest entries split by Catch2 tag + HAZE_TARGET:
 #   - haze_unit_tests       : runs everything not tagged [integration]
-#                             with HAZE_TARGET=local (no FHE math).
+#                             with HAZE_TARGET=local. Unit tests do not
+#                             trigger replay so the target value is
+#                             effectively a recording-only setting.
 #   - haze_sim_tests        : runs [integration]-tagged cases through
-#                             libnbfhetch's in-process fhetch_sim
-#                             simulator. No external binary required;
-#                             default test target.
+#                             libnbfhetch's in-process FHETCH simulator
+#                             (HAZE_TARGET=local). No external binary
+#                             required; default test target.
 #   - haze_transport_tests  : runs [integration]-tagged cases via the
 #                             FHETCH transport (forwarder + server) so
 #                             the niobium-compiler-built nbcc_fhetch_replay
@@ -252,25 +254,25 @@ option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
        OFF)
 
 # Unit suite: in-process, no server, no compiler-side binary.
-# HAZE_TARGET=local pins the compiler target so haze never tries to
-# dispatch to nbcc_fhetch_replay or run the in-process simulator during
-# unit tests. Unit tests observe state-machine and recording behaviour
-# only -- they do not validate FHE math results.
+# HAZE_TARGET=local pins the compiler target so haze never attempts to
+# dispatch to nbcc_fhetch_replay during unit tests. Unit tests observe
+# state-machine and recording behaviour only -- they do not call
+# hazeReplay() and do not validate FHE math results.
 add_test(NAME haze_unit_tests
          COMMAND haze_tests "~[integration]")
 set_tests_properties(haze_unit_tests PROPERTIES
     ENVIRONMENT "HAZE_TARGET=local")
 
-# Sim suite: in-process fhetch_sim. No transport setup needed; always
-# registered so `ctest` (or the Makefile's `make test`) exercises real
-# FHE math without external dependencies.
+# Sim suite: in-process FHETCH simulator. No transport setup needed;
+# always registered so `ctest` (or the Makefile's `make test`) exercises
+# real FHE math without external dependencies.
 #
-# Target literal must match haze::kFhetchSimTarget in src/core/config.hpp
+# Target literal must match haze::kLocalTarget in src/core/config.hpp
 # AND the test-sim recipe in Makefile.
 add_test(NAME haze_sim_tests
          COMMAND haze_tests "[integration]")
 set_tests_properties(haze_sim_tests PROPERTIES
-    ENVIRONMENT "HAZE_TARGET=fhetch_sim")
+    ENVIRONMENT "HAZE_TARGET=local")
 
 if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set(NIOBIUM_COMPILER_ROOT "" CACHE PATH

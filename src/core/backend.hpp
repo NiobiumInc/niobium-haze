@@ -57,8 +57,8 @@ class CompilerBackend {
 
     // Trigger replay of the most recently recorded epoch. Behaviour
     // depends on the configured target — see haze.h's hazeSetTarget
-    // doc for the three-tier table (local trace-only / fhetch_sim
-    // in-process / HTTP transport). Returns true on success.
+    // doc for the two-tier table (local in-process simulator vs HTTP
+    // transport). Returns true on success.
     bool replay() noexcept;
 
     // Drop cached state so the next call to ensure_initialized() starts

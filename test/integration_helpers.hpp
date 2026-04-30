@@ -37,7 +37,7 @@ namespace haze::test {
 // Target selection: the test Makefile (test-sim / test-transport) sets
 // HAZE_TARGET to whichever string the surrounding suite needs. The
 // helper honours that env var; if unset, falls back to haze's own
-// default (the in-process fhetch_sim, per hazeSetTarget docs).
+// default ("local" — in-process FHETCH simulator, per hazeSetTarget docs).
 //
 // Modulus alignment: OpenFHE's CKKS GenCryptoContext picks a prime near
 // 2^bits(desired). The picked value rarely matches `desired_modulus`

@@ -6,7 +6,7 @@
 //
 // haze_replay_bridge implementation: synthesize the CryptoContext +
 // per-input cereal-binary .bin files + per-output ciphertext templates that
-// the in-process fhetch_sim AND compiler-side nbcc_fhetch_replay both
+// the in-process FHETCH simulator AND compiler-side nbcc_fhetch_replay both
 // consume to write serialized_probes/<name>.ct from a haze recording.
 // See replay_bridge.h for the public API and architectural rationale.
 //
@@ -58,7 +58,7 @@ namespace niobium::detail {
 
 // Serialize an empty Ciphertext<DCRTPoly> shell to
 // <program_dir>/ciphertext_templates/<name>.template. The replay path
-// (in-process fhetch_sim or transport) deserializes this template,
+// (in-process simulator or transport) deserializes this template,
 // fills its first NativePoly with computed values, and re-serializes
 // it as serialized_probes/<name>.ct.
 bool write_ciphertext_template(
@@ -262,7 +262,7 @@ synthesize_haze_ciphertext(const std::vector<uint64_t>& values) {
 }
 
 // LOAD-BEARING. Synthesizes per-program OpenFHE artifacts the replay
-// path (in-process fhetch_sim or transport-side nbcc_fhetch_replay)
+// path (in-process simulator or transport-side nbcc_fhetch_replay)
 // needs to consume haze's pure-FHETCH recording. Must run AFTER
 // trace_writer.stop_recording() — so for_each_captured_* sees the
 // final input/output sets — and BEFORE the replay path's reconstruct
