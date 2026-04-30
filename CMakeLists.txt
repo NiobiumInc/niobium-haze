@@ -4,41 +4,30 @@ project(haze LANGUAGES C CXX VERSION 0.1.0)
 # ---------------------------------------------------------------------------
 # niobium-fhetch resolution
 # ---------------------------------------------------------------------------
-# Three-tier lookup, mirroring niobium-client's NIOBIUM_CLIENT_FHETCH_DIR
-# pattern:
-#
-# RYANPR: I don't think we need this first method; niobium-client should specify the NIOBIUM_HAZE_FHETCH_DIR instead.
-#   1. If a parent (e.g. niobium-client) has already added niobium-fhetch
-#      and defined Niobium::fhetch, reuse it. This is the path consumers
-#      who don't recursively sync haze's submodules take.
-#
-#   2. Else, if NIOBIUM_HAZE_FHETCH_DIR is set, add_subdirectory() that
-#      external source tree. Used by parents that want to inject their
-#      own niobium-fhetch checkout without populating haze's submodule.
-#
-#   3. Else, fall back to vendor/niobium-fhetch — haze's own submodule.
+# Two-tier lookup:
+#   1. If NIOBIUM_HAZE_FHETCH_DIR is set, add_subdirectory() that external
+#      source tree. Parents (e.g. niobium-client) that already own a
+#      niobium-fhetch checkout point haze at it via this cache var.
+#   2. Else, fall back to vendor/niobium-fhetch — haze's own submodule.
 #      Used for standalone builds (run `make sync` from this directory
 #      to populate it).
 #
 # OPENFHE_INSTALL_DIR is honored by niobium-fhetch's own CMakeLists when
-# we add it via path #2 or #3, so injecting it here covers transitive
-# OpenFHE discovery for every resolution branch.
+# we add it via either path, so injecting it here covers transitive
+# OpenFHE discovery for both branches.
 
-if(NOT TARGET Niobium::fhetch)
-  set(NIOBIUM_HAZE_FHETCH_DIR "" CACHE PATH
-      "External niobium-fhetch source tree to use instead of haze's vendor/niobium-fhetch (empty = use the vendored submodule)")
-  if(NIOBIUM_HAZE_FHETCH_DIR)
-    add_subdirectory(${NIOBIUM_HAZE_FHETCH_DIR}
-                     ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build)
-  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
-    add_subdirectory(vendor/niobium-fhetch)
-  else()
-    message(FATAL_ERROR
-      "haze cannot find niobium-fhetch. Either:\n"
-      "  - build from a parent that adds niobium-fhetch first (defining Niobium::fhetch),\n"
-      "  - pass -DNIOBIUM_HAZE_FHETCH_DIR=<path/to/niobium-fhetch>,\n"
-      "  - or run `make sync` from this directory to init vendor/niobium-fhetch.")
-  endif()
+set(NIOBIUM_HAZE_FHETCH_DIR "" CACHE PATH
+    "External niobium-fhetch source tree to use instead of haze's vendor/niobium-fhetch (empty = use the vendored submodule)")
+if(NIOBIUM_HAZE_FHETCH_DIR)
+  add_subdirectory(${NIOBIUM_HAZE_FHETCH_DIR}
+                   ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build)
+elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
+  add_subdirectory(vendor/niobium-fhetch)
+else()
+  message(FATAL_ERROR
+    "haze cannot find niobium-fhetch. Either pass "
+    "-DNIOBIUM_HAZE_FHETCH_DIR=<path/to/niobium-fhetch>, or run "
+    "`make sync` from this directory to init vendor/niobium-fhetch.")
 endif()
 
 # OPENFHE_INSTALL_DIR may be set by:
