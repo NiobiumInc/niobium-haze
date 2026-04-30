@@ -5,17 +5,23 @@
 // Inc. (a "License Agreement").
 //
 // haze_replay_bridge — OpenFHE-using helper that synthesizes the artifacts
-// the compiler-side nbcc_fhetch_replay needs to produce serialized_probes/
-// from a haze recording. Specifically:
+// downstream replay paths need to produce serialized_probes/ from a haze
+// recording. Specifically:
 //
 //   1. <program_dir>/cryptocontext.dat
 //      A minimal CKKS CryptoContext<DCRTPoly> matching haze's configured
 //      ring dimension and (single) modulus.
 //
 //   2. <program_dir>/ciphertext_templates/<name>.template
-//      An empty Ciphertext<DCRTPoly> shell that the compiler-side driver
-//      fills with simulator-computed polynomial values, then re-serializes
-//      to <program_dir>/serialized_probes/<name>.ct.
+//      An empty Ciphertext<DCRTPoly> shell. The replay path fills it with
+//      simulator-computed polynomial values and re-serializes to
+//      <program_dir>/serialized_probes/<name>.ct.
+//
+// Same artifact shapes are consumed by both the in-process fhetch_sim
+// path (HAZE_TARGET=fhetch_sim, libnbfhetch fills + serializes the
+// templates) AND the HTTP transport path (HAZE_TARGET=FUNC_SIM etc.,
+// nbcc_fhetch_replay does the same). The bridge is therefore agnostic
+// to which replay tier the caller selects.
 //
 // The bridge is laser-decoupled from haze proper: haze stays FHETCH-only;
 // the bridge links OpenFHE (transitively, via Niobium::fhetch) and is
@@ -32,7 +38,7 @@
 //     // automatically inside hazeReplay() via a post-recording hook the
 //     // bridge registers during InitCryptoContext. Tests just compute and
 //     // call hazeReplay().
-//     hazeReplay();   // dispatches via transport, reads .ct from compiler
+//     hazeReplay();   // in-process fhetch_sim or transport, both work
 
 #ifndef HAZE_REPLAY_BRIDGE_H
 #define HAZE_REPLAY_BRIDGE_H

@@ -102,38 +102,52 @@ HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
                                           const char* description) HAZE_NOEXCEPT;
 
-/* Select the niobium-compiler target for replay. Supported target IDs
- * are owned by niobium-compiler (see devices/<id>/spec.yaml in that
- * repository). Common values: "FHE_SIM" (default), "FHETCH_SIM",
- * "FUNC_SIM", "FPGA_TRI". Falls back to the HAZE_TARGET environment
- * variable when this function is not called. */
+/* Select the niobium-compiler target for replay.
+ *
+ * Targets fall into three tiers by where they execute:
+ *
+ *   1. Trace-only (no execution):
+ *        "local"        Produces .fhetch artifacts only;
+ *                       hazeMemcpy(D2H) returns whatever the shadow
+ *                       buffer held before compute. Use when only
+ *                       validating recording correctness.
+ *
+ *   2. In-process FHETCH simulator (DEFAULT):
+ *        "fhetch_sim"   libnbfhetch loads the .fhetch trace into its
+ *                       in-process instruction-set simulator,
+ *                       executes it, and writes ciphertext probes
+ *                       under <program_dir>/serialized_probes/.
+ *                       hazeMemcpy(D2H) returns simulator-computed
+ *                       values. No compiler-side binary or HTTP
+ *                       transport required.
+ *
+ *   3. Compiler-side simulators via HTTP transport:
+ *        "FHE_SIM"      OpenFHE simulator via nbcc_fhetch_replay.
+ *        "FUNC_SIM"     Functional simulator.
+ *        "FPGA_TRI"     FPGA target.
+ *                       These dispatch the recorded project over the
+ *                       HTTP transport (see niobium-client/scripts/
+ *                       fhetch_server.sh) and require a built
+ *                       nbcc_fhetch_replay binary on PATH plus a
+ *                       running FHETCH server.
+ *
+ * Resolution order:
+ *   1. hazeSetTarget(target)  - explicit programmatic call.
+ *   2. HAZE_TARGET env var    - read on first hazeReplay if (1) unset.
+ *   3. "fhetch_sim"           - default if both above are unset.
+ *
+ * See hazeReplay() for behaviour-by-target dispatch. */
 HAZE_API hazeError_t hazeSetTarget(const char* target) HAZE_NOEXCEPT;
 
 /* Trigger replay of the recorded operations.
  *
- * Finalises the current epoch's .fhetch trace and dispatches it for
- * execution. Behaviour depends on the configured target:
+ * Finalises the current epoch's .fhetch trace and dispatches it
+ * according to the configured target (see hazeSetTarget for the
+ * three-tier table and resolution order). At a glance:
  *
- * RYANPR: It is not obvious how to set the target.
- *   target == "local":
- *     Trace-only mode. Produces <program_dir>/epoch_N/<name>.fhetch
- *     and returns success. Host shadow buffers are NOT updated, so
- *     subsequent hazeMemcpy(D2H) calls return whatever the buffers
- *     held before compute (typically the H2D inputs). Used for
- *     verifying recording correctness without the FHE pipeline.
- *
- *   target != "local":
- *     The FHETCH project is uploaded over the HTTP transport
- *     (see niobium-client/scripts/fhetch_server.sh) to a
- *     niobium-compiler-built nbcc_fhetch_replay running with the
- *     OpenFHE simulator. The simulator's outputs are written back
- *     into host shadow buffers for every recorded compute output,
- *     after which hazeMemcpy(D2H) returns the computed values.
- *
- *     Callers in this mode must arrange the transport (server +
- *     client-side forwarder on PATH, NBCC_FHETCH_SERVER set) before
- *     this call. See niobium-client/scripts/test_transport_mult.sh
- *     for the canonical orchestration pattern.
+ *   target == "local":      no execution; shadow buffers untouched.
+ *   target == "fhetch_sim": in-process simulator populates shadows.
+ *   target == <other>:      HTTP transport to nbcc_fhetch_replay.
  *
  * Calling hazeReplay() with no recording in progress is a no-op
  * returning HAZE_SUCCESS. */

@@ -180,13 +180,18 @@ add_subdirectory(replay_bridge)
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-# One executable, two ctest entries split by Catch2 tag:
-#   - haze_unit_tests        : runs everything not tagged [integration].
-#   - haze_integration_tests : runs [integration]-tagged cases via the
-#                              FHETCH transport (forwarder + server) so
-#                              the niobium-compiler-built nbcc_fhetch_replay
-#                              executes the recorded project against the
-#                              OpenFHE simulator.
+# One executable, three ctest entries split by Catch2 tag + HAZE_TARGET:
+#   - haze_unit_tests       : runs everything not tagged [integration]
+#                             with HAZE_TARGET=local (no FHE math).
+#   - haze_sim_tests        : runs [integration]-tagged cases through
+#                             libnbfhetch's in-process fhetch_sim
+#                             simulator. No external binary required;
+#                             default test target.
+#   - haze_transport_tests  : runs [integration]-tagged cases via the
+#                             FHETCH transport (forwarder + server) so
+#                             the niobium-compiler-built nbcc_fhetch_replay
+#                             executes the recorded project. Opt-in via
+#                             NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS.
 
 enable_testing()
 find_package(Catch2 3 REQUIRED)
@@ -242,34 +247,47 @@ target_compile_definitions(haze_tests PRIVATE
 # ctest entries
 # ---------------------------------------------------------------------------
 
-option(NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS
-       "Register the haze_integration_tests ctest entry (transport round-trip). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-haze-integration-release target invokes scripts/test_haze_integration.sh directly without needing this flag."
+# HAZE_TARGET value selecting libnbfhetch's in-process simulator. Exposed
+# as a cache var so the symbolic name lives in one place; haze's
+# kFhetchSimTarget constant in src/core/config.hpp must agree.
+set(HAZE_FHETCH_SIM_TARGET "fhetch_sim" CACHE STRING
+    "HAZE_TARGET string that dispatches replay through fhetch_sim in-process")
+
+option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
+       "Register haze_transport_tests (transport round-trip via nbcc_fhetch_replay). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-transport target invokes scripts/test_haze_integration_standalone.sh directly without needing this flag."
        OFF)
 
 # Unit suite: in-process, no server, no compiler-side binary.
 # HAZE_TARGET=local pins the compiler target so haze never tries to
-# dispatch to nbcc_fhetch_replay during unit tests. With the local-target
-# replay path now a no-op (just produces the .fhetch trace), unit tests
-# observe state-machine and recording behaviour only -- they do not
-# validate FHE math results.
+# dispatch to nbcc_fhetch_replay or run the in-process simulator during
+# unit tests. Unit tests observe state-machine and recording behaviour
+# only -- they do not validate FHE math results.
 add_test(NAME haze_unit_tests
          COMMAND haze_tests "~[integration]")
 set_tests_properties(haze_unit_tests PROPERTIES
     ENVIRONMENT "HAZE_TARGET=local")
 
-if(NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS)
+# Sim suite: in-process fhetch_sim. No transport setup needed; always
+# registered so `ctest` (or the Makefile's `make test`) exercises real
+# FHE math without external dependencies.
+add_test(NAME haze_sim_tests
+         COMMAND haze_tests "[integration]")
+set_tests_properties(haze_sim_tests PROPERTIES
+    ENVIRONMENT "HAZE_TARGET=${HAZE_FHETCH_SIM_TARGET}")
+
+if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set(NIOBIUM_COMPILER_ROOT "" CACHE PATH
-      "Path to a niobium-compiler checkout with build/nbcc_fhetch_replay. Required when NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS=ON.")
+      "Path to a niobium-compiler checkout with build/nbcc_fhetch_replay. Required when NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS=ON.")
   if(NOT NIOBIUM_COMPILER_ROOT)
     message(FATAL_ERROR
-      "NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS=ON requires "
+      "NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS=ON requires "
       "-DNIOBIUM_COMPILER_ROOT=<path/to/niobium-compiler>")
   endif()
 
-  add_test(NAME haze_integration_tests
+  add_test(NAME haze_transport_tests
            COMMAND
              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_haze_integration.sh)
-  set_tests_properties(haze_integration_tests PROPERTIES
+  set_tests_properties(haze_transport_tests PROPERTIES
     ENVIRONMENT
-      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH}")
+      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
 endif()
