@@ -2,9 +2,9 @@ name: clang-format
 
 on:
   pull_request:
-    branches: [main, master]
+    branches: [main]
   push:
-    branches: [main, master]
+    branches: [main]
   # Manual re-run from the Actions tab. Useful after touching .clang-format
   # without bumping a code commit.
   workflow_dispatch:
