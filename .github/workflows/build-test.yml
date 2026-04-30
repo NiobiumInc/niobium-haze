@@ -88,20 +88,16 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Verify devshell evaluates
-        # --no-update-lock-file keeps Nix from trying to refresh the
-        # niobium-compiler input pinned to file:///work/niobium-compiler
-        # (which doesn't exist on the runner). devShells.default does
-        # not reference that input, so lazy evaluation should skip it.
-        run: nix develop --no-update-lock-file --command bash -c 'clang --version && cmake --version'
+        run: nix develop --command bash -c 'clang --version && cmake --version'
 
       - name: Build (OpenFHE + haze, release)
-        run: nix develop --no-update-lock-file --command make build
+        run: nix develop --command make build
 
       - name: Run unit suite (HAZE_TARGET=local, no FHE math)
-        run: nix develop --no-update-lock-file --command make test-unit
+        run: nix develop --command make test-unit
 
       - name: Run sim suite (in-process FHETCH simulator)
-        run: nix develop --no-update-lock-file --command make test-sim
+        run: nix develop --command make test-sim
 
       - name: Upload build logs on failure
         if: failure()
