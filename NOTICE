@@ -4,7 +4,7 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 Project: niobium-haze
 Generated: 2026-04-30
 Tool: SCANOSS (snippet detection with License dataset)
-Components: 80
+Components: 82
 
 This file lists all third-party software components detected
 in this repository, along with their licenses and copyright
@@ -29,9 +29,9 @@ LICENSE SUMMARY
   AFL-2.1: 1 component(s)
   AFL-3.0 AND GPL-2.0-only AND AFL-2.1 AND GPL-2.0-or-later AND MIT AND GPL-1.0-or-later: 1 component(s)
   AGPL-3.0-only [COPYLEFT]: 1 component(s)
-  Apache-2.0: 17 component(s)
+  Apache-2.0: 18 component(s)
   Apache-2.0 AND Apache-2.0 AND OpenSSL: 1 component(s)
-  Apache-2.0 WITH LLVM-exception: 2 component(s)
+  Apache-2.0 WITH LLVM-exception: 3 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA: 3 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA AND NCSA OR MIT AND NCSA AND MIT: 1 component(s)
   Artistic-1.0-Perl: 1 component(s)
@@ -341,6 +341,37 @@ COMPONENT ATTRIBUTIONS
     Copyright 2009; Google Inc.
   License: BSD-3-Clause
 
+  circt
+  Version: firtool-1.68.0
+  Source: https://github.com/llvm/circt
+  PURL: pkg:github/llvm/circt
+  Copyright:
+    Copyright 1997-2019 Intel Corporation
+    Copyright 2003-2019 University of Illinois at Urbana-Champaign.
+    Copyright 2006 Kirill Simonov
+    Copyright 2007-2019 University of Illinois at Urbana-Champaign.
+    Copyright 2008 ; Google Inc.
+    Copyright 2009-2014 by the contributors listed in CREDITS.TXT
+    Copyright 2009-2015 by the contributors listed in CREDITS.TXT
+    Copyright 2009-2019 Polly Team
+    Copyright 2009-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2010 Apple Inc.
+    Copyright 2011-2014 by the contributors listed in CREDITS.TXT
+    Copyright 2011-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2012 ; Noah Spurrier <noah@noah.org>
+    Copyright 2013-2014 ; Pexpect development team
+    Copyright 2017-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2019 Intel Corporation. All rights reserved.
+    Copyright 2019 Jack O Connor and Samuel Neves
+    Copyright COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM; DAMAGES OR OTHER
+    Copyright    2002-2009 Michael J. Fromberger
+    Copyright (c) 2006 Kirill Simonov
+    Copyright (c) 2013-2014; Pexpect development team
+    Copyright (c) 2019 Intel Corporation. All rights reserved.
+    Copyright 2008; Google Inc.
+    Copyright copyright owner or entity authorized by
+  License: Apache-2.0
+
   Class-template-for-Images_LABPROG
   Version: v1.0.0
   Source: https://github.com/edorustichini/Class-template-for-Images_LABPROG
@@ -475,7 +506,7 @@ COMPONENT ATTRIBUTIONS
   License: GPL-3.0-only
 
   Fall_Semester_programing
-  Version: 67
+  Version: 72
   Source: https://github.com/Kirya23/Fall_Semester_programing
   PURL: pkg:github/kirya23/fall_semester_programing
   Copyright:
@@ -516,7 +547,6 @@ COMPONENT ATTRIBUTIONS
     (C) 1996; 1997; 1998; 1999; 2000; 2001; 2003; 2004; 2005; 2006;
     Copyright 1996 Gordon Matzigkeit  gord@gnu.ai.mit.edu
     Copyright 1996-2014 Free Software Foundation Inc
-    Copyright (C) 1994 X Consortium
     Copyright (C) 1996-2014 Free Software Foundation; Inc.
     Copyright (C) 1996; 1997; 1998; 1999; 2000; 2001; 2003; 2004; 2005; 2006;
     Copyright (C) 2002-2014 Free Software Foundation; Inc.
@@ -532,8 +562,6 @@ COMPONENT ATTRIBUTIONS
   Source: https://proxy.golang.org/github.com/abseil/googletest/@v/v1.14.1-0.20250212174407-c00fd25b71a1.zip
   PURL: pkg:golang/github.com/abseil/googletest
   Copyright:
-    Copyright 2007; Google Inc.
-    Copyright 2008; Google Inc.
     Copyright 2020; Google Inc.
   License: BSD-3-Clause
 
@@ -772,8 +800,10 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/ianlancetaylor/libbacktrace
   Copyright:
     Copyright 2012-2016 Free Software Foundation Inc
+    Copyright 2012-2018 Free Software Foundation Inc
     Copyright 2012-2024 Free Software Foundation Inc
     Copyright (C) 2012-2016 Free Software Foundation; Inc.
+    Copyright (C) 2012-2018 Free Software Foundation; Inc.
     Copyright (C) 2012-2024 Free Software Foundation; Inc.
     Copyright (C) 2013-2024 Free Software Foundation; Inc.
     Copyright (C) 2015-2024 Free Software Foundation; Inc.
@@ -781,6 +811,7 @@ COMPONENT ATTRIBUTIONS
     Copyright (C) 2018-2024 Free Software Foundation; Inc.
     Copyright (C) 2020-2024 Free Software Foundation; Inc.
     Copyright (C) 2022-2024 Free Software Foundation; Inc.
+    Copyright (c) 2012-2018 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc. Adapted
     Copyright (c) 2013-2024 Free Software Foundation; Inc.
@@ -846,7 +877,6 @@ COMPONENT ATTRIBUTIONS
     Copyright 2017 ; Mozilla
     Copyright 2017 ; The Android Open Source Project
     Copyright 2017 ; The CRC32C Authors.
-    Copyright 2017 Roman Lebedev. All rights reserved
     Copyright 2019 Zenichi Amano
     Copyright 2022 ; Google Inc.
     Copyright 2023 The Chromium Authors
@@ -854,7 +884,6 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2011; The WebRTC project authors. All rights reserved..
     Copyright 2016 Ismael Jimenez Martinez
     Copyright 2016 Ismael Jimenez Martinez. All rights reserved.
-    Copyright 2017 Roman Lebedev. All rights reserved.
     Copyright copyright owner or entity authorized by
   License: Apache-2.0
 
@@ -887,6 +916,40 @@ COMPONENT ATTRIBUTIONS
     Copyright 2021 Google Inc. All rights reserved.
     Copyright copyright owner or entity authorized by
   License: Apache-2.0, Apache-2.0 WITH LLVM-exception AND NCSA, BSD-3-Clause, ISC, MIT
+
+  llvm-nightly
+  Version: snapshot-20211216
+  Source: https://github.com/heterosys/llvm-nightly
+  PURL: pkg:github/heterosys/llvm-nightly
+  Copyright:
+    Copyright 1997-2019 Intel Corporation
+    Copyright 2003-2019 University of Illinois at Urbana-Champaign
+    Copyright 2003-2019 University of Illinois at Urbana-Champaign.
+    Copyright 2006 Kirill Simonov
+    Copyright 2007-2019 University of Illinois at Urbana-Champaign.
+    Copyright 2008 ; Google Inc.
+    Copyright 2009-2014 by the contributors listed in CREDITS.TXT
+    Copyright 2009-2015 by the contributors listed in CREDITS.TXT
+    Copyright 2009-2019 Polly Team
+    Copyright 2009-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2010 Apple Inc.
+    Copyright 2011-2014 by the contributors listed in CREDITS.TXT
+    Copyright 2011-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2012 ; Noah Spurrier <noah@noah.org>
+    Copyright 2013-2014 ; Pexpect development team
+    Copyright 2017-2019 by the contributors listed in CREDITS.TXT
+    Copyright 2019 Intel Corporation. All rights reserved.
+    Copyright 2019 Jack O Connor and Samuel Neves
+    Copyright COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM; DAMAGES OR OTHER
+    Copyright    2002-2009 Michael J. Fromberger
+    Copyright (c) 2006 Kirill Simonov
+    Copyright (c) 2010-2015 Benjamin Peterson
+    Copyright (c) 2013-2014; Pexpect development team
+    Copyright (c) 2019 Intel Corporation. All rights reserved.
+    Copyright .. 2002-2009 Michael J. Fromberger
+    Copyright 2008; Google Inc.
+    Copyright copyright owner or entity authorized by
+  License: Apache-2.0 WITH LLVM-exception
 
   llvm-project
   Version: 36e2577
@@ -1211,7 +1274,6 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/yangzhengxing/tcmalloc
   Copyright:
     Copyright (c) 2005; Google Inc.
-    Copyright (c) 2013; Google Inc.
   License: BSD-3-Clause
 
   tsunami_lab
