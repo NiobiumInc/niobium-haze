@@ -12,6 +12,7 @@
 // from the Product.
 #pragma once
 
+// RYANPR: Check if all includes in all files changed are needed (clangd)
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -20,7 +21,7 @@ namespace haze {
 
 // Control surface for the niobium::compiler() singleton. HAZE records
 // FHETCH IR via fhetch::sr_*, fhetch::tag_input, and fhetch::result;
-// those route to the linked compiler implicitly. CompilerBackend wraps
+// those route to the linked fhetch "dummy" compiler implicitly. CompilerBackend wraps
 // only the *control* operations: init, recording lifecycle, replay.
 //
 // Single concrete class, no virtual dispatch. Backend swap (e.g. to the
@@ -50,9 +51,35 @@ class CompilerBackend {
     // first call, resets to that base on subsequent calls.
     void start_epoch() noexcept;
 
-    // Compile + replay the current epoch, then reset compiler state and
-    // resume recording. Returns true on success.
+    // Finalize the current epoch's recording, write the per-epoch .fhetch
+    // trace, and reset state for the next epoch. Returns true on success.
+    // Does NOT trigger replay; callers materializing results must invoke
+    // replay() afterwards (see below).
     bool stop_epoch() noexcept;
+
+    // Trigger replay of the most recently recorded epoch.
+    //
+    // Behaviour depends on the configured target:
+    //   - target == "local"  : trace-only mode. The .fhetch file produced
+    //                          by stop_epoch() is left in place and replay
+    //                          is a no-op success. fhetch::result() will
+    //                          NOT return computed values; haze users
+    //                          running locally cannot validate FHE math.
+    //   - target != "local"  : the FHETCH project directory is handed off
+    //                          over the HTTP transport (see
+    //                          niobium-client/scripts/fhetch_server.sh)
+    //                          to a niobium-compiler-built
+    //                          nbcc_fhetch_replay running with the OpenFHE
+    //                          simulator. Probes flow back as
+    //                          serialized_probes/*.ct.
+    //
+    // Users of haze must arrange the transport (server + forwarder)
+    // before any haze D2H readback when target != "local". See
+    // niobium-client/scripts/test_transport_mult.sh for the canonical
+    // orchestration pattern.
+    //
+    // Returns true on success.
+    bool replay() noexcept;
 
     // Drop cached state so the next call to ensure_initialized() starts
     // fresh. Mainly for tests via hazeReset().
@@ -68,8 +95,15 @@ class CompilerBackend {
     // path so concurrent first callers don't all run init.
     std::atomic<bool> initialized_{false};
     std::mutex init_mutex_;
-    std::string prog_storage_; // backs argv_[0] across the init() call
-    char *argv_[2]{nullptr, nullptr};
+    // Storage backing argv_ across the niobium::compiler().init() call.
+    // We synthesise argv as ["<program>", "--target=<value>", nullptr];
+    // niobium-fhetch's compiler.h does not expose a set_target() setter,
+    // so the only way to configure the replay target is through init()'s
+    // argv parser (compiler.cpp:153-156).
+    // RYANPR: What?
+    std::string prog_storage_;
+    std::string target_arg_storage_;
+    char *argv_[3]{nullptr, nullptr, nullptr};
 };
 
 inline CompilerBackend &backend() noexcept { return CompilerBackend::instance(); }

@@ -1,18 +1,78 @@
 cmake_minimum_required(VERSION 3.22)
 project(haze LANGUAGES C CXX VERSION 0.1.0)
 
+# ---------------------------------------------------------------------------
+# niobium-fhetch resolution
+# ---------------------------------------------------------------------------
+# Three-tier lookup, mirroring niobium-client's NIOBIUM_CLIENT_FHETCH_DIR
+# pattern:
+#
+# RYANPR: I don't think we need this first method; niobium-client should specify the NIOBIUM_HAZE_FHETCH_DIR instead.
+#   1. If a parent (e.g. niobium-client) has already added niobium-fhetch
+#      and defined Niobium::fhetch, reuse it. This is the path consumers
+#      who don't recursively sync haze's submodules take.
+#
+#   2. Else, if NIOBIUM_HAZE_FHETCH_DIR is set, add_subdirectory() that
+#      external source tree. Used by parents that want to inject their
+#      own niobium-fhetch checkout without populating haze's submodule.
+#
+#   3. Else, fall back to vendor/niobium-fhetch — haze's own submodule.
+#      Used for standalone builds (run `make sync` from this directory
+#      to populate it).
+#
+# OPENFHE_INSTALL_DIR is honored by niobium-fhetch's own CMakeLists when
+# we add it via path #2 or #3, so injecting it here covers transitive
+# OpenFHE discovery for every resolution branch.
+
+if(NOT TARGET Niobium::fhetch)
+  set(NIOBIUM_HAZE_FHETCH_DIR "" CACHE PATH
+      "External niobium-fhetch source tree to use instead of haze's vendor/niobium-fhetch (empty = use the vendored submodule)")
+  if(NIOBIUM_HAZE_FHETCH_DIR)
+    add_subdirectory(${NIOBIUM_HAZE_FHETCH_DIR}
+                     ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build)
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
+    add_subdirectory(vendor/niobium-fhetch)
+  else()
+    message(FATAL_ERROR
+      "haze cannot find niobium-fhetch. Either:\n"
+      "  - build from a parent that adds niobium-fhetch first (defining Niobium::fhetch),\n"
+      "  - pass -DNIOBIUM_HAZE_FHETCH_DIR=<path/to/niobium-fhetch>,\n"
+      "  - or run `make sync` from this directory to init vendor/niobium-fhetch.")
+  endif()
+endif()
+
+# OPENFHE_INSTALL_DIR may be set by:
+#   - the parent build (niobium-client passes it explicitly)
+#   - haze's own Makefile (standalone build)
+#   - the user via -D
+# When unset, niobium-fhetch's CMakeLists defaults to its own
+# vendor/lib/openfhe install. The test executable below also reads it
+# for the OpenFHE BigInteger reference oracle.
+if(NOT DEFINED OPENFHE_INSTALL_DIR)
+  message(FATAL_ERROR
+    "OPENFHE_INSTALL_DIR is not set. Pass -DOPENFHE_INSTALL_DIR=<path> or "
+    "use haze's Makefile, which derives it from niobium-fhetch's install tree.")
+endif()
+
+# OPENFHE_LIBRARY_PATH locates libOPENFHEcore for the haze_tests reference
+# oracle (test_basis_convert.cpp). Most callers already supply it:
+#   - niobium-client sets it at the parent CMake level, pointing at
+#     OpenFHE's *build* output dir to dodge an extra install copy.
+#   - niobium-fhetch's CMakeLists sets it to ${OPENFHE_INSTALL_DIR}/lib
+#     when haze pulls fhetch in via add_subdirectory.
+# This fallback only fires when haze is built against an externally-resolved
+# Niobium::fhetch target whose enclosing project did not also provide
+# OPENFHE_LIBRARY_PATH (a partial-parent scenario).
+if(NOT DEFINED OPENFHE_LIBRARY_PATH)
+  set(OPENFHE_LIBRARY_PATH "${OPENFHE_INSTALL_DIR}/lib")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Emit compile_commands.json for clangd / IDE integration.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Debug CACHE STRING
-    "Build type: Debug, Release, RelWithDebInfo, or MinSizeRel" FORCE)
-endif()
 
 # ---------------------------------------------------------------------------
 # Compiler diagnostics
@@ -64,42 +124,14 @@ if(HAZE_TSAN)
 endif()
 
 # ---------------------------------------------------------------------------
-# Dependency: libnbcc (Niobium FHE compiler)
-# Set CMAKE_PREFIX_PATH to the niobium-compiler install tree, e.g.:
-#   cmake -B build -DCMAKE_PREFIX_PATH=/path/to/niobium-compiler/vendor/lib/niobium-compiler
-# ---------------------------------------------------------------------------
-
-find_package(niobium REQUIRED)
-
-# niobium's cmake config does not propagate its openfhe transitive includes.
-# Derive the path from the niobium install prefix.
-get_target_property(_nb_includes NiobiumInc::niobium INTERFACE_INCLUDE_DIRECTORIES)
-list(GET _nb_includes 0 _nb_include_dir)
-get_filename_component(_nb_prefix "${_nb_include_dir}" DIRECTORY)
-set(NIOBIUM_OPENFHE_INCLUDE
-    "${_nb_prefix}/../openfhe/include/openfhe"
-    CACHE PATH "OpenFHE include root bundled with the niobium compiler")
-set(NIOBIUM_OPENFHE_LIB
-    "${_nb_prefix}/../openfhe/lib"
-    CACHE PATH "OpenFHE shared-library dir bundled with the niobium compiler")
-set(NIOBIUM_JSON_INCLUDE
-    "${_nb_prefix}/../../../vendor/json/single_include"
-    CACHE PATH "nlohmann/json include dir bundled with the niobium compiler")
-
-if(NOT EXISTS "${NIOBIUM_OPENFHE_INCLUDE}")
-  message(FATAL_ERROR
-    "OpenFHE include dir not found at '${NIOBIUM_OPENFHE_INCLUDE}'. "
-    "Set NIOBIUM_OPENFHE_INCLUDE manually or reinstall libnbcc.")
-endif()
-if(NOT EXISTS "${NIOBIUM_JSON_INCLUDE}")
-  message(FATAL_ERROR
-    "nlohmann/json include dir not found at '${NIOBIUM_JSON_INCLUDE}'. "
-    "Set NIOBIUM_JSON_INCLUDE manually or reinstall libnbcc.")
-endif()
-
-# ---------------------------------------------------------------------------
 # libhaze shared library
 # ---------------------------------------------------------------------------
+# Niobium::fhetch (libnbfhetch) supplies:
+#   - the niobium::compiler() singleton (recording + replay dispatch)
+#   - the fhetch::* recording API used by haze's compute / epoch paths
+#   - public include dirs for <niobium/...> and OpenFHE headers (via
+#     BUILD_INTERFACE on the niobium-fhetch target)
+# So haze itself needs no other niobium-side dep.
 
 add_library(haze SHARED
   # extern "C" boundary — one cpp per public-header section.
@@ -122,6 +154,7 @@ add_library(haze SHARED
   src/core/stream.cpp
   # Shared leaf utilities.
   src/common/errors.cpp
+  src/common/log.cpp
 )
 
 target_include_directories(haze
@@ -130,16 +163,15 @@ target_include_directories(haze
     $<INSTALL_INTERFACE:include>
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${NIOBIUM_OPENFHE_INCLUDE}
-    ${NIOBIUM_OPENFHE_INCLUDE}/binfhe
-    ${NIOBIUM_OPENFHE_INCLUDE}/core
-    ${NIOBIUM_OPENFHE_INCLUDE}/pke
-    ${NIOBIUM_JSON_INCLUDE}
+    # niobium-fhetch's JSON_INCLUDE_DIR cache var is PRIVATE on its
+    # target, so haze (a downstream consumer) doesn't inherit it.
+    # polynomial_io.cpp uses nlohmann/json — same vendored copy.
+    ${JSON_INCLUDE_DIR}
 )
 
 target_compile_definitions(haze PRIVATE HAZE_BUILDING_LIBRARY)
 
-target_link_libraries(haze PRIVATE NiobiumInc::niobium)
+target_link_libraries(haze PRIVATE Niobium::fhetch)
 
 set_target_properties(haze PROPERTIES
   CXX_VISIBILITY_PRESET     hidden
@@ -148,22 +180,43 @@ set_target_properties(haze PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
-# Installation
+# Replay bridge — OpenFHE-using helper for synthesizing the CryptoContext +
+# ciphertext templates the compiler-side replay needs. Lives in its own
+# subdirectory and target so libhaze stays FHETCH-only; only haze_tests
+# (and any other replay-aware harness) link it in.
 # ---------------------------------------------------------------------------
 
-install(TARGETS haze
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
-)
-install(DIRECTORY include/ DESTINATION include)
+add_subdirectory(replay_bridge)
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+# One executable, two ctest entries split by Catch2 tag:
+#   - haze_unit_tests        : runs everything not tagged [integration].
+#   - haze_integration_tests : runs [integration]-tagged cases via the
+#                              FHETCH transport (forwarder + server) so
+#                              the niobium-compiler-built nbcc_fhetch_replay
+#                              executes the recorded project against the
+#                              OpenFHE simulator.
 
 enable_testing()
 find_package(Catch2 3 REQUIRED)
+
+# Test reference oracle (in test_basis_convert.cpp) calls into OpenFHE
+# BigInteger primitives directly. These come from the parent project's
+# OpenFHE install tree.
+set(_openfhe_include "${OPENFHE_INSTALL_DIR}/include/openfhe")
+set(_openfhe_core_lib_so   "${OPENFHE_LIBRARY_PATH}/libOPENFHEcore.so")
+set(_openfhe_core_lib_dylib "${OPENFHE_LIBRARY_PATH}/libOPENFHEcore.dylib")
+if(EXISTS "${_openfhe_core_lib_dylib}")
+  set(_openfhe_core_lib "${_openfhe_core_lib_dylib}")
+elseif(EXISTS "${_openfhe_core_lib_so}")
+  set(_openfhe_core_lib "${_openfhe_core_lib_so}")
+else()
+  message(FATAL_ERROR
+    "libOPENFHEcore not found under ${OPENFHE_LIBRARY_PATH}. The haze test "
+    "oracle links it directly; ensure niobium-client built OpenFHE first.")
+endif()
 
 add_executable(haze_tests
   test/test_build.cpp
@@ -176,26 +229,58 @@ add_executable(haze_tests
 
 target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/test
 )
 # OpenFHE BigInteger headers — used by test_basis_convert.cpp's reference
-# oracle. Marked SYSTEM so OpenFHE's internal -Wunused-parameter etc.
-# warnings don't trip our -Werror.
+# oracle. Marked SYSTEM so OpenFHE's internal warnings don't trip our -Werror.
 target_include_directories(haze_tests SYSTEM PRIVATE
-  ${NIOBIUM_OPENFHE_INCLUDE}
-  ${NIOBIUM_OPENFHE_INCLUDE}/core
+  ${_openfhe_include}
+  ${_openfhe_include}/core
 )
 
 target_link_libraries(haze_tests PRIVATE
   haze
+  haze_replay_bridge
   Catch2::Catch2WithMain
-  # OPENFHEcore: BigInteger primitives used by the test reference
-  # oracle (no DCRTPoly path — that's blocked by OpenFHE's WITH_CPROBES
-  # instrumentation polluting libnbcc's recording state).
-  ${NIOBIUM_OPENFHE_LIB}/libOPENFHEcore.so
+  ${_openfhe_core_lib}
 )
 
 # Pass the FBC variant choice through to the test oracle.
 target_compile_definitions(haze_tests PRIVATE
   HAZE_FBC_REDUCED_NOISE=$<BOOL:${HAZE_FBC_REDUCED_NOISE}>)
 
-add_test(NAME haze_tests COMMAND haze_tests)
+# ---------------------------------------------------------------------------
+# ctest entries
+# ---------------------------------------------------------------------------
+
+option(NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS
+       "Register the haze_integration_tests ctest entry (transport round-trip). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-haze-integration-release target invokes scripts/test_haze_integration.sh directly without needing this flag."
+       OFF)
+
+# Unit suite: in-process, no server, no compiler-side binary.
+# HAZE_TARGET=local pins the compiler target so haze never tries to
+# dispatch to nbcc_fhetch_replay during unit tests. With the local-target
+# replay path now a no-op (just produces the .fhetch trace), unit tests
+# observe state-machine and recording behaviour only -- they do not
+# validate FHE math results.
+add_test(NAME haze_unit_tests
+         COMMAND haze_tests "~[integration]")
+set_tests_properties(haze_unit_tests PROPERTIES
+    ENVIRONMENT "HAZE_TARGET=local")
+
+if(NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS)
+  set(NIOBIUM_COMPILER_ROOT "" CACHE PATH
+      "Path to a niobium-compiler checkout with build/nbcc_fhetch_replay. Required when NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS=ON.")
+  if(NOT NIOBIUM_COMPILER_ROOT)
+    message(FATAL_ERROR
+      "NIOBIUM_CLIENT_HAZE_WITH_INTEGRATION_TESTS=ON requires "
+      "-DNIOBIUM_COMPILER_ROOT=<path/to/niobium-compiler>")
+  endif()
+
+  add_test(NAME haze_integration_tests
+           COMMAND
+             ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_haze_integration.sh)
+  set_tests_properties(haze_integration_tests PROPERTIES
+    ENVIRONMENT
+      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH}")
+endif()

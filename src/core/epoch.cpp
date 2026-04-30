@@ -26,6 +26,7 @@
 #include <haze/haze_types.h>
 #include <iostream>
 #include <mutex>
+#include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <string>
 #include <utility>
@@ -69,6 +70,7 @@ bool EpochState::is_recording() noexcept {
 
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
+    // RYANPR: Is erase walking all of these maps? It would seem nice to be able to just know which one to erase from (as in device addresses also had a tag of which map they were in). On refactoring, make sure not to overengineer such a map of device address to which map it is in.
     poly_map_.erase(addr);
     compute_results_.erase(addr);
     pending_outputs_.erase(addr);
@@ -106,41 +108,37 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 
 void EpochState::store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // Track this address as a compute result so flush_for_d2h knows to
-    // materialize it on the first flush (input polys, added via
-    // lookup_or_create_locked, are excluded — tagging them as fhetch
-    // outputs would confuse stop_epoch).
+    // Track this address as a compute result so replay_and_populate
+    // tags it as a fhetch output before stop()/replay() run. Input
+    // polys created via lookup_or_create_locked are excluded — tagging
+    // them as fhetch outputs would confuse the niobium compiler.
+    // RYANPR: Not all stores are compute results, no?
     compute_results_.insert(addr);
 }
 
-std::expected<void, HazeInternalError> EpochState::flush_for_d2h(DevAddr addr) noexcept {
+std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
     HazeLockGuard lock(mutex_);
     if (!recording_) {
-        return {}; // shadow already authoritative
-    }
-    if (poly_map_.find(addr) == poly_map_.end()) {
-        return {}; // address has no compute output bound
+        return {}; // nothing to replay
     }
 
-    // Tag every compute result as a pending output, not just `addr`.
-    // do_materialize_locked() runs stop_epoch + clear_state, so any
-    // result not captured here would lose its value to subsequent D2H
-    // calls in the same epoch — they would early-return on !recording_
-    // and read uninitialised shadow. Multi-output ops (hazeBasisConvert,
-    // hazeModDown, hazeModUp) routinely produce several bound polys
-    // per call and the caller D2Hs each in turn, so capturing the
-    // whole live set on the first flush is the only way that pattern
-    // works without HAZE_PERSIST_WRITES.
-    //
-    // Inputs (poly_map_ entries created via lookup_or_create_locked)
-    // are deliberately excluded — their shadow is already authoritative
-    // (set by H2D), and tagging them as fhetch outputs causes
-    // stop_epoch to fail with BackendError.
+    // Tag every bound compute result as a fhetch output. Inputs
+    // (poly_map_ entries created by lookup_or_create_locked) are
+    // deliberately excluded — their shadow data is already authoritative.
+    // RYANPR: Since we have an authoritative place for inputs, why do we not have an authorative place for outputs? Then we wouldn't have to scan for them.
     for (DevAddr result_addr : compute_results_) {
         if (pending_outputs_.find(result_addr) == pending_outputs_.end()) {
             const std::string name = "haze_out_" + std::to_string(output_counter_++);
             pending_outputs_.emplace(result_addr, name);
         }
+    }
+
+    // RYANPR: Seems like we could collapse this with the prior for loop.
+    for (auto &[addr, name] : pending_outputs_) {
+        auto it = poly_map_.find(addr);
+        if (it == poly_map_.end())
+            continue;
+        fhetch::tag_output(name, it->second);
     }
 
     return do_materialize_locked();
@@ -151,43 +149,69 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return {};
     }
 
-    for (auto &[addr, name] : pending_outputs_) {
-        auto it = poly_map_.find(addr);
-        if (it == poly_map_.end())
-            continue;
-        fhetch::tag_output(name, it->second);
-    }
-
-    // stop_epoch() compiles, replays, resets compiler state, and restarts
-    // recording. State is reset at end of this function regardless of
-    // backend success so the next epoch starts fresh.
-    const bool ok = backend().stop_epoch();
-
-    if (ok) {
-        for (auto &[addr, name] : pending_outputs_) {
-            fhetch::Polynomial result_poly;
-            if (!fhetch::result(name, result_poly)) {
-                std::cerr << "[haze] failed to retrieve result for output '" << name
-                          << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec << '\n';
-                continue;
-            }
-            std::vector<uint64_t> values;
-            if (!extract_polynomial_values(result_poly, name, values)) {
-                std::cerr << "[haze] failed to extract values for output '" << name
-                          << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec << '\n';
-                continue;
-            }
-            std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
-            std::memcpy(bytes.data(), values.data(), bytes.size());
-            allocator().update_shadow(addr, bytes);
-        }
-    }
-
-    clear_state_locked();
-    if (!ok) {
-        record_internal_error(HazeInternalError::BackendError, "EpochState::do_materialize");
+    // Step 1: write the per-epoch .fhetch trace and reset the recording
+    // bookkeeping in libnbfhetch.
+    const bool stop_ok = backend().stop_epoch();
+    if (!stop_ok) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendError,
+                              "EpochState::replay_and_populate (stop_epoch)");
         return std::unexpected(HazeInternalError::BackendError);
     }
+
+    // Step 2: dispatch replay. For target=="local" this is a no-op
+    // success (the .fhetch trace is the only artifact). For non-local
+    // targets it spawns nbcc_fhetch_replay via the FHETCH HTTP transport
+    // (forwarder on PATH -> server -> compiler-side binary running the
+    // OpenFHE simulator) and writes ciphertext probes back to disk.
+    // RYANPR: We have a mode where we test against local but if we are only writing out the fhetch IR how are we actually populating the shadow buffer?
+    const bool replay_ok = backend().replay();
+    if (!replay_ok) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendError,
+                              "EpochState::replay_and_populate (replay)");
+        return std::unexpected(HazeInternalError::BackendError);
+    }
+
+    // Step 3: populate the host shadow buffer for each output address
+    // so subsequent hazeMemcpy(D2H) reads pick up the computed values.
+    // fhetch::result(name, Polynomial&) reads
+    // <program_dir>/serialized_probes/<name>.ct (written by the
+    // compiler-side nbcc_fhetch_replay) and unwraps the first NativePoly
+    // into a fhetch::Polynomial. extract_polynomial_values rehydrates
+    // the values via fhetch::save_polynomial_json, and update_shadow
+    // commits them to the device shadow buffer at `addr`.
+    for (auto &[addr, name] : pending_outputs_) {
+        fhetch::Polynomial result_poly;
+        if (!fhetch::result(name, result_poly)) {
+            std::cerr << "[haze] result('" << name << "') unavailable; "
+                      << "shadow at addr 0x" << std::hex << to_uintptr(addr) << std::dec
+                      << " is stale\n";
+            continue;
+        }
+        std::vector<uint64_t> values;
+        if (!extract_polynomial_values(result_poly, name, values)) {
+            // RYANPR: Since we are doing these error operations in the same way every time we should make an `error.{cpp,hpp}` that encapsulates how we write out things and then takes a string to do it. We could replace this with more detailed logging later. All strings seem to start with `[haze]`.
+            std::cerr << "[haze] failed to extract values for output '" << name
+                      << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec << '\n';
+            continue;
+        }
+        std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
+        std::memcpy(bytes.data(), values.data(), bytes.size());
+        allocator().update_shadow(addr, bytes);
+    }
+
+    // Clear niobium::compiler()'s captured input/output state so the next
+    // recording-replay cycle inside the same hazeDeviceReset window starts
+    // from an empty slate. Without this, captured_inputs/outputs accumulate
+    // across cycles — multi-cycle tests like
+    // "multiple materializations: two independent D2H cycles" would see
+    // stale data shipped to the compiler-side replay.
+    // RYANPR: Why is this called so late? It would seem that for error cases we are not clearing the captured inputs and outputs, which could lead to a screwed up compiler state if we then tried to recover from a failed run and succeeded the next time (or ran a second computation that succeeded when the first did not).
+    niobium::compiler().clear_captured_inputs();
+    niobium::compiler().clear_captured_outputs();
+
+    clear_state_locked();
     return {};
 }
 
@@ -218,13 +242,14 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
     return epoch().mutex_;
 }
 
-hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept {
-    // Single locked operation: flush_for_d2h decides internally whether
-    // any work is required, so callers don't need a separate predicate
-    // check (which would race a concurrent invalidate).
-    auto result = epoch().flush_for_d2h(src);
-    if (!result)
-        return to_public_error(result.error());
+hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
+    // D2H is a plain shadow read. Recording finalization + replay live
+    // in haze::epoch().replay_and_populate() (exposed as hazeReplay()),
+    // which the user must call explicitly before reading post-compute
+    // values back. This separation is intentional: replay incurs an
+    // HTTP transport round-trip to the compiler-side nbcc_fhetch_replay,
+    // which is a heavy operation that should be triggered explicitly,
+    // not as a side-effect of a memcpy.
     return allocator().copy_to_host(dst, src, count);
 }
 

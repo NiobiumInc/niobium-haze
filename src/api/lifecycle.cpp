@@ -26,6 +26,7 @@
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <niobium/compiler.h>
 
 namespace haze {
 
@@ -37,6 +38,13 @@ void reset_all() noexcept {
     streams_reset();
     events_reset();
     device_reset();
+    // Wipe niobium::compiler()'s singleton state too — captured_inputs,
+    // captured_outputs, the trace writer's modulus table, and any hooks
+    // registered by the replay bridge would otherwise leak across tests
+    // (or across distinct programs running in the same process). reset()
+    // is generic to libnbfhetch; haze just calls it as part of "start
+    // fresh".
+    niobium::compiler().reset();
 }
 
 } // namespace haze
@@ -46,5 +54,12 @@ extern "C" hazeError_t hazeDeviceReset(void) noexcept {
     // Match cudaDeviceReset: also clear the thread-local last-error so
     // callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazeReplay(void) noexcept {
+    auto result = haze::epoch().replay_and_populate();
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
     return HAZE_SUCCESS;
 }

@@ -14,7 +14,7 @@
 // hazeSetRingDimension. Tests here always set ring_dim before
 // allocating to make that contract explicit.
 
-TEST_CASE("hazeMalloc returns non-null pointer") {
+TEST_CASE("hazeMalloc returns non-null pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void* p = nullptr;
@@ -23,20 +23,20 @@ TEST_CASE("hazeMalloc returns non-null pointer") {
     REQUIRE(hazeFree(p) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeMalloc null ptr arg returns error") {
+TEST_CASE("hazeMalloc null ptr arg returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(nullptr, 32768) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
-TEST_CASE("hazeMalloc before hazeSetRingDimension is rejected") {
+TEST_CASE("hazeMalloc before hazeSetRingDimension is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS); // ensure ring_dim cleared
     void* p = nullptr;
     REQUIRE(hazeMalloc(&p, 32768) == HAZE_ERROR_CONFIGERR);
     hazeGetLastError();
 }
 
-TEST_CASE("hazeMalloc with size != polynomial bytes is rejected") {
+TEST_CASE("hazeMalloc with size != polynomial bytes is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void* p = nullptr;
@@ -45,7 +45,7 @@ TEST_CASE("hazeMalloc with size != polynomial bytes is rejected") {
     hazeGetLastError();
 }
 
-TEST_CASE("distinct allocations produce non-overlapping addresses") {
+TEST_CASE("distinct allocations produce non-overlapping addresses", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void* p1 = nullptr;
@@ -57,7 +57,7 @@ TEST_CASE("distinct allocations produce non-overlapping addresses") {
     REQUIRE(hazeFree(p2) == HAZE_SUCCESS);
 }
 
-TEST_CASE("free then re-allocate recycles pooled address") {
+TEST_CASE("free then re-allocate recycles pooled address", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
 
@@ -71,7 +71,7 @@ TEST_CASE("free then re-allocate recycles pooled address") {
     REQUIRE(hazeFree(p2) == HAZE_SUCCESS);
 }
 
-TEST_CASE("H2D memcpy stores data in shadow buffer") {
+TEST_CASE("H2D memcpy stores data in shadow buffer", "[unit]") {
     constexpr size_t kN = 4096;
     constexpr size_t kBytes = kN * sizeof(uint64_t);
 
@@ -89,7 +89,7 @@ TEST_CASE("H2D memcpy stores data in shadow buffer") {
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
 }
 
-TEST_CASE("H2D then D2H round-trip preserves data") {
+TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
     constexpr size_t kN = 4096;
     constexpr size_t kBytes = kN * sizeof(uint64_t);
 
@@ -112,7 +112,7 @@ TEST_CASE("H2D then D2H round-trip preserves data") {
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
 }
 
-TEST_CASE("D2D memcpy copies shadow buffer") {
+TEST_CASE("D2D memcpy copies shadow buffer", "[unit]") {
     constexpr size_t kBytes = 32768;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
@@ -138,7 +138,7 @@ TEST_CASE("D2D memcpy copies shadow buffer") {
     REQUIRE(hazeFree(dst_dev) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeMemset fills shadow buffer") {
+TEST_CASE("hazeMemset fills shadow buffer", "[unit]") {
     constexpr size_t kBytes = 32768;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
@@ -155,7 +155,7 @@ TEST_CASE("hazeMemset fills shadow buffer") {
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeHostAlloc/Free round-trip") {
+TEST_CASE("hazeHostAlloc/Free round-trip", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     void* p = nullptr;
     REQUIRE(hazeHostAlloc(&p, 4096, 0) == HAZE_SUCCESS);
@@ -163,7 +163,7 @@ TEST_CASE("hazeHostAlloc/Free round-trip") {
     hazeFreeHost(p);
 }
 
-TEST_CASE("hazeMallocAsync/FreeAsync behave like sync versions") {
+TEST_CASE("hazeMallocAsync/FreeAsync behave like sync versions", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     hazeStream_t stream = nullptr;
@@ -177,7 +177,7 @@ TEST_CASE("hazeMallocAsync/FreeAsync behave like sync versions") {
     REQUIRE(hazeStreamDestroy(stream) == HAZE_SUCCESS);
 }
 
-TEST_CASE("create and destroy 100 streams without leaks") {
+TEST_CASE("create and destroy 100 streams without leaks", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     for (int i = 0; i < 100; ++i) {
         hazeStream_t s = nullptr;
@@ -187,7 +187,7 @@ TEST_CASE("create and destroy 100 streams without leaks") {
     }
 }
 
-TEST_CASE("create and destroy 100 events without leaks") {
+TEST_CASE("create and destroy 100 events without leaks", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     for (int i = 0; i < 100; ++i) {
         hazeEvent_t e = nullptr;
@@ -197,7 +197,7 @@ TEST_CASE("create and destroy 100 events without leaks") {
     }
 }
 
-TEST_CASE("hazeStreamSynchronize is a no-op returning HAZE_SUCCESS") {
+TEST_CASE("hazeStreamSynchronize is a no-op returning HAZE_SUCCESS", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     hazeStream_t s = nullptr;
     REQUIRE(hazeStreamCreate(&s) == HAZE_SUCCESS);
@@ -206,13 +206,13 @@ TEST_CASE("hazeStreamSynchronize is a no-op returning HAZE_SUCCESS") {
     REQUIRE(hazeStreamDestroy(s) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeDeviceSynchronize is a no-op returning HAZE_SUCCESS") {
+TEST_CASE("hazeDeviceSynchronize is a no-op returning HAZE_SUCCESS", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeGetDeviceProperties returns FPGA values") {
+TEST_CASE("hazeGetDeviceProperties returns FPGA values", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     hazeDeviceProp prop{};
     REQUIRE(hazeGetDeviceProperties(&prop, 0) == HAZE_SUCCESS);
@@ -229,14 +229,14 @@ TEST_CASE("hazeGetDeviceProperties returns FPGA values") {
     REQUIRE(found_12);
 }
 
-TEST_CASE("hazeGetDeviceCount returns 1") {
+TEST_CASE("hazeGetDeviceCount returns 1", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     int count = 0;
     REQUIRE(hazeGetDeviceCount(&count) == HAZE_SUCCESS);
     REQUIRE(count == 1);
 }
 
-TEST_CASE("NULL stream argument uses default stream") {
+TEST_CASE("NULL stream argument uses default stream", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeStreamSynchronize(nullptr) == HAZE_SUCCESS);
     hazeEvent_t e = nullptr;
@@ -246,7 +246,7 @@ TEST_CASE("NULL stream argument uses default stream") {
     REQUIRE(hazeEventDestroy(e) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazePointerGetAttributes reports device type for hazeMalloc'd pointer") {
+TEST_CASE("hazePointerGetAttributes reports device type for hazeMalloc'd pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void* dev = nullptr;
@@ -259,7 +259,7 @@ TEST_CASE("hazePointerGetAttributes reports device type for hazeMalloc'd pointer
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazePointerGetAttributes reports unregistered for foreign pointers") {
+TEST_CASE("hazePointerGetAttributes reports unregistered for foreign pointers", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // A stack pointer was never registered with hazeHostAlloc, so it
     // reports UNREGISTERED — matches cudaPointerGetAttributes since CUDA 11.
@@ -269,7 +269,7 @@ TEST_CASE("hazePointerGetAttributes reports unregistered for foreign pointers") 
     REQUIRE(attrs.type == HAZE_MEMORY_TYPE_UNREGISTERED);
 }
 
-TEST_CASE("hazePointerGetAttributes reports host type for hazeHostAlloc'd pointer") {
+TEST_CASE("hazePointerGetAttributes reports host type for hazeHostAlloc'd pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     void* p = nullptr;
     REQUIRE(hazeHostAlloc(&p, 4096, 0) == HAZE_SUCCESS);
@@ -279,7 +279,7 @@ TEST_CASE("hazePointerGetAttributes reports host type for hazeHostAlloc'd pointe
     hazeFreeHost(p);
 }
 
-TEST_CASE("hazePointerGetAttributes rejects null attrs out-pointer") {
+TEST_CASE("hazePointerGetAttributes rejects null attrs out-pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     int stack_local = 0;
     REQUIRE(hazePointerGetAttributes(nullptr, &stack_local) == HAZE_ERROR_INVALID_VALUE);

@@ -1,6 +1,3 @@
-[submodule "vendor/niobium-compiler"]
-	path = vendor/niobium-compiler
-	url = git@github.com:NiobiumInc/niobium-compiler.git
 [submodule "vendor/niobium-fhetch"]
 	path = vendor/niobium-fhetch
 	url = git@github.com:NiobiumInc/niobium-fhetch.git
