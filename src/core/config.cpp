@@ -170,12 +170,13 @@ std::string Config::target() const noexcept {
             return target_;
     }
     // Env var fallback used only when no explicit hazeSetTarget call has
-    // been made. Default if env var unset: in-process fhetch_sim, so
-    // hazeMemcpy(D2H) returns simulator-computed values out of the box
-    // without requiring nbcc_fhetch_replay.
+    // been made. Default if env var unset: kLocalTarget — runs the
+    // in-process FHETCH simulator, so hazeMemcpy(D2H) returns
+    // simulator-computed values out of the box without requiring
+    // nbcc_fhetch_replay.
     if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
         return std::string{t};
-    return std::string{kFhetchSimTarget};
+    return std::string{kLocalTarget};
 }
 
 void Config::reset() noexcept {

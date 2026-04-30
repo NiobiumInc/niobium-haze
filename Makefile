@@ -130,7 +130,7 @@ Usage: make <target> [MODE=debug|release]
 
   Test:
     test-unit           Run unit suite (HAZE_TARGET=local; no FHE math)
-    test-sim            Run sim suite (in-process fhetch_sim)
+    test-sim            Run sim suite (HAZE_TARGET=local; in-process simulator)
     test-transport      Run integration suite via nbcc_fhetch_replay
                         (requires NIOBIUM_COMPILER_ROOT)
     test                Default: test-unit + test-sim
@@ -208,13 +208,13 @@ test-unit: build ## Run unit suite (HAZE_TARGET=local; no FHE math)
 	@cd "$(HAZE_RUNS_DIR)" && \
 	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "~[integration]"
 
-test-sim: build ## Run sim suite (in-process fhetch_sim; validates FHE math)
+test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
 	@mkdir -p "$(HAZE_RUNS_DIR)"
-	@# Target literal must match haze::kFhetchSimTarget in src/core/config.hpp
+	@# Target literal must match haze::kLocalTarget in src/core/config.hpp
 	@# AND the haze_sim_tests ENVIRONMENT entry in CMakeLists.txt.
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=fhetch_sim "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
 
 test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	@if [ -z "$(NIOBIUM_COMPILER_ROOT)" ]; then \

@@ -157,11 +157,10 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BackendError);
     }
 
-    // Step 2: dispatch replay. Behaviour depends on the configured
-    // target — local is a no-op success, fhetch_sim runs the in-process
-    // simulator, anything else spawns nbcc_fhetch_replay over the HTTP
-    // transport. Non-local paths produce serialized_probes/<name>.ct
-    // for fhetch::result to read in step 3.
+    // Step 2: dispatch replay. kLocalTarget runs the in-process FHETCH
+    // simulator end-to-end inside libnbfhetch; other targets spawn
+    // nbcc_fhetch_replay over the HTTP transport. Both paths produce
+    // serialized_probes/<name>.ct for fhetch::result to read in step 3.
     const bool replay_ok = backend().replay();
     if (!replay_ok) {
         clear_state_locked();
@@ -170,32 +169,28 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BackendError);
     }
 
-    // Step 3 (non-local targets only): populate host shadow buffers
-    // from <program_dir>/serialized_probes/<name>.ct. In local mode no
-    // probes are produced; the .fhetch trace is the only artifact and
-    // shadow buffers retain their pre-compute (H2D) values.
-    if (config().target() != kLocalTarget) {
-        for (auto &[addr, name] : pending_outputs_) {
-            fhetch::Polynomial result_poly;
-            if (!fhetch::result(name, result_poly)) {
-                std::ostringstream body;
-                body << "result('" << name << "') unavailable; shadow at addr 0x"
-                     << std::hex << to_uintptr(addr) << std::dec << " is stale";
-                log_error("epoch", body.str());
-                continue;
-            }
-            std::vector<uint64_t> values;
-            if (!extract_polynomial_values(result_poly, name, values)) {
-                std::ostringstream body;
-                body << "failed to extract values for output '" << name
-                     << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
-                log_error("epoch", body.str());
-                continue;
-            }
-            std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
-            std::memcpy(bytes.data(), values.data(), bytes.size());
-            allocator().update_shadow(addr, bytes);
+    // Step 3: populate host shadow buffers from
+    // <program_dir>/serialized_probes/<name>.ct.
+    for (auto &[addr, name] : pending_outputs_) {
+        fhetch::Polynomial result_poly;
+        if (!fhetch::result(name, result_poly)) {
+            std::ostringstream body;
+            body << "result('" << name << "') unavailable; shadow at addr 0x"
+                 << std::hex << to_uintptr(addr) << std::dec << " is stale";
+            log_error("epoch", body.str());
+            continue;
         }
+        std::vector<uint64_t> values;
+        if (!extract_polynomial_values(result_poly, name, values)) {
+            std::ostringstream body;
+            body << "failed to extract values for output '" << name
+                 << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+            log_error("epoch", body.str());
+            continue;
+        }
+        std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
+        std::memcpy(bytes.data(), values.data(), bytes.size());
+        allocator().update_shadow(addr, bytes);
     }
 
     clear_state_locked();   // also clears captured inputs/outputs (E7).

@@ -104,16 +104,10 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
 
 /* Select the niobium-compiler target for replay.
  *
- * Targets fall into three tiers by where they execute:
+ * Targets fall into two tiers by where they execute:
  *
- *   1. Trace-only (no execution):
- *        "local"        Produces .fhetch artifacts only;
- *                       hazeMemcpy(D2H) returns whatever the shadow
- *                       buffer held before compute. Use when only
- *                       validating recording correctness.
- *
- *   2. In-process FHETCH simulator (DEFAULT):
- *        "fhetch_sim"   libnbfhetch loads the .fhetch trace into its
+ *   1. In-process FHETCH simulator (DEFAULT):
+ *        "local"        libnbfhetch loads the .fhetch trace into its
  *                       in-process instruction-set simulator,
  *                       executes it, and writes ciphertext probes
  *                       under <program_dir>/serialized_probes/.
@@ -121,10 +115,12 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
  *                       values. No compiler-side binary or HTTP
  *                       transport required.
  *
- *   3. Compiler-side simulators via HTTP transport:
+ *   2. Compiler-side simulators via HTTP transport:
  *        "FHE_SIM"      OpenFHE simulator via nbcc_fhetch_replay.
  *        "FUNC_SIM"     Functional simulator.
  *        "FPGA_TRI"     FPGA target.
+ *        "fhetch_sim"   FHETCH instruction-set simulator on the
+ *                       compiler side.
  *                       These dispatch the recorded project over the
  *                       HTTP transport (see niobium-client/scripts/
  *                       fhetch_server.sh) and require a built
@@ -134,7 +130,7 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
  * Resolution order:
  *   1. hazeSetTarget(target)  - explicit programmatic call.
  *   2. HAZE_TARGET env var    - read on first hazeReplay if (1) unset.
- *   3. "fhetch_sim"           - default if both above are unset.
+ *   3. "local"                - default if both above are unset.
  *
  * See hazeReplay() for behaviour-by-target dispatch. */
 HAZE_API hazeError_t hazeSetTarget(const char* target) HAZE_NOEXCEPT;
@@ -143,11 +139,10 @@ HAZE_API hazeError_t hazeSetTarget(const char* target) HAZE_NOEXCEPT;
  *
  * Finalises the current epoch's .fhetch trace and dispatches it
  * according to the configured target (see hazeSetTarget for the
- * three-tier table and resolution order). At a glance:
+ * two-tier table and resolution order). At a glance:
  *
- *   target == "local":      no execution; shadow buffers untouched.
- *   target == "fhetch_sim": in-process simulator populates shadows.
- *   target == <other>:      HTTP transport to nbcc_fhetch_replay.
+ *   target == "local":   in-process simulator populates shadows.
+ *   target == <other>:   HTTP transport to nbcc_fhetch_replay.
  *
  * Calling hazeReplay() with no recording in progress is a no-op
  * returning HAZE_SUCCESS. */
