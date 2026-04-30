@@ -1,0 +1,109 @@
+name: build-test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-test-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build + sim tests (nix devshell)
+    runs-on: ubuntu-latest
+    # Skip on fork PRs: org App token is not available, so private
+    # submodules cannot be cloned.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # Same App-token pattern as niobium-client/.github/workflows/ci.yml,
+      # bumped to the current major. Lets us read the private
+      # niobium-fhetch submodule that GITHUB_TOKEN cannot reach.
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout (with private niobium-fhetch submodule)
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        # Nix store + OpenFHE + haze build pushes ubuntu-latest's
+        # ~14 GB of free space. Reclaim ~25 GB up front.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Capture OpenFHE submodule commit
+        # Cache key tracks the OpenFHE submodule rev (not niobium-fhetch's),
+        # matching niobium-client/ci.yml. Any OpenFHE bump invalidates.
+        id: openfhe_rev
+        run: |
+          cd vendor/niobium-fhetch/vendor/openfhe
+          rev=$(git rev-parse HEAD)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenFHE install dir
+        uses: actions/cache@v5
+        with:
+          path: |
+            vendor/niobium-fhetch/vendor/lib/openfhe
+            vendor/niobium-fhetch/vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ steps.openfhe_rev.outputs.rev }}
+          restore-keys: |
+            ubuntu-latest-openfhe-haze-
+
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Verify devshell evaluates
+        # --no-update-lock-file keeps Nix from trying to refresh the
+        # niobium-compiler input pinned to file:///work/niobium-compiler
+        # (which doesn't exist on the runner). devShells.default does
+        # not reference that input, so lazy evaluation should skip it.
+        run: nix develop --no-update-lock-file --command bash -c 'clang --version && cmake --version'
+
+      - name: Build (OpenFHE + haze, release)
+        run: nix develop --no-update-lock-file --command make build
+
+      - name: Run unit suite (HAZE_TARGET=local, no FHE math)
+        run: nix develop --no-update-lock-file --command make test-unit
+
+      - name: Run sim suite (in-process FHETCH simulator)
+        run: nix develop --no-update-lock-file --command make test-sim
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ github.run_attempt }}
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/runs/
+          if-no-files-found: ignore
+          retention-days: 7
