@@ -303,7 +303,7 @@ void on_post_recording() {
     // path fills the first NativePoly with simulator output; templates
     // are otherwise empty. This removes the burden from test code of
     // having to call hazeReplayBridgeWriteTemplate per output — tests
-    // just call hazeReplay() and the bridge handles it.
+    // just D2H any output and the bridge handles it on the way through.
     niobium::detail::for_each_captured_output([&](const std::string &name) {
         try {
             auto ct = synthesize_haze_ciphertext({});

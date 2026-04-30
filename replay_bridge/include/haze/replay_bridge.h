@@ -35,10 +35,11 @@
 //     hazeSetCiphertextModulus(kModIdx, picked);
 //
 //     // Per-input .bin / .ids and per-output .template files are written
-//     // automatically inside hazeReplay() via a post-recording hook the
-//     // bridge registers during InitCryptoContext. Tests just compute and
-//     // call hazeReplay().
-//     hazeReplay();   // in-process simulator or transport, both work
+//     // automatically inside the D2H-triggered replay via a post-recording
+//     // hook the bridge registers during InitCryptoContext. Tests just
+//     // compute and read back via hazeMemcpy(D2H).
+//     hazeMemcpy(host, dev, bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+//     // Both in-process simulator and HTTP transport go through this path.
 
 #ifndef HAZE_REPLAY_BRIDGE_H
 #define HAZE_REPLAY_BRIDGE_H
@@ -64,14 +65,15 @@ extern "C" {
 /// previously serialized cryptocontext.dat is overwritten.
 ///
 /// niobium::compiler() must already be initialized (i.e. at least one haze
-/// compute call must have happened, or hazeConfigureDevice / hazeReplay
-/// must have been called) so the program directory resolves correctly.
+/// compute call must have happened, or hazeConfigureDevice must have been
+/// called) so the program directory resolves correctly.
 ///
 /// Must be called AFTER every hazeDeviceReset(): reset clears the post-
 /// recording hook this function registers, and without re-registration
-/// hazeReplay() ships an incomplete project (no .bin / .ids / .template
-/// files), which the compiler-side rejects. The setup_integration_compute_config
-/// helper enforces this ordering automatically.
+/// the next D2H-triggered replay ships an incomplete project (no .bin /
+/// .ids / .template files), which the compiler-side rejects. The
+/// setup_integration_compute_config helper enforces this ordering
+/// automatically.
 HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64_t desired_modulus,
                                                        uint64_t *picked_modulus) HAZE_NOEXCEPT;
 

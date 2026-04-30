@@ -89,9 +89,9 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
-        // Plain shadow read. To get post-compute values, the caller
-        // must invoke hazeReplay() before this — replay populates the
-        // shadow buffer with values from the compiler-side simulator.
+        // D2H finalises any in-flight recording (replay + shadow
+        // populate) before reading the shadow buffer. See
+        // haze::copy_to_host for the contract.
         return set_error(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
     }
 

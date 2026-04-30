@@ -40,8 +40,8 @@ simulator internals, see the companion repository:
  |   compiler() singleton + fhetch::* recording API |
  +--------------------------------------------------+
          |
-         | hazeMemcpy(D2H) (or explicit hazeReplay())
-         | finalises the .fhetch trace + manifest
+         | hazeMemcpy(D2H) finalises the .fhetch trace +
+         | manifest, then dispatches replay before reading
          v
          +-------------------+--------------------+
          |                                        |
@@ -78,8 +78,7 @@ simulator internals, see the companion repository:
 4. **Replay & Read** — `hazeMemcpy(host_buf, dev_ptr, n, HAZE_MEMCPY_DEVICE_TO_HOST)`
    finalises the current epoch's `.fhetch` trace, dispatches it to the
    configured target, and copies the simulator-computed values into the host
-   buffer. `hazeReplay()` is also exposed for callers that want to flush the
-   recording without an immediate readback.
+   buffer. D2H is the sole flush trigger; replay happens implicitly inside it.
 
 5. **Submit (production)** — Choose a compiler-side target such as `FPGA_TRI`
    (or `FUNC_SIM` / `FHE_SIM` / `fhetch_sim`) before replay. Haze's transport
@@ -229,7 +228,7 @@ Runtime selector (consumed by `libhaze` itself, not the Makefile):
 
 | Variable      | Purpose                                                                                                                                                                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read on first `hazeReplay`. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
+| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read on the first replay-triggering D2H. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
 
 CMake-level toggles (`-D...`):
 
@@ -318,7 +317,7 @@ Three suites, all built into a single `haze_tests` Catch2 binary and split by
 tag plus environment:
 
 - `test-unit` — state-machine and recording-only coverage. Runs every case not
-  tagged `[integration]`. Does not call `hazeReplay` and does not validate FHE
+  tagged `[integration]`. Does not perform a D2H and does not validate FHE
   math results. Fast (~1 second).
 - `test-sim` — `[integration]`-tagged cases run through libnbfhetch's
   in-process FHETCH simulator (`HAZE_TARGET=local`). Validates real FHE math
@@ -366,10 +365,11 @@ niobium-haze/
   every reference to `cudaStream_t`.
 
 - **Recording, not execution** — Every haze call appends to an in-memory
-  FHETCH trace. Nothing executes until `hazeMemcpy(D2H)` (or an explicit
-  `hazeReplay()`) flushes the recording. Stream-relative ordering is therefore
-  not modelled; the recording is single-threaded by construction and the .fhetch
-  trace itself defines the schedule the compiler optimises against.
+  FHETCH trace. Nothing executes until `hazeMemcpy(D2H)` flushes the
+  recording: D2H finalises the trace, dispatches replay, then reads the
+  shadow buffer. Stream-relative ordering is therefore not modelled; the
+  recording is single-threaded by construction and the .fhetch trace
+  itself defines the schedule the compiler optimises against.
 
 - **Polynomial-level instead of OpenFHE-level** — `niobium-client` integrates
   at OpenFHE's `EvalAdd` / `EvalMult` boundary; haze sits one layer below at

@@ -56,10 +56,3 @@ extern "C" hazeError_t hazeDeviceReset(void) noexcept {
     g_last_error = HAZE_SUCCESS;
     return HAZE_SUCCESS;
 }
-
-extern "C" hazeError_t hazeReplay(void) noexcept {
-    auto result = haze::epoch().replay_and_populate();
-    if (!result)
-        return set_error(haze::to_public_error(result.error()));
-    return HAZE_SUCCESS;
-}
