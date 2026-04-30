@@ -112,6 +112,9 @@
 
               export CMAKE_PREFIX_PATH="$_niobium_vendor''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
               export LD_LIBRARY_PATH="$_openfhe_vendor/lib:$_replay_lib:$_photov_lib:$_ntl_lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              # Re-export so subshells / scripts launched from the dev
+              # shell skip the upward walk.
+              export HAZE_ROOT="$_haze_root"
               unset _haze_root _niobium_root _niobium_vendor _openfhe_vendor _replay_lib _photov_lib _ntl_lib
               echo "haze dev shell ready (clang 19, cmake, jj)."
               echo "Build: cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --parallel"
