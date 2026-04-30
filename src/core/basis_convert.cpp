@@ -57,7 +57,7 @@ std::expected<fhetch::MRP, HazeInternalError> build_mrp_locked(const void *const
 void store_mrp_locked(void *const *dst_polys, const fhetch::MRP &mrp, const uint64_t *base,
                       size_t len) HAZE_REQUIRES(epoch().mutex()) {
     for (size_t i = 0; i < len; ++i) {
-        epoch().store_locked(to_dev_addr(dst_polys[i]), mrp[base[i]]);
+        epoch().store_compute_result_locked(to_dev_addr(dst_polys[i]), mrp[base[i]]);
     }
 }
 

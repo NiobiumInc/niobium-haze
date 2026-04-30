@@ -12,10 +12,8 @@
 // from the Product.
 #pragma once
 
-// RYANPR: Check if all includes in all files changed are needed (clangd)
 #include <atomic>
 #include <mutex>
-#include <string>
 
 namespace haze {
 
@@ -57,28 +55,10 @@ class CompilerBackend {
     // replay() afterwards (see below).
     bool stop_epoch() noexcept;
 
-    // Trigger replay of the most recently recorded epoch.
-    //
-    // Behaviour depends on the configured target:
-    //   - target == "local"  : trace-only mode. The .fhetch file produced
-    //                          by stop_epoch() is left in place and replay
-    //                          is a no-op success. fhetch::result() will
-    //                          NOT return computed values; haze users
-    //                          running locally cannot validate FHE math.
-    //   - target != "local"  : the FHETCH project directory is handed off
-    //                          over the HTTP transport (see
-    //                          niobium-client/scripts/fhetch_server.sh)
-    //                          to a niobium-compiler-built
-    //                          nbcc_fhetch_replay running with the OpenFHE
-    //                          simulator. Probes flow back as
-    //                          serialized_probes/*.ct.
-    //
-    // Users of haze must arrange the transport (server + forwarder)
-    // before any haze D2H readback when target != "local". See
-    // niobium-client/scripts/test_transport_mult.sh for the canonical
-    // orchestration pattern.
-    //
-    // Returns true on success.
+    // Trigger replay of the most recently recorded epoch. Behaviour
+    // depends on the configured target — see haze.h's hazeSetTarget
+    // doc for the three-tier table (local trace-only / fhetch_sim
+    // in-process / HTTP transport). Returns true on success.
     bool replay() noexcept;
 
     // Drop cached state so the next call to ensure_initialized() starts
@@ -95,15 +75,6 @@ class CompilerBackend {
     // path so concurrent first callers don't all run init.
     std::atomic<bool> initialized_{false};
     std::mutex init_mutex_;
-    // Storage backing argv_ across the niobium::compiler().init() call.
-    // We synthesise argv as ["<program>", "--target=<value>", nullptr];
-    // niobium-fhetch's compiler.h does not expose a set_target() setter,
-    // so the only way to configure the replay target is through init()'s
-    // argv parser (compiler.cpp:153-156).
-    // RYANPR: What?
-    std::string prog_storage_;
-    std::string target_arg_storage_;
-    char *argv_[3]{nullptr, nullptr, nullptr};
 };
 
 inline CompilerBackend &backend() noexcept { return CompilerBackend::instance(); }

@@ -46,7 +46,7 @@ hazeError_t binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2, int mod_idx) n
     auto p2 = epoch().lookup_or_create_locked(src2);
     if (!p2)
         return set_error(to_public_error(p2.error()));
-    epoch().store_locked(dst, OpFn(*p1, *p2, q));
+    epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q));
     return HAZE_SUCCESS;
 }
 
@@ -60,7 +60,7 @@ hazeError_t binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar, int mod_idx)
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return set_error(to_public_error(p.error()));
-    epoch().store_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
+    epoch().store_compute_result_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
     return HAZE_SUCCESS;
 }
 
@@ -74,7 +74,7 @@ hazeError_t unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return set_error(to_public_error(p.error()));
-    epoch().store_locked(dst, OpFn(*p, q));
+    epoch().store_compute_result_locked(dst, OpFn(*p, q));
     return HAZE_SUCCESS;
 }
 
@@ -85,7 +85,7 @@ hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t index) noexcept {
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return set_error(to_public_error(p.error()));
-    epoch().store_locked(dst, OpFn(*p, index));
+    epoch().store_compute_result_locked(dst, OpFn(*p, index));
     return HAZE_SUCCESS;
 }
 

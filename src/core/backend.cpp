@@ -12,11 +12,15 @@
 // from the Product.
 //
 // CompilerBackend is the link-time-selected control surface for the
-// niobium::compiler() singleton. The linked library is
-// niobium-fhetch/libnbfhetch; recording happens locally and replay is
-// dispatched to a compiler-side nbcc_fhetch_replay over the FHETCH
-// transport when target != "local".
-// RYANPR: Where is local used/defined? It is mentioned here but not actually used in the compiler implementation.
+// niobium::compiler() singleton (libnbfhetch). Recording happens locally;
+// the configured target string is forwarded to fhetch's compiler via
+// --target=<value> in argv. fhetch interprets "local" as trace-only,
+// "fhetch_sim" as in-process simulator, and any other value as a hand-off
+// to nbcc_fhetch_replay over the FHETCH transport — see niobium-fhetch's
+// compiler.cpp Compiler::replay() for the dispatch switch. Haze itself
+// never compares against "local" by literal; the kLocalTarget /
+// kFhetchSimTarget constants in core/config.hpp keep target comparisons
+// symbolic.
 
 #include "core/backend.hpp"
 
@@ -62,17 +66,22 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // synthesise minimal argv so the compiler's arg parser sees a
         // well-formed invocation. niobium-fhetch's compiler.h does not
         // expose a set_target() setter; the only way to configure the
-        // replay target is through init()'s --target= flag (see
-        // niobium-fhetch/src/compiler.cpp:153-156). prog_storage_ and
-        // target_arg_storage_ own the strings for the duration of init.
-        prog_storage_ = program_name;
-        target_arg_storage_ = "--target=" + target;
-        argv_[0] = prog_storage_.data();
-        argv_[1] = target_arg_storage_.data();
-        argv_[2] = nullptr;
-        // RYANPR: Should this not be 3? You are setting 3 elements. Or two because the last argument is null
+        // replay target is through init()'s --target= flag.
+        //
+        // argv lifetime: fhetch's Compiler::init copies parsed values
+        // into impl_ (the target string lands as a std::string field) and
+        // does not retain argv past the call. Function-local storage is
+        // therefore safe and avoids the ownership ambiguity of holding
+        // these strings on the singleton.
+        std::string prog_storage = program_name;
+        std::string target_arg_storage = "--target=" + target;
+        char* argv[3] = {prog_storage.data(),
+                         target_arg_storage.data(),
+                         nullptr};
+        // argc is 2 — the trailing nullptr is the C-standard argv
+        // terminator, not a counted argument.
         int argc = 2;
-        niobium::compiler().init(argc, argv_);
+        niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
     } catch (...) {
         record_internal_error(HazeInternalError::BackendError,
@@ -123,12 +132,6 @@ bool CompilerBackend::replay() noexcept {
 void CompilerBackend::reset() noexcept {
     std::lock_guard lock(init_mutex_);
     initialized_.store(false, std::memory_order_release);
-    prog_storage_.clear();
-    target_arg_storage_.clear();
-    // RYANPR: Not sure why these are variables in the class when we set them in the `ensure_initialized` and then not use them again. The compiler init probably uses the argv and then copies what it needs and doesn't reference the caller's memory (if the init is well written that is).
-    argv_[0] = nullptr;
-    argv_[1] = nullptr;
-    argv_[2] = nullptr;
 }
 
 } // namespace haze

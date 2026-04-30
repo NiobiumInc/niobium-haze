@@ -24,7 +24,6 @@
 #include <niobium/fhetch_api.h>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace haze {
 
@@ -66,9 +65,9 @@ class EpochState {
 
     // Finalize the current epoch: tag every bound compute result as a
     // fhetch output, write the .fhetch trace via stop_epoch(), then
-    // dispatch replay (no-op for target=="local"; HTTP transport
-    // round-trip for non-local targets) and populate the host shadow
-    // buffer for each output address with the computed values.
+    // dispatch replay (see hazeSetTarget docs for the three-tier table)
+    // and populate the host shadow buffer for each output address with
+    // the computed values.
     //
     // After this call returns, hazeMemcpy(D2H) on any bound output
     // address reads the materialized value from the shadow buffer.
@@ -91,8 +90,14 @@ class EpochState {
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
-    // Bind `addr` to `poly` (replacing any prior binding).
-    void store_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
+    // Bind `addr` to `poly` (replacing any prior binding) and tag it as
+    // a compute output — every store of a freshly computed polynomial
+    // gets a pending-output name on first store. Re-stores at the same
+    // addr keep their original name (insert-no-overwrite); an
+    // intervening invalidate() wipes pending_outputs_, so a fresh store
+    // after H2D / memset gets a new name.
+    void store_compute_result_locked(DevAddr addr,
+                                     niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
 
   private:
@@ -112,13 +117,11 @@ class EpochState {
     // The reverse direction is forbidden; allocator-side code must never
     // call back into EpochState while holding the allocator lock.
     HazeMutex mutex_;
+    // Authoritative bindings for every poly in flight this epoch. Inputs
+    // (lookup_or_create_locked) and outputs (store_compute_result_locked)
+    // both land here; the corresponding pending_outputs_ entry, present
+    // iff the binding is an output, names it for fhetch::tag_output.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
-    // Subset of poly_map_ populated by store_locked (i.e. compute
-    // outputs) — distinct from input polys created via
-    // lookup_or_create_locked. Used by replay_and_populate to tag
-    // every in-flight result as a fhetch output before stop()/replay()
-    // run, so post-replay shadow reads see the materialized values.
-    std::unordered_set<DevAddr> compute_results_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
@@ -137,7 +140,7 @@ inline EpochState &epoch() noexcept {
 // RAII helper used by the compute API entry points: ensures the backend
 // is initialised, then takes the epoch mutex and ensures the recording
 // is active for the lifetime of the session. Compute helpers
-// (lookup_or_create_locked, store_locked) are safe to call while an
+// (lookup_or_create_locked, store_compute_result_locked) are safe to call while an
 // EpochSession is in scope.
 //
 // `backend().ensure_initialized()` runs *before* the lock is taken so
