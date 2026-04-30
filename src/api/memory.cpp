@@ -10,17 +10,16 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
-#include "core/allocator.hpp"
-#include "core/epoch.hpp"
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-
-#include <haze/haze.h>
-#include <haze/haze_types.h>
+#include "core/allocator.hpp"
+#include "core/epoch.hpp"
 
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <haze/haze.h>
+#include <haze/haze_types.h>
 #include <unistd.h>
 
 extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
@@ -53,8 +52,7 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
     // Page-aligned allocation for DMA / O_DIRECT compatibility on
     // pinned-host buffers. Apple Silicon uses 16K pages, Linux x86_64
     // uses 4K — sysconf returns the right value either way.
-    static const size_t kHostAllocAlignment =
-        static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    static const size_t kHostAllocAlignment = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void *p = nullptr;
     if (posix_memalign(&p, kHostAllocAlignment, size) != 0)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
@@ -94,8 +92,7 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
         // Plain shadow read. To get post-compute values, the caller
         // must invoke hazeReplay() before this — replay populates the
         // shadow buffer with values from the compiler-side simulator.
-        return set_error(
-            haze::copy_to_host(dst, haze::to_dev_addr(src), count));
+        return set_error(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {

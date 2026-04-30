@@ -12,17 +12,15 @@
 // from the Product.
 #pragma once
 
-#include "core/config.hpp"
-#include "core/epoch.hpp"
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-
-#include <haze/haze_types.h>
-
-#include <niobium/fhetch_api.h>
+#include "core/config.hpp"
+#include "core/epoch.hpp"
 
 #include <cstdint>
 #include <expected>
+#include <haze/haze_types.h>
+#include <niobium/fhetch_api.h>
 
 namespace haze {
 
@@ -60,13 +58,13 @@ hazeError_t binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar, int mod_idx)
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return set_error(to_public_error(p.error()));
-    epoch().store_compute_result_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
+    epoch().store_compute_result_locked(dst,
+                                        OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
     return HAZE_SUCCESS;
 }
 
 // Polynomial-modulus. Used by hazeNTT, hazeINTT.
-template <auto OpFn>
-hazeError_t unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
+template <auto OpFn> hazeError_t unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
     EpochSession session;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
@@ -79,8 +77,7 @@ hazeError_t unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
 }
 
 // Polynomial-index. Used by hazeAutomorph.
-template <auto OpFn>
-hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t index) noexcept {
+template <auto OpFn> hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t index) noexcept {
     EpochSession session;
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)

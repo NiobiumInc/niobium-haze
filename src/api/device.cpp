@@ -11,6 +11,7 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 #include "core/device.hpp"
+
 #include "common/errors.hpp"
 
 #include <haze/haze.h>
@@ -38,7 +39,9 @@ extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp *prop, int device)
     return set_error(haze::device_fill_properties(prop, device));
 }
 
-extern "C" hazeError_t hazeDeviceSynchronize() noexcept { return HAZE_SUCCESS; }
+extern "C" hazeError_t hazeDeviceSynchronize() noexcept {
+    return HAZE_SUCCESS;
+}
 
 extern "C" hazeError_t hazeDeviceEnablePeerAccess(int /*peer*/, unsigned int /*flags*/) noexcept {
     return set_error(HAZE_ERROR_NOT_SUPPORTED);

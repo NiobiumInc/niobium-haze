@@ -12,10 +12,9 @@
 // from the Product.
 #include "core/device.hpp"
 
-#include <haze/haze_types.h>
-
 #include <cstddef>
 #include <cstring>
+#include <haze/haze_types.h>
 
 namespace haze {
 
@@ -34,9 +33,13 @@ inline constexpr int kNumSupportedRingDims =
 int g_active_device = 0;
 } // namespace
 
-int device_count() noexcept { return kDeviceCount; }
+int device_count() noexcept {
+    return kDeviceCount;
+}
 
-int device_active() noexcept { return g_active_device; }
+int device_active() noexcept {
+    return g_active_device;
+}
 
 hazeError_t device_set_active(int device) noexcept {
     if (device != 0)
@@ -67,6 +70,8 @@ hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept {
     return HAZE_SUCCESS;
 }
 
-void device_reset() noexcept { g_active_device = 0; }
+void device_reset() noexcept {
+    g_active_device = 0;
+}
 
 } // namespace haze

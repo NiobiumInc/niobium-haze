@@ -25,22 +25,20 @@
 // They serve as positive regression coverage; they will not catch the
 // niobium-side leak that remains under investigation.
 
+#include "integration_helpers.hpp"
+
 #include <catch2/catch_test_macros.hpp>
-
-#include <haze/haze.h>        // IWYU pragma: keep
-#include <haze/haze_types.h>  // IWYU pragma: keep
-
 #include <cstddef>
 #include <cstdint>
+#include <haze/haze.h>       // IWYU pragma: keep
+#include <haze/haze_types.h> // IWYU pragma: keep
 #include <vector>
-
-#include "integration_helpers.hpp"
 
 namespace {
 
-constexpr uint64_t kQ = 576460752303415297ULL;       // standard CKKS test prime
+constexpr uint64_t kQ = 576460752303415297ULL; // standard CKKS test prime
 constexpr uint64_t kN = 4096;
-constexpr size_t   kBytes = kN * sizeof(uint64_t);
+constexpr size_t kBytes = kN * sizeof(uint64_t);
 
 // Setup with the canonical test ring dim. Resets HAZE state first so
 // each test sees a clean Config / EpochState / DeviceAllocator. The
@@ -91,7 +89,8 @@ TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096", "[integrat
 
     std::vector<uint64_t> out(kN, 0);
     d2h(out, d_dst);
-    for (uint64_t i = 0; i < kN; ++i) REQUIRE(out[i] == 18);
+    for (uint64_t i = 0; i < kN; ++i)
+        REQUIRE(out[i] == 18);
 
     REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
@@ -104,7 +103,8 @@ TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096", "[integrat
 // operation reuses the first op's output (compute_results_ entry)
 // as input. If poly_map_ ever served a Polynomial with a stale
 // ring_dim, this is the path that would expose it.
-TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ entries", "[integration]") {
+TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ entries",
+          "[integration]") {
     setup_4096();
 
     void *d_a = nullptr, *d_b = nullptr, *d_c = nullptr, *d_t = nullptr;
@@ -127,7 +127,8 @@ TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ en
 
     std::vector<uint64_t> out(kN, 0);
     d2h(out, d_t);
-    for (uint64_t i = 0; i < kN; ++i) REQUIRE(out[i] == 6);
+    for (uint64_t i = 0; i < kN; ++i)
+        REQUIRE(out[i] == 6);
 
     REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
@@ -174,7 +175,8 @@ TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles", "[integrati
 // SUCCESS. A "shared modulus identity convert" (src_base == dst_base,
 // single residue) is the simplest non-trivial case: dst should
 // equal src byte-for-byte.
-TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity convert", "[integration]") {
+TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity convert",
+          "[integration]") {
     setup_4096();
 
     void *src = nullptr, *dst = nullptr;
@@ -182,7 +184,8 @@ TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity con
     REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> src_data(kN);
-    for (uint64_t i = 0; i < kN; ++i) src_data[i] = (i * 7919 + 13) % kQ;
+    for (uint64_t i = 0; i < kN; ++i)
+        src_data[i] = (i * 7919 + 13) % kQ;
     h2d(src, src_data);
 
     const uint64_t base[] = {kQ};
@@ -227,12 +230,13 @@ TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N", 
         REQUIRE(hazeAddScalar(d_dst, d_a, 2, 0, nullptr) == HAZE_SUCCESS);
         std::vector<uint64_t> out(kN, 0);
         d2h(out, d_dst);
-        for (uint64_t i = 0; i < kN; ++i) REQUIRE(out[i] == 7);
+        for (uint64_t i = 0; i < kN; ++i)
+            REQUIRE(out[i] == 7);
         REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
         REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
     }
 
-    setup_4096();  // reset + reconfigure at the same N
+    setup_4096(); // reset + reconfigure at the same N
     {
         void *d_a = nullptr, *d_dst = nullptr;
         REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
@@ -242,7 +246,8 @@ TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N", 
         REQUIRE(hazeAddScalar(d_dst, d_a, 4, 0, nullptr) == HAZE_SUCCESS);
         std::vector<uint64_t> out(kN, 0);
         d2h(out, d_dst);
-        for (uint64_t i = 0; i < kN; ++i) REQUIRE(out[i] == 13);
+        for (uint64_t i = 0; i < kN; ++i)
+            REQUIRE(out[i] == 13);
         REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
         REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
     }

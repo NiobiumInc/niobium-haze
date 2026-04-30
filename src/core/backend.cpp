@@ -30,13 +30,12 @@
 
 #include "core/backend.hpp"
 
-#include "core/config.hpp"
 #include "common/errors.hpp"
-
-#include <niobium/compiler.h>
+#include "core/config.hpp"
 
 #include <atomic>
 #include <mutex>
+#include <niobium/compiler.h>
 #include <string>
 
 namespace haze {
@@ -86,9 +85,7 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // these strings on the singleton.
         std::string prog_storage = program_name;
         std::string target_arg_storage = "--target=" + target;
-        char* argv[3] = {prog_storage.data(),
-                         target_arg_storage.data(),
-                         nullptr};
+        char *argv[3] = {prog_storage.data(), target_arg_storage.data(), nullptr};
         // argc is 2 — the trailing nullptr is the C-standard argv
         // terminator, not a counted argument.
         int argc = 2;
@@ -108,9 +105,13 @@ bool CompilerBackend::is_initialized() const noexcept {
     return initialized_.load(std::memory_order_acquire);
 }
 
-void CompilerBackend::start_recording() noexcept { niobium::compiler().start(); }
+void CompilerBackend::start_recording() noexcept {
+    niobium::compiler().start();
+}
 
-void CompilerBackend::start_epoch() noexcept { niobium::compiler().start_epoch(); }
+void CompilerBackend::start_epoch() noexcept {
+    niobium::compiler().start_epoch();
+}
 
 bool CompilerBackend::stop_epoch() noexcept {
     // Use the canonical stop() rather than stop_epoch(). stop() writes
@@ -134,8 +135,7 @@ bool CompilerBackend::replay() noexcept {
     try {
         return niobium::compiler().replay();
     } catch (...) {
-        record_internal_error(HazeInternalError::BackendError,
-                              "CompilerBackend::replay");
+        record_internal_error(HazeInternalError::BackendError, "CompilerBackend::replay");
         return false;
     }
 }

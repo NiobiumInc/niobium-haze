@@ -16,12 +16,12 @@
 // pending compute is dropped before the backend / allocator state is
 // torn down).
 
+#include "common/errors.hpp"
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
 #include "core/device.hpp"
 #include "core/epoch.hpp"
-#include "common/errors.hpp"
 #include "core/stream.hpp"
 
 #include <haze/haze.h>

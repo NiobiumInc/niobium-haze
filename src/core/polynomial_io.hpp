@@ -12,9 +12,8 @@
 // from the Product.
 #pragma once
 
-#include <niobium/fhetch_api.h>
-
 #include <cstdint>
+#include <niobium/fhetch_api.h>
 #include <string_view>
 #include <vector>
 

@@ -11,11 +11,9 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 #include <catch2/catch_test_macros.hpp>
-
-#include <haze/haze.h>        // IWYU pragma: keep
-#include <haze/haze_types.h>  // IWYU pragma: keep
-
 #include <cstring>
+#include <haze/haze.h>       // IWYU pragma: keep
+#include <haze/haze_types.h> // IWYU pragma: keep
 #include <string_view>
 #include <thread>
 
@@ -58,11 +56,11 @@ TEST_CASE("hazeGetDeviceCount compiles and links", "[unit]") {
 // error surfaces the missing feature immediately.
 TEST_CASE("graph API returns HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeStreamBeginCapture(nullptr)          == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
-    REQUIRE(hazeStreamEndCapture(nullptr, nullptr)   == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeStreamEndCapture(nullptr, nullptr) == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
-    REQUIRE(hazeGraphDestroy(nullptr)          == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeGraphDestroy(nullptr) == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
 }
 
@@ -79,10 +77,10 @@ TEST_CASE("successful stubs do not pollute error state", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Ensure a sequence of successful calls leaves hazeGetLastError as HAZE_SUCCESS.
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    void* ptr = nullptr;
+    void *ptr = nullptr;
     REQUIRE(hazeMalloc(&ptr, 32768) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(ptr)           == HAZE_SUCCESS);
-    REQUIRE(hazeGetLastError()      == HAZE_SUCCESS);
+    REQUIRE(hazeFree(ptr) == HAZE_SUCCESS);
+    REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
 
 // CUDA exposes a thread-local error state via cudaGetLastError with

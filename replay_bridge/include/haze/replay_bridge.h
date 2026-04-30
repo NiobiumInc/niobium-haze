@@ -44,7 +44,6 @@
 #define HAZE_REPLAY_BRIDGE_H
 
 #include <haze/haze_types.h>
-
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -73,13 +72,11 @@ extern "C" {
 /// hazeReplay() ships an incomplete project (no .bin / .ids / .template
 /// files), which the compiler-side rejects. The setup_integration_compute_config
 /// helper enforces this ordering automatically.
-HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(
-    uint64_t  ring_dim,
-    uint64_t  desired_modulus,
-    uint64_t* picked_modulus) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64_t desired_modulus,
+                                                       uint64_t *picked_modulus) HAZE_NOEXCEPT;
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  // HAZE_REPLAY_BRIDGE_H
+#endif // HAZE_REPLAY_BRIDGE_H

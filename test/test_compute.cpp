@@ -1,4 +1,6 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+#include "integration_helpers.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -6,8 +8,6 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <vector>
-
-#include "integration_helpers.hpp"
 
 static constexpr uint64_t kRingDim = 4096;
 static constexpr size_t kBytes = kRingDim * sizeof(uint64_t);

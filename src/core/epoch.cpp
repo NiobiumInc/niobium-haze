@@ -107,8 +107,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     return poly;
 }
 
-void EpochState::store_compute_result_locked(
-    DevAddr addr, niobium::fhetch::Polynomial poly) noexcept {
+void EpochState::store_compute_result_locked(DevAddr addr,
+                                             niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
     // Authoritative output registration: every compute store gets a
     // pending output name on first store. Re-stores at the same addr
@@ -118,8 +118,7 @@ void EpochState::store_compute_result_locked(
     // lookup_or_create_locked never reach this path, so they are
     // never tagged as fhetch outputs.
     if (pending_outputs_.find(addr) == pending_outputs_.end()) {
-        pending_outputs_.emplace(addr,
-            "haze_out_" + std::to_string(output_counter_++));
+        pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
     }
 }
 
@@ -175,16 +174,16 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         fhetch::Polynomial result_poly;
         if (!fhetch::result(name, result_poly)) {
             std::ostringstream body;
-            body << "result('" << name << "') unavailable; shadow at addr 0x"
-                 << std::hex << to_uintptr(addr) << std::dec << " is stale";
+            body << "result('" << name << "') unavailable; shadow at addr 0x" << std::hex
+                 << to_uintptr(addr) << std::dec << " is stale";
             log_error("epoch", body.str());
             continue;
         }
         std::vector<uint64_t> values;
         if (!extract_polynomial_values(result_poly, name, values)) {
             std::ostringstream body;
-            body << "failed to extract values for output '" << name
-                 << "' at addr 0x" << std::hex << to_uintptr(addr) << std::dec;
+            body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
+                 << to_uintptr(addr) << std::dec;
             log_error("epoch", body.str());
             continue;
         }
@@ -193,7 +192,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         allocator().update_shadow(addr, bytes);
     }
 
-    clear_state_locked();   // also clears captured inputs/outputs (E7).
+    clear_state_locked(); // also clears captured inputs/outputs (E7).
     return {};
 }
 

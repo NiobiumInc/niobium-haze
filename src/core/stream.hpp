@@ -12,9 +12,8 @@
 // from the Product.
 #pragma once
 
-#include <haze/haze_types.h>
-
 #include <cstdint>
+#include <haze/haze_types.h>
 
 // Opaque-handle struct definitions. These match the forward-declared C
 // handles in haze_types.h. Allocated via raw new/delete at the C ABI
@@ -35,7 +34,7 @@ namespace haze {
 // counters and a default-stream singleton, not enough invariants to
 // justify the wrapper. Default stream id=0 mirrors CUDA stream-0.
 
-hazeStream_t stream_create() noexcept;       // new haze_stream_s, caller owns
+hazeStream_t stream_create() noexcept;        // new haze_stream_s, caller owns
 void stream_destroy(hazeStream_t s) noexcept; // delete unless is_default
 hazeStream_t stream_default() noexcept;       // lazy-init singleton
 void streams_reset() noexcept;

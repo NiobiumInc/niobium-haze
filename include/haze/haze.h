@@ -14,7 +14,6 @@
 #define HAZE_H
 
 #include <haze/haze_types.h>
-
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -33,14 +32,14 @@ extern "C" {
 // epoch, compiler backend, configuration, streams, events, active
 // device) AND the thread-local last-error flag. Mirrors cudaDeviceReset.
 
-HAZE_API hazeError_t hazeGetDeviceCount(int* count) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeGetDevice(int* device) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeGetDeviceProperties(hazeDeviceProp* prop, int device) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGetDevice(int *device) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGetDeviceProperties(hazeDeviceProp *prop, int device) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeDeviceSynchronize(void) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeDeviceReset(void) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeDeviceEnablePeerAccess(int peer, unsigned int flags) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeDeviceCanAccessPeer(int* can_access, int device, int peer) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int peer) HAZE_NOEXCEPT;
 
 // Device memory: allocation, free, host-pinned buffers, pointer attributes.
 //
@@ -66,27 +65,26 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int* can_access, int device, int pe
 // allocator, etc.) reports HAZE_MEMORY_TYPE_UNREGISTERED — matches
 // cudaPointerGetAttributes' behaviour from CUDA 11 onward.
 
-HAZE_API hazeError_t hazeMalloc(void** ptr, size_t size) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFree(void* ptr) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMallocAsync(void** ptr, size_t size, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFreeAsync(void* ptr, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeHostAlloc(void** ptr, size_t size, unsigned int flags) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFreeHost(void* ptr) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes* attrs,
-                                               const void* ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMalloc(void **ptr, size_t size) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFree(void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFreeAsync(void *ptr, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int flags) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFreeHost(void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
+                                              const void *ptr) HAZE_NOEXCEPT;
 
 // Data transfer: H2D, D2H, D2D, memset, peer copies.
 
-HAZE_API hazeError_t hazeMemcpy(void* dst, const void* src, size_t count,
-                                 hazeMemcpyKind kind) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemcpyAsync(void* dst, const void* src, size_t count,
-                                      hazeMemcpyKind kind, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemset(void* dev_ptr, int value, size_t count) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemsetAsync(void* dev_ptr, int value, size_t count,
-                                      hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemcpyPeerAsync(void* dst, int dst_device,
-                                          const void* src, int src_device,
-                                          size_t count, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
+                                hazeMemcpyKind kind) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count, hazeMemcpyKind kind,
+                                     hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
+                                     hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *src, int src_device,
+                                         size_t count, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,
 // program metadata, target selection, lifecycle reset.
@@ -99,8 +97,8 @@ HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
 /* Set program metadata recorded in the FHETCH trace produced by HAZE.
  * Defaults: name="haze", version="0.1", description="HAZE runtime".
  * Must be called before the first compute call to take effect. */
-HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
-                                          const char* description) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
+                                        const char *description) HAZE_NOEXCEPT;
 
 /* Select the niobium-compiler target for replay.
  *
@@ -133,7 +131,7 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
  *   3. "local"                - default if both above are unset.
  *
  * See hazeReplay() for behaviour-by-target dispatch. */
-HAZE_API hazeError_t hazeSetTarget(const char* target) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 
 /* Trigger replay of the recorded operations.
  *
@@ -155,54 +153,52 @@ HAZE_API hazeError_t hazeReplay(void) HAZE_NOEXCEPT;
 // HAZE_SUCCESS. The handle and signature surface is preserved for
 // CUDA-shape porting parity.
 
-HAZE_API hazeError_t hazeStreamCreate(hazeStream_t* stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeStreamCreateWithPriority(hazeStream_t* stream,
-                                                   unsigned int flags,
-                                                   int priority) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeStreamCreate(hazeStream_t *stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeStreamCreateWithPriority(hazeStream_t *stream, unsigned int flags,
+                                                  int priority) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamDestroy(hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamSynchronize(hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeStreamWaitEvent(hazeStream_t stream, hazeEvent_t event,
-                                          unsigned int flags) HAZE_NOEXCEPT;
+                                         unsigned int flags) HAZE_NOEXCEPT;
 
 // Events: same shape as streams; no-op semantics today.
 
-HAZE_API hazeError_t hazeEventCreate(hazeEvent_t* event) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeEventCreateWithFlags(hazeEvent_t* event,
-                                               unsigned int flags) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeEventCreate(hazeEvent_t *event) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeEventCreateWithFlags(hazeEvent_t *event, unsigned int flags) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeEventDestroy(hazeEvent_t event) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeEventRecord(hazeEvent_t event, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Error handling. Mirrors CUDA's last-error pattern.
 
-HAZE_API hazeError_t                  hazeGetLastError(void) HAZE_NOEXCEPT;
-HAZE_NODISCARD HAZE_API const char*   hazeGetErrorString(hazeError_t error) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGetLastError(void) HAZE_NOEXCEPT;
+HAZE_NODISCARD HAZE_API const char *hazeGetErrorString(hazeError_t error) HAZE_NOEXCEPT;
 
 // Point-wise polynomial arithmetic and scalar variants.
 
-HAZE_API hazeError_t hazeAdd(void* dst, const void* src1, const void* src2,
-                              int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSub(void* dst, const void* src1, const void* src2,
-                              int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMul(void* dst, const void* src1, const void* src2,
-                              int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeAddScalar(void* dst, const void* src, uint64_t scalar,
-                                    int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSubScalar(void* dst, const void* src, uint64_t scalar,
-                                    int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMulScalar(void* dst, const void* src, uint64_t scalar,
-                                    int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAdd(void *dst, const void *src1, const void *src2, int mod_idx,
+                             hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSub(void *dst, const void *src1, const void *src2, int mod_idx,
+                             hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMul(void *dst, const void *src1, const void *src2, int mod_idx,
+                             hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAddScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
+                                   hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSubScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
+                                   hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
+                                   hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Number-theoretic transform (NTT) and its inverse.
 
-HAZE_API hazeError_t hazeNTT(void* dst, const void* src,
-                               int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeINTT(void* dst, const void* src,
-                                int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
+                             hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
+                              hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Automorphism / rotation.
 
-HAZE_API hazeError_t hazeAutomorph(void* dst, const void* src, uint64_t index,
-                                    hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
+                                   hazeStream_t stream) HAZE_NOEXCEPT;
 
 // CRT basis conversion (composite operations: ModUp, ModDown,
 // generalised basis convert).
@@ -215,20 +211,20 @@ HAZE_API hazeError_t hazeAutomorph(void* dst, const void* src, uint64_t index,
 // doc). `params` carries the moduli bases and other scalar metadata
 // only — never polynomial pointers.
 
-HAZE_API hazeError_t hazeBasisConvert(void* const* dst, const void* const* src,
-                                       const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModDown(void* const* dst, const void* const* src,
-                                  const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModUp(void* const* dst, const void* const* src,
-                                const void* params, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeBasisConvert(void *const *dst, const void *const *src, const void *params,
+                                      hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
+                                 hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
+                               hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Graph recording and execution. Names mirror CUDA's graph API. All
 // entries currently return HAZE_ERROR_NOT_SUPPORTED — graph capture is
 // a future task.
 
 HAZE_API hazeError_t hazeStreamBeginCapture(hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeStreamEndCapture(hazeStream_t stream, hazeGraph_t* graph) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeGraphInstantiate(hazeGraphExec_t* exec, hazeGraph_t graph) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeStreamEndCapture(hazeStream_t stream, hazeGraph_t *graph) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGraphInstantiate(hazeGraphExec_t *exec, hazeGraph_t graph) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeGraphLaunch(hazeGraphExec_t exec, hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeGraphExecUpdate(hazeGraphExec_t exec, hazeGraph_t graph) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeGraphExecDestroy(hazeGraphExec_t exec) HAZE_NOEXCEPT;
@@ -236,7 +232,7 @@ HAZE_API hazeError_t hazeGraphDestroy(hazeGraph_t graph) HAZE_NOEXCEPT;
 
 // Profiling / multi-device stubs.
 
-HAZE_API hazeError_t hazeGetPerformanceCounters(void* counters) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeGetPerformanceCounters(void *counters) HAZE_NOEXCEPT;
 
 #ifdef __cplusplus
 }
