@@ -77,8 +77,15 @@ jobs:
           restore-keys: |
             ubuntu-latest-openfhe-haze-
 
-      - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@v3
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Magic Nix Cache
+        # Free, zero-config cache of /nix/store via the GitHub Actions
+        # cache. Restored after sunset by reverse-engineering the new
+        # Actions cache API; documented combo is nix-installer-action
+        # then magic-nix-cache-action.
+        uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Verify devshell evaluates
         # --no-update-lock-file keeps Nix from trying to refresh the
