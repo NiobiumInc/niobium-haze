@@ -109,6 +109,36 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char* name, const char* version,
  * variable when this function is not called. */
 HAZE_API hazeError_t hazeSetTarget(const char* target) HAZE_NOEXCEPT;
 
+/* Trigger replay of the recorded operations.
+ *
+ * Finalises the current epoch's .fhetch trace and dispatches it for
+ * execution. Behaviour depends on the configured target:
+ *
+ * RYANPR: It is not obvious how to set the target.
+ *   target == "local":
+ *     Trace-only mode. Produces <program_dir>/epoch_N/<name>.fhetch
+ *     and returns success. Host shadow buffers are NOT updated, so
+ *     subsequent hazeMemcpy(D2H) calls return whatever the buffers
+ *     held before compute (typically the H2D inputs). Used for
+ *     verifying recording correctness without the FHE pipeline.
+ *
+ *   target != "local":
+ *     The FHETCH project is uploaded over the HTTP transport
+ *     (see niobium-client/scripts/fhetch_server.sh) to a
+ *     niobium-compiler-built nbcc_fhetch_replay running with the
+ *     OpenFHE simulator. The simulator's outputs are written back
+ *     into host shadow buffers for every recorded compute output,
+ *     after which hazeMemcpy(D2H) returns the computed values.
+ *
+ *     Callers in this mode must arrange the transport (server +
+ *     client-side forwarder on PATH, NBCC_FHETCH_SERVER set) before
+ *     this call. See niobium-client/scripts/test_transport_mult.sh
+ *     for the canonical orchestration pattern.
+ *
+ * Calling hazeReplay() with no recording in progress is a no-op
+ * returning HAZE_SUCCESS. */
+HAZE_API hazeError_t hazeReplay(void) HAZE_NOEXCEPT;
+
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer
 // that emits FHETCH IR; nothing executes until hazeMemcpy(D2H) flushes
 // the recording. Stream-relative ordering is therefore not modelled,

@@ -1,3 +1,4 @@
+# RYANPR: use `gitignore macos,windows,linux,vim,visualstudiocode,emacs,cmake,c,c++,python` and merge the results with this. Make sure not to change anything in the fenced gitignore result and then remove duplicate entries.
 # Build directories
 build/
 build-*/
@@ -18,6 +19,10 @@ Makefile
 !CMakeLists.txt
 install_manifest.txt
 _deps/
+
+# Re-include the top-level standalone Makefile (CMake-generated Makefiles
+# in build/ subdirs are still ignored via the build/ rules above).
+!/Makefile
 
 # Ninja
 build.ninja
@@ -92,4 +97,3 @@ Thumbs.db
 
 # HAZE runtime artefacts (compiler recordings written during tests)
 /haze/
-/my-program/

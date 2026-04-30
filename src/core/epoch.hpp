@@ -52,7 +52,7 @@ class EpochState {
 
     // The mutex itself. EpochSession is the canonical caller; other
     // callers take it via std::lock_guard (see is_recording, invalidate,
-    // flush_for_d2h, reset).
+    // replay_and_populate, reset).
     HazeMutex &mutex() noexcept HAZE_RETURN_CAPABILITY(mutex_) { return mutex_; }
 
     // ---- Public methods (take mutex_ internally) ----
@@ -64,12 +64,16 @@ class EpochState {
     // input from new shadow data.
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
-    // Materialize any pending compute output bound to `addr` so a
-    // subsequent shadow read returns the post-replay value. No-op when
-    // there is nothing to flush (not recording, or `addr` has no binding).
-    // Combines the predicate and the materialization atomically under
-    // mutex_ so a concurrent invalidate cannot slip between them.
-    std::expected<void, HazeInternalError> flush_for_d2h(DevAddr addr) noexcept
+    // Finalize the current epoch: tag every bound compute result as a
+    // fhetch output, write the .fhetch trace via stop_epoch(), then
+    // dispatch replay (no-op for target=="local"; HTTP transport
+    // round-trip for non-local targets) and populate the host shadow
+    // buffer for each output address with the computed values.
+    //
+    // After this call returns, hazeMemcpy(D2H) on any bound output
+    // address reads the materialized value from the shadow buffer.
+    // No-op when not recording.
+    std::expected<void, HazeInternalError> replay_and_populate() noexcept
         HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
@@ -111,9 +115,9 @@ class EpochState {
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     // Subset of poly_map_ populated by store_locked (i.e. compute
     // outputs) — distinct from input polys created via
-    // lookup_or_create_locked. Used by flush_for_d2h to materialize
-    // every in-flight result on the first D2H per epoch so subsequent
-    // D2Hs in the same epoch don't read stale shadow.
+    // lookup_or_create_locked. Used by replay_and_populate to tag
+    // every in-flight result as a fhetch output before stop()/replay()
+    // run, so post-replay shadow reads see the materialized values.
     std::unordered_set<DevAddr> compute_results_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
@@ -165,10 +169,10 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 };
 
 // D2H-side helper: copies bytes from the device shadow buffer to a host
-// destination after triggering any pending materialization. Called by
-// hazeMemcpy(D2H). Must NOT be invoked from inside an EpochSession —
-// flush_for_d2h takes the epoch mutex itself.
-hazeError_t copy_to_host_with_flush(void *dst, DevAddr src, size_t count) noexcept
-    HAZE_EXCLUDES(epoch().mutex());
+// destination. Plain shadow read — does NOT trigger any recording
+// finalization or replay. Callers that need post-compute values must
+// invoke hazeReplay() (haze::epoch().replay_and_populate()) first to
+// materialize results into the shadow buffer.
+hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
 } // namespace haze

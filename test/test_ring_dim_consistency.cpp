@@ -34,6 +34,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "integration_helpers.hpp"
+
 namespace {
 
 constexpr uint64_t kQ = 576460752303415297ULL;       // standard CKKS test prime
@@ -44,14 +46,17 @@ constexpr size_t   kBytes = kN * sizeof(uint64_t);
 // each test sees a clean Config / EpochState / DeviceAllocator. The
 // reset is deliberate — without it Config / poly_map_ state from a
 // prior test could leak through.
+//
+// Routes through haze_replay_bridge so the test runs end-to-end via
+// the FHETCH transport: bridge picks the actual tower modulus near
+// 2^bits(kQ), aligns haze's ciphertext modulus, sets target=FUNC_SIM
+// so hazeReplay() dispatches to nbcc_fhetch_replay rather than no-op'ing.
 void setup_4096() {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::setup_integration_compute_config(kN, kQ, 0);
 }
 
 inline void d2h(std::vector<uint64_t> &dst, const void *dev) {
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(dst.data(), dev, dst.size() * sizeof(uint64_t),
                        HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 }
@@ -71,7 +76,7 @@ inline void h2d(void *dev, const std::vector<uint64_t> &src) {
 // back to a Polynomial reaching tag_input with ring_dim ≠ 4096 — this
 // test is the simplest end-to-end exercise that would surface the
 // HAZE-side variant of that bug.
-TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096") {
+TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096", "[integration]") {
     setup_4096();
 
     void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
@@ -99,7 +104,7 @@ TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096") {
 // operation reuses the first op's output (compute_results_ entry)
 // as input. If poly_map_ ever served a Polynomial with a stale
 // ring_dim, this is the path that would expose it.
-TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ entries") {
+TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ entries", "[integration]") {
     setup_4096();
 
     void *d_a = nullptr, *d_b = nullptr, *d_c = nullptr, *d_t = nullptr;
@@ -137,7 +142,7 @@ TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ en
 // a fresh ensure_recording_locked at the start of the next, so any
 // state leak across epoch boundaries that depends on accumulated
 // heap pressure would surface here.
-TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles") {
+TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles", "[integration]") {
     for (int iter = 0; iter < 50; ++iter) {
         setup_4096();
 
@@ -169,7 +174,7 @@ TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles") {
 // SUCCESS. A "shared modulus identity convert" (src_base == dst_base,
 // single residue) is the simplest non-trivial case: dst should
 // equal src byte-for-byte.
-TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity convert") {
+TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity convert", "[integration]") {
     setup_4096();
 
     void *src = nullptr, *dst = nullptr;
@@ -210,7 +215,7 @@ TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity con
 // holds onto the ring_dim from the first init across subsequent
 // epochs; observed as "[NBCC ERROR] Ring dimension mismatch: memory
 // has X expected Y"). That bug is filed separately.
-TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N") {
+TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N", "[integration]") {
     // Two epochs, both at N=4096, separated by an explicit reset.
     setup_4096();
     {

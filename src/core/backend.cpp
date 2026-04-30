@@ -12,11 +12,11 @@
 // from the Product.
 //
 // CompilerBackend is the link-time-selected control surface for the
-// niobium::compiler() singleton. Today the linked library is
-// niobium-compiler/libnbcc; future builds may swap to the niobium-fhetch
-// dummy compiler when its bugs are sorted. HAZE source is unchanged
-// either way — the backend only routes through niobium::compiler() which
-// resolves at link time.
+// niobium::compiler() singleton. The linked library is
+// niobium-fhetch/libnbfhetch; recording happens locally and replay is
+// dispatched to a compiler-side nbcc_fhetch_replay over the FHETCH
+// transport when target != "local".
+// RYANPR: Where is local used/defined? It is mentioned here but not actually used in the compiler implementation.
 
 #include "core/backend.hpp"
 
@@ -59,16 +59,21 @@ bool CompilerBackend::ensure_initialized() noexcept {
         const std::string target = config().target();
 
         // niobium::compiler().init() takes (int& argc, char** argv) — we
-        // synthesise minimal argv (the program name) so the compiler's
-        // arg parser sees a well-formed invocation. prog_storage_ owns
-        // the string for the duration of init.
+        // synthesise minimal argv so the compiler's arg parser sees a
+        // well-formed invocation. niobium-fhetch's compiler.h does not
+        // expose a set_target() setter; the only way to configure the
+        // replay target is through init()'s --target= flag (see
+        // niobium-fhetch/src/compiler.cpp:153-156). prog_storage_ and
+        // target_arg_storage_ own the strings for the duration of init.
         prog_storage_ = program_name;
+        target_arg_storage_ = "--target=" + target;
         argv_[0] = prog_storage_.data();
-        argv_[1] = nullptr;
-        int argc = 1;
+        argv_[1] = target_arg_storage_.data();
+        argv_[2] = nullptr;
+        // RYANPR: Should this not be 3? You are setting 3 elements. Or two because the last argument is null
+        int argc = 2;
         niobium::compiler().init(argc, argv_);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
-        niobium::compiler().set_target(target);
     } catch (...) {
         record_internal_error(HazeInternalError::BackendError,
                               "CompilerBackend::ensure_initialized");
@@ -87,14 +92,43 @@ void CompilerBackend::start_recording() noexcept { niobium::compiler().start(); 
 
 void CompilerBackend::start_epoch() noexcept { niobium::compiler().start_epoch(); }
 
-bool CompilerBackend::stop_epoch() noexcept { return niobium::compiler().stop_epoch(); }
+bool CompilerBackend::stop_epoch() noexcept {
+    // Use the canonical stop() rather than stop_epoch(). stop() writes
+    // both the .fhetch trace and fhetch_replay.json (via write_replay_json
+    // in compiler.cpp:209), which the compiler-side nbcc_fhetch_replay
+    // requires to dispatch. stop_epoch() only writes the per-epoch trace
+    // and does not produce replay.json — fine for libnbcc's intra-process
+    // multi-epoch flow (its stop_epoch does record+replay+reset internally),
+    // but breaks the transport hand-off used by libnbfhetch.
+    //
+    // Haze's recording lifecycle is single-epoch per haze::epoch().reset(),
+    // so the canonical stop() is the right semantic match.
+    return niobium::compiler().stop();
+}
+
+bool CompilerBackend::replay() noexcept {
+    // niobium::compiler().replay() can throw on resource-exhaustion paths
+    // inside the niobium-fhetch dispatch (e.g. std::system_error from a
+    // failed subprocess fork on the transport route). Catching here keeps
+    // the haze C ABI exception-clean and surfaces a coherent BackendError.
+    try {
+        return niobium::compiler().replay();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendError,
+                              "CompilerBackend::replay");
+        return false;
+    }
+}
 
 void CompilerBackend::reset() noexcept {
     std::lock_guard lock(init_mutex_);
     initialized_.store(false, std::memory_order_release);
     prog_storage_.clear();
+    target_arg_storage_.clear();
+    // RYANPR: Not sure why these are variables in the class when we set them in the `ensure_initialized` and then not use them again. The compiler init probably uses the argv and then copies what it needs and doesn't reference the caller's memory (if the init is well written that is).
     argv_[0] = nullptr;
     argv_[1] = nullptr;
+    argv_[2] = nullptr;
 }
 
 } // namespace haze

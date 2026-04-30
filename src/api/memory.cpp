@@ -50,6 +50,7 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
     if (ptr == nullptr || size == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     void *p = nullptr;
+    // RYANPR: What is this 4096 constant? That seems like a random and probably bad choice.
     if (posix_memalign(&p, 4096, size) != 0)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     haze::allocator().register_host_pointer(p);
@@ -59,6 +60,7 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
 
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
     haze::allocator().unregister_host_pointer(ptr);
+    // RYANPR: Why are we calling the real life free? That seems like a bug.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;
 }
@@ -84,10 +86,11 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
-        // copy_to_host_with_flush triggers any pending materialization,
-        // then reads bytes from the shadow into dst.
+        // Plain shadow read. To get post-compute values, the caller
+        // must invoke hazeReplay() before this — replay populates the
+        // shadow buffer with values from the compiler-side simulator.
         return set_error(
-            haze::copy_to_host_with_flush(dst, haze::to_dev_addr(src), count));
+            haze::copy_to_host(dst, haze::to_dev_addr(src), count));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {

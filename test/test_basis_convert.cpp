@@ -41,25 +41,25 @@ static void configure_three_moduli() {
 
 // Parameter validation.
 
-TEST_CASE("hazeBasisConvert rejects null params") {
+TEST_CASE("hazeBasisConvert rejects null params", "[unit]") {
     configure_three_moduli();
     REQUIRE(hazeBasisConvert(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
-TEST_CASE("hazeModDown rejects null params") {
+TEST_CASE("hazeModDown rejects null params", "[unit]") {
     configure_three_moduli();
     REQUIRE(hazeModDown(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
-TEST_CASE("hazeModUp rejects null params") {
+TEST_CASE("hazeModUp rejects null params", "[unit]") {
     configure_three_moduli();
     REQUIRE(hazeModUp(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
-TEST_CASE("hazeBasisConvert rejects empty source base") {
+TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
     configure_three_moduli();
     void *dst = nullptr;
     REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
@@ -80,7 +80,7 @@ TEST_CASE("hazeBasisConvert rejects empty source base") {
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
+TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]") {
     // rescale_base contains a prime not present in src_base. The HAZE
     // layer must reject this BEFORE opening an EpochSession — otherwise
     // the next D2H would replay a dirty recording and crash.
@@ -114,6 +114,7 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
     REQUIRE(hazeMemcpy(b, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 3);
 
@@ -123,7 +124,7 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base") {
     REQUIRE(hazeFree(d) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len") {
+TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len", "[unit]") {
     // Equal-length rescale would leave dst empty (FhetchApi.cpp:1660
     // asserts rescale must be a *proper* subset). Strictly-greater is
     // outright invalid. Both must surface as INVALID_VALUE before any
@@ -153,7 +154,7 @@ TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len") {
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len") {
+TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
     // digit_bases is flat; sum of digit_base_lens must equal
     // digit_bases_total_len, else slicing reads out of bounds.
     configure_three_moduli();
@@ -199,7 +200,7 @@ TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len") {
 // Cross-checking non-trivial FBC values against an OpenFHE reference
 // is deferred to integration tests (FIDESlib examples).
 
-TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values") {
+TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[integration]") {
     // src_base = {q0, q1}, dst_base = {q0, q1, q2}. Every prime in
     // src_base is also in dst_base, so the first two dst residues are
     // same-modulus copies of the corresponding src residues. The third
@@ -241,8 +242,11 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values") {
     std::vector<uint64_t> out0(kRingDim, 0);
     std::vector<uint64_t> out1(kRingDim, 0);
     std::vector<uint64_t> out2(kRingDim, 0);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out2.data(), d2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     // Same-modulus copies: dst residue == src residue, every coefficient.
@@ -252,7 +256,7 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values") {
     }
 }
 
-TEST_CASE("hazeBasisConvert: zero input produces zero output") {
+TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") {
     // FBC of zero polynomials is zero on every target modulus, so we
     // can verify the non-trivial dst residues without computing FBC.
     configure_three_moduli();
@@ -284,7 +288,9 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output") {
 
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
     // Catches both (a) a backend that writes garbage and (b) the
@@ -297,7 +303,7 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output") {
     }
 }
 
-TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)") {
+TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integration]") {
     // Aliasing src[i] == dst[j] for any (i,j) is documented as safe in
     // core/basis_convert.cpp because all reads complete before any
     // store. Test the simplest case: same-modulus 1->1 convert with
@@ -322,21 +328,22 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)") {
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 42);
 
     REQUIRE(hazeFree(p0) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown: zero input rescales to zero output") {
+TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     // ApproxModDown is rescale_fbc(x, rescale_base): CRT-divide x by
     // P=prod(rescale_base) with rounding. For x identically zero on
     // every residue, every output is also zero — we can assert exact
     // values without doing any FBC arithmetic.
     //
-    // Multi-output verification: with the EpochState::flush_for_d2h
-    // fix, both d0 and d1 shadow buffers are persisted on the first
-    // D2H, so reading both back returns the materialized result, not
+    // Multi-output verification: replay_and_populate writes every bound
+    // compute result back to its shadow buffer in one pass, so reading
+    // both d0 and d1 back via D2H returns the materialized result, not
     // stale post-allocator-reset memory.
     configure_three_moduli();
 
@@ -371,7 +378,9 @@ TEST_CASE("hazeModDown: zero input rescales to zero output") {
     // Initialise to non-zero so a no-op D2H would surface as a failure.
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(out0[i] == 0);
@@ -385,7 +394,7 @@ TEST_CASE("hazeModDown: zero input rescales to zero output") {
     REQUIRE(hazeFree(d1) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModUp: zero input produces zero output across both digits") {
+TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[integration]") {
     // dig_decomp(x, digit_bases, p_base): for each digit i, take the
     // x|_{digit_bases[i]} subset and FBC-extend it onto src_base ∪
     // p_base. For x identically zero, every digit's every output is
@@ -431,6 +440,7 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits") {
 
     // D2H every output and verify exact zero. Initialise the host
     // buffer to a sentinel so a skipped D2H is detectable.
+    REQUIRE(hazeReplay() == HAZE_SUCCESS);
     for (size_t slot = 0; slot < 6; ++slot) {
         std::vector<uint64_t> out(kRingDim, 0xDEADBEEF);
         REQUIRE(hazeMemcpy(out.data(), dst_storage[slot], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
@@ -744,6 +754,7 @@ static void check_against_reference(const std::vector<void *> &dst,
     REQUIRE(dst.size() == dst_base.size());
     for (size_t j = 0; j < dst.size(); ++j) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
+        REQUIRE(hazeReplay() == HAZE_SUCCESS);
         REQUIRE(hazeMemcpy(got.data(), dst[j], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t s = 0; s < kRingDim; ++s) {
             INFO("dst index " << j << " (mod " << dst_base[j] << ") slot " << s);
@@ -754,7 +765,7 @@ static void check_against_reference(const std::vector<void *> &dst,
 
 } // namespace
 
-TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference") {
+TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
@@ -788,7 +799,7 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference") {
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModDown: 12-limb rescale matches reference") {
+TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
@@ -825,7 +836,7 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference") {
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference") {
+TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
