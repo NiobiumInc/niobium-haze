@@ -202,13 +202,18 @@ rebuild_context_locked(uint64_t ring_dim, uint64_t desired_modulus) {
     return {};
 }
 
-// Map a BridgeError to the matching hazeError_t for the C ABI.
+// Map a BridgeError to the matching hazeError_t for the C ABI. The
+// granular BridgeError values exist for diagnostics (log_error tags,
+// future debug surfaces); the public hazeError_t is intentionally
+// coarser.
 hazeError_t to_haze_error(BridgeError e) {
     switch (e) {
-        case BridgeError::InvalidRingDim:    return HAZE_ERROR_INVALID_VALUE;
-        case BridgeError::InvalidModulus:    return HAZE_ERROR_INVALID_VALUE;
-        case BridgeError::KeygenFailed:      return HAZE_ERROR_LAUNCH_FAILURE;
-        case BridgeError::OpenFheUnavailable: return HAZE_ERROR_LAUNCH_FAILURE;
+        case BridgeError::InvalidRingDim:
+        case BridgeError::InvalidModulus:
+            return HAZE_ERROR_INVALID_VALUE;
+        case BridgeError::KeygenFailed:
+        case BridgeError::OpenFheUnavailable:
+            return HAZE_ERROR_LAUNCH_FAILURE;
     }
     return HAZE_ERROR_LAUNCH_FAILURE;
 }

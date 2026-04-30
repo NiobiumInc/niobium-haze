@@ -24,8 +24,6 @@
 #                            test-transport; the compiler binary is invoked
 #                            directly (no HTTP transport from haze's
 #                            standalone path). No default.
-#   FHETCH_SIM_TARGET        HAZE_TARGET value selecting libnbfhetch's
-#                            in-process simulator. Default: fhetch_sim.
 # ==============================================================================
 
 SHELL := /bin/bash
@@ -100,11 +98,6 @@ CMAKE_JSON_INCLUDE_DIR_FLAG := $(if $(JSON_INCLUDE_DIR),-DJSON_INCLUDE_DIR="$(JS
 # explicitly when running transport-path tests:
 #   make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
 NIOBIUM_COMPILER_ROOT ?=
-
-# HAZE_TARGET value that selects libnbfhetch's in-process simulator.
-# Surfaced as a knob so the discovery work in plan section H1 lands here
-# without scattering string literals across the Makefile / CMake / src.
-FHETCH_SIM_TARGET ?= fhetch_sim
 
 # Per-test artifact runs dir (tests cd here so libnbfhetch's program_dir
 # resolves under build/ and not into the source tree).
@@ -218,8 +211,10 @@ test-unit: build ## Run unit suite (HAZE_TARGET=local; no FHE math)
 test-sim: build ## Run sim suite (in-process fhetch_sim; validates FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
 	@mkdir -p "$(HAZE_RUNS_DIR)"
+	@# Target literal must match haze::kFhetchSimTarget in src/core/config.hpp
+	@# AND the haze_sim_tests ENVIRONMENT entry in CMakeLists.txt.
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=$(FHETCH_SIM_TARGET) "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
+	  HAZE_TARGET=fhetch_sim "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
 
 test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	@if [ -z "$(NIOBIUM_COMPILER_ROOT)" ]; then \

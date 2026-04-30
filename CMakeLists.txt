@@ -247,12 +247,6 @@ target_compile_definitions(haze_tests PRIVATE
 # ctest entries
 # ---------------------------------------------------------------------------
 
-# HAZE_TARGET value selecting libnbfhetch's in-process simulator. Exposed
-# as a cache var so the symbolic name lives in one place; haze's
-# kFhetchSimTarget constant in src/core/config.hpp must agree.
-set(HAZE_FHETCH_SIM_TARGET "fhetch_sim" CACHE STRING
-    "HAZE_TARGET string that dispatches replay through fhetch_sim in-process")
-
 option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
        "Register haze_transport_tests (transport round-trip via nbcc_fhetch_replay). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-transport target invokes scripts/test_haze_integration_standalone.sh directly without needing this flag."
        OFF)
@@ -270,10 +264,13 @@ set_tests_properties(haze_unit_tests PROPERTIES
 # Sim suite: in-process fhetch_sim. No transport setup needed; always
 # registered so `ctest` (or the Makefile's `make test`) exercises real
 # FHE math without external dependencies.
+#
+# Target literal must match haze::kFhetchSimTarget in src/core/config.hpp
+# AND the test-sim recipe in Makefile.
 add_test(NAME haze_sim_tests
          COMMAND haze_tests "[integration]")
 set_tests_properties(haze_sim_tests PROPERTIES
-    ENVIRONMENT "HAZE_TARGET=${HAZE_FHETCH_SIM_TARGET}")
+    ENVIRONMENT "HAZE_TARGET=fhetch_sim")
 
 if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set(NIOBIUM_COMPILER_ROOT "" CACHE PATH
