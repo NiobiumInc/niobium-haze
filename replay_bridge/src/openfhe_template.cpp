@@ -26,6 +26,7 @@
 #include "common/log.hpp"
 
 #include <niobium/compiler.h>
+#include <niobium/fhetch_api.h>
 
 #include <bit>
 #include <cassert>
@@ -385,3 +386,129 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(
         return HAZE_ERROR_LAUNCH_FAILURE;
     }
 }
+// ============================================================================
+// fhetch::result() free-function overloads — read serialized_probes/<name>.ct
+// and pull the first polynomial residue out as a fhetch::Polynomial / MRP /
+// MRPArray for clients that record raw polynomial ops.
+//
+// Marked with default visibility because the bridge dylib is built with
+// CXX_VISIBILITY_PRESET=hidden; libhaze imports these symbols at link time.
+// ============================================================================
+
+#define NIOBIUM_FHETCH_RESULT_API __attribute__((visibility("default")))
+
+namespace niobium::fhetch {
+
+namespace {
+
+// Convert OpenFHE's Format (utils/inttypes.h, global enum) to fhetch::Format.
+inline Format openfhe_to_fhetch_format(::Format fmt) {
+    return fmt == ::Format::COEFFICIENT ? Format::Coefficient : Format::Evaluation;
+}
+
+// Load <program_dir>/serialized_probes/<name>.ct as a Ciphertext<DCRTPoly>.
+// Returns nullptr on any I/O / parse error.
+lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string& name) {
+    auto dir = niobium::compiler().get_program_directory();
+    auto ct_path = dir / "serialized_probes" / (name + ".ct");
+    if (!std::filesystem::exists(ct_path)) {
+        haze::log_error("fhetch::result",
+                        "'" + name + "' not found at " + ct_path.string());
+        return nullptr;
+    }
+    lbcrypto::Ciphertext<DCRTPoly> ct;
+    if (!lbcrypto::Serial::DeserializeFromFile(ct_path.string(), ct,
+                                               lbcrypto::SerType::BINARY)) {
+        haze::log_error("fhetch::result",
+                        "failed to deserialize " + ct_path.string());
+        return nullptr;
+    }
+    return ct;
+}
+
+// Pull a single residue's coefficients out of a NativePoly as
+// std::vector<uint64_t>.
+std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly& np) {
+    const auto& vals = np.GetValues();
+    const size_t n = vals.GetLength();
+    std::vector<uint64_t> out;
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        out.push_back(vals[i].ConvertToInt());
+    }
+    return out;
+}
+
+}  // namespace
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string& name, Polynomial& p) {
+    auto ct = load_serialized_probe(name);
+    if (!ct) return false;
+
+    const auto& elements = ct->GetElements();
+    if (elements.empty()) {
+        haze::log_error("fhetch::result",
+                        "'" + name + "' has no DCRTPoly elements");
+        return false;
+    }
+    const auto& towers = elements[0].GetAllElements();
+    if (towers.empty()) {
+        haze::log_error("fhetch::result",
+                        "'" + name + "' has no NativePoly towers");
+        return false;
+    }
+    const auto& np = towers[0];
+    auto values = native_poly_values(np);
+    p = Polynomial::from_data(values, values.size(),
+                              openfhe_to_fhetch_format(np.GetFormat()));
+    return true;
+}
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string& name, MRP& m) {
+    auto ct = load_serialized_probe(name);
+    if (!ct) return false;
+
+    const auto& elements = ct->GetElements();
+    if (elements.empty()) return false;
+    const auto& towers = elements[0].GetAllElements();
+    if (towers.empty()) return false;
+
+    std::vector<std::pair<Polynomial, uint64_t>> pairs;
+    pairs.reserve(towers.size());
+    for (const auto& np : towers) {
+        auto values = native_poly_values(np);
+        auto poly = Polynomial::from_data(values, values.size(),
+                                          openfhe_to_fhetch_format(np.GetFormat()));
+        pairs.emplace_back(std::move(poly), np.GetModulus().ConvertToInt());
+    }
+    m = MRP::from_pairs(pairs);
+    return true;
+}
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string& name, MRPArray& arr) {
+    auto ct = load_serialized_probe(name);
+    if (!ct) return false;
+
+    const auto& elements = ct->GetElements();
+    MRPArray out(elements.size());
+    for (size_t i = 0; i < elements.size(); ++i) {
+        const auto& dcrt = elements[i];
+        const auto& towers = dcrt.GetAllElements();
+        std::vector<std::pair<Polynomial, uint64_t>> pairs;
+        pairs.reserve(towers.size());
+        for (const auto& np : towers) {
+            auto values = native_poly_values(np);
+            auto poly = Polynomial::from_data(values, values.size(),
+                                              openfhe_to_fhetch_format(np.GetFormat()));
+            pairs.emplace_back(std::move(poly), np.GetModulus().ConvertToInt());
+        }
+        out[i] = MRP::from_pairs(pairs);
+    }
+    arr = std::move(out);
+    return true;
+}
+
+}  // namespace niobium::fhetch
