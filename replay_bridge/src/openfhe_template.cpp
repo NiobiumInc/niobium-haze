@@ -6,67 +6,85 @@
 //
 // haze_replay_bridge implementation: synthesize the CryptoContext +
 // per-input cereal-binary .bin files + per-output ciphertext templates that
-// the compiler-side nbcc_fhetch_replay needs in order to write
-// serialized_probes/ from a haze recording. See replay_bridge.h for the
-// public API and architectural rationale.
+// the in-process fhetch_sim AND compiler-side nbcc_fhetch_replay both
+// consume to write serialized_probes/<name>.ct from a haze recording.
+// See replay_bridge.h for the public API and architectural rationale.
+//
+// Thread-safety: the bridge is called only from haze's epoch path, which
+// already holds EpochState::mutex_, and from haze tests (single-threaded
+// catch2 runner). Bridge state is therefore implicitly serialized; no
+// internal lock needed.
 
 #include <haze/replay_bridge.h>
 
-// RYANPR: Lint that all of these includes are needed.
 #include "openfhe.h"
 #include "ciphertext-ser.h"
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "scheme/ckksrns/ckksrns-ser.h"
 
+#include "common/log.hpp"
+
 #include <niobium/compiler.h>
 
 #include <bit>
+#include <cassert>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <functional>
-#include <iostream>
 #include <map>
-#include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
 // libnbfhetch internal helpers used by the bridge. Forward-declared here
-// rather than pulled in via "compiler_internal.h" because:
+// rather than via "compiler_internal.h" because that header lives under
+// libnbfhetch's PRIVATE src/ tree and including it from a downstream
+// library would couple the bridge to libnbfhetch's source layout.
 //
-// RYANPR: This seems like something that could cause a drift when fhetch drifts. Maybe fhetch needs to make whatever parts public.
-//   1. compiler_internal.h is part of libnbfhetch's PRIVATE include tree
-//      (it lives under src/, not include/) and is intended for libnbfhetch's
-//      own translation units. Including it from a downstream library would
-//      add a dependency on libnbfhetch's source layout that the bridge's
-//      target_include_directories doesn't currently express.
-//
-// RYANPR: This seems like a hack. Were these types added by our custom changes to FHETCH anyway? If so, we should look into how the niobium-client handles writing ciphertexts and if not modify our changes to make these APIs public.
-//   2. The cereal polymorphic-type registry is per-shared-library —
-//      calling lbcrypto::Serial::SerializeToFile from this TU directly
-//      trips "unregistered polymorphic type (lbcrypto::CryptoContextImpl<...>)".
-//      Routing the writes through libnbfhetch's own TU (where the auto-facade
-//      already includes ciphertext-ser.h / cryptocontext-ser.h and forces
-//      static initialisation) is the cleanest fix; the extern declarations
-//      below reach those entry points without exposing the full Impl layout.
-//
-// If libnbfhetch ever publishes a stable C++ public API for these
-// operations, replace these externs with that header include.
+// TODO(fhetch-publish): the four detail symbols below resolve in
+// libnbfhetch's TU because cereal polymorphic-type registrations are
+// per-shared-library — calling lbcrypto::Serial::SerializeToFile from
+// here directly would trip "unregistered polymorphic type" on
+// CryptoContextImpl / Ciphertext. Long-term, ask niobium-fhetch to
+// publish a stable C++ API for write_ciphertext_template,
+// write_ciphertext_input_bin, for_each_captured_input, and
+// for_each_captured_output, then replace the externs with that header
+// include. niobium-client's auto-facade routes through the same
+// libnbfhetch TU (auto_facade.cpp's serialize helpers) so a published
+// API would also let niobium-client drop its own forwarder shims.
 namespace niobium::detail {
+
+// Serialize an empty Ciphertext<DCRTPoly> shell to
+// <program_dir>/ciphertext_templates/<name>.template. The replay path
+// (in-process fhetch_sim or transport) deserializes this template,
+// fills its first NativePoly with computed values, and re-serializes
+// it as serialized_probes/<name>.ct.
 bool write_ciphertext_template(
     const std::string& name,
     const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& ct);
-// RYANPR: Double check that the ciphertext bin is not just the serialized polynomial in some order (lsb/msb, which limb is which level, etc). We would remove the need for this if serialization is really just the raw bytes in order.
+
+// Serialize a populated Ciphertext<DCRTPoly> as the cereal-binary
+// {.bin, .ids} pair the compiler-side fhetch_driver expects for an
+// input named `name`.
 bool write_ciphertext_input_bin(
     const std::string& name,
     const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& ct,
     const std::vector<uint64_t>& addr_ids);
-// RYANPR: Add a description to what each of these functions is (for the ones you end up keeping)
+
+// Iterate every captured input recorded via fhetch::tag_input. The
+// callback receives (name, addr_id, modulus, values) for each per-name
+// element so the bridge can fan-out a single ciphertext per name.
 void for_each_captured_input(
     const std::function<void(const std::string&, uint64_t, uint64_t,
                               const std::vector<uint64_t>&)>& cb);
+
+// Iterate every captured output name recorded via fhetch::tag_output.
+// Callback fires once per output name.
 void for_each_captured_output(
     const std::function<void(const std::string&)>& cb);
+
 }  // namespace niobium::detail
 
 namespace {
@@ -74,12 +92,26 @@ namespace {
 namespace fs = std::filesystem;
 using DCRTPoly = lbcrypto::DCRTPoly;
 
+// BridgeError surfaces specific failure modes from the C-ABI entry to
+// help callers diagnose synthesis issues. Lives in this file (rather
+// than a header) because there's exactly one caller and one
+// implementation TU.
+enum class BridgeError {
+    InvalidRingDim,
+    InvalidModulus,
+    KeygenFailed,
+    OpenFheUnavailable,
+};
+
 // Per-process cache: same (ring_dim, desired_modulus) reuses the same
 // CryptoContext + keypair across cryptocontext.dat, every template, and
 // every input bin. OpenFHE resolves Ciphertext<->CryptoContext bindings
-// through a static tag registry on deserialize; sharing the CC keeps the
-// tag stable. The keypair is needed only as a structural carrier for
-// Encrypt() — we never decrypt.
+// through a static tag registry on deserialize; sharing the CC keeps
+// the tag stable.
+//
+// The keypair stays cached even though we don't decrypt — Encrypt()
+// needs a publicKey to produce a structurally valid Ciphertext<DCRTPoly>.
+// See TODO(haze:no-keygen) below.
 struct CachedContext {
     uint64_t ring_dim = 0;
     uint64_t desired_modulus = 0;
@@ -88,63 +120,78 @@ struct CachedContext {
     lbcrypto::KeyPair<DCRTPoly> keys;
 };
 
-// RYANPR: Why do we need a mutex for this simple application? This seems overengineered.
 CachedContext g_ctx;
-std::mutex    g_ctx_mu;
 
-// RYANPR: Since this is just bit_width name it bit_width_including_zero or something. I'm also not sure we ever get a modulus of zero; they should all be primes...
-// Number of bits needed to represent `modulus` (i.e. `floor(log2(modulus))
-// + 1`). Used to size the prime OpenFHE picks. C++20 std::bit_width
-// handles edge cases (2^63 returns 64) that an iterative shift loop
-// silently truncates.
-uint32_t bits_of(uint64_t modulus) {
-    return modulus == 0 ? 0 : static_cast<uint32_t>(std::bit_width(modulus));
+// Number of bits needed to represent a CKKS prime modulus. Modulus is
+// asserted >= 2 because OpenFHE's GenCryptoContext rejects smaller
+// values upstream and the bridge's only caller path has already
+// validated the input. std::bit_width handles 2^63 cleanly (returns 64)
+// where an iterative shift would silently truncate.
+uint32_t bit_width_for_modulus(uint64_t modulus) {
+    assert(modulus >= 2);
+    return static_cast<uint32_t>(std::bit_width(modulus));
 }
 
-// Build (or rebuild) the cached CryptoContext to match (ring_dim,
-// desired_modulus). Returns true on success; populates g_ctx.
-bool rebuild_context_locked(uint64_t ring_dim, uint64_t desired_modulus) {
+// Build (or rebuild) the cached CryptoContext + keypair to match
+// (ring_dim, desired_modulus). Returns success on cache hit (already
+// correct shape) or after a successful rebuild; returns a structured
+// BridgeError otherwise so the caller can map to the matching
+// hazeError_t.
+std::expected<void, BridgeError>
+rebuild_context_locked(uint64_t ring_dim, uint64_t desired_modulus) {
     using namespace lbcrypto;
-    // RYANPR: Make this return a better error type with an enum or whatever so we can know what the error is. The ring dimension check makes sense to me, but the modulus check I don't understand.
-    if (ring_dim == 0 || desired_modulus < 2) return false;
+    // Sanity gate: 0 or 1 are trivially malformed. Real CKKS NTT-
+    // friendly primes are ~60-bit; OpenFHE will reject other invalid
+    // choices deeper in GenCryptoContext.
+    if (ring_dim == 0)
+        return std::unexpected(BridgeError::InvalidRingDim);
+    if (desired_modulus < 2)
+        return std::unexpected(BridgeError::InvalidModulus);
 
     if (g_ctx.cc && g_ctx.ring_dim == ring_dim &&
         g_ctx.desired_modulus == desired_modulus) {
-        return true;
+        return {};  // cache hit
     }
 
     CCParams<CryptoContextCKKSRNS> p;
     p.SetSecurityLevel(HEStd_NotSet);  // toy: ring_dim is user-chosen
     p.SetRingDim(ring_dim);
-    // RYANPR: Make sure to note a TODO that we are only handling a single residue polynomial at the moment but that we may need to do something else later (so more than depth 0)
-    // Depth 0 produces a single-tower DCRTPoly chain so the synthesized
-    // template ciphertext has exactly two NativePoly slots (one per
-    // ciphertext element a, b). Trim element[1] before serializing
-    // (see synthesize_haze_ciphertext below) to land on a 1-NativePoly
-    // .bin matching haze's per-input addr_id count of one. Multi-residue
-    // support will need a different shape — see plan in replay_bridge.h.
+    // TODO(haze:multi-residue): SetMultiplicativeDepth(0) produces a
+    // single-tower DCRTPoly chain. Multi-residue paths (hazeModUp,
+    // hazeModDown) require depth > 0 and a fan of NativePolys per
+    // ciphertext element — see the failing integration tests in
+    // test/test_basis_convert.cpp at lines 117/245/291/331/381/443/757.
     p.SetMultiplicativeDepth(0);
-    const uint32_t bits = bits_of(desired_modulus);
-    p.SetScalingModSize(bits ? bits - 1 : 50);
-    p.SetFirstModSize(bits ? bits : 60);
-    // RYANPR: Fine for now, but why do we need this?
+    const uint32_t bits = bit_width_for_modulus(desired_modulus);
+    p.SetScalingModSize(bits - 1);
+    p.SetFirstModSize(bits);
+    // FIXEDMANUAL leaves rescale to the caller. At depth 0 with a
+    // single tower, OpenFHE's auto-rescale modes would inject extra
+    // modulus elements between operations and break the 1-NativePoly
+    // invariant the bridge depends on (synthesize_haze_ciphertext_locked
+    // assumes ct->GetElements()[0].GetAllElements().size() == 1).
     p.SetScalingTechnique(FIXEDMANUAL);
 
     auto cc = GenCryptoContext(p);
-    if (!cc) return false;
+    if (!cc)
+        return std::unexpected(BridgeError::OpenFheUnavailable);
     cc->Enable(PKE);
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
 
-    // Cached keypair: needed by Encrypt() to produce a structurally valid
-    // Ciphertext<DCRTPoly>. One keygen per (ring_dim, desired_modulus)
-    // pair, reused across every template and every input bin.
-    // RYANPR: Do we actually need this? I assume the relay we are using asks for keys but also we are constructing dummy polynomials for our tests to see if basic operations work; they don't need encrypted values.
+    // TODO(haze:no-keygen): we keygen + Encrypt + trim only because
+    // OpenFHE doesn't expose a public no-key Ciphertext<DCRTPoly>
+    // constructor. The bridge never decrypts; the keygen is effectively
+    // structural ballast. If a public empty-ciphertext factory becomes
+    // available in OpenFHE (e.g. cc->NewCiphertext()), drop the keypair
+    // and the Encrypt round-trip in synthesize_haze_ciphertext_locked.
     auto keys = cc->KeyGen();
-    if (!keys.publicKey || !keys.secretKey) return false;
+    if (!keys.publicKey || !keys.secretKey)
+        return std::unexpected(BridgeError::KeygenFailed);
 
     auto element_params = cc->GetCryptoParameters()->GetElementParams();
-    if (!element_params || element_params->GetParams().empty()) return false;
+    if (!element_params || element_params->GetParams().empty())
+        return std::unexpected(BridgeError::OpenFheUnavailable);
     uint64_t picked = element_params->GetParams()[0]->GetModulus().ConvertToInt();
 
     g_ctx.ring_dim = ring_dim;
@@ -152,84 +199,76 @@ bool rebuild_context_locked(uint64_t ring_dim, uint64_t desired_modulus) {
     g_ctx.picked_modulus = picked;
     g_ctx.cc = cc;
     g_ctx.keys = keys;
-
-    // RYANPR: What does returning true mean
-    return true;
+    return {};
 }
 
-// Align niobium::compiler()'s program_info to haze's defaults BEFORE
-// reading get_program_directory().
-// RYANPR: Not sure why you need this, the tests should be able to set their own program info and use that.
-void align_program_info_to_haze() {
-    niobium::compiler().set_program_info("haze", "0.1", "HAZE runtime");
+// Map a BridgeError to the matching hazeError_t for the C ABI.
+hazeError_t to_haze_error(BridgeError e) {
+    switch (e) {
+        case BridgeError::InvalidRingDim:    return HAZE_ERROR_INVALID_VALUE;
+        case BridgeError::InvalidModulus:    return HAZE_ERROR_INVALID_VALUE;
+        case BridgeError::KeygenFailed:      return HAZE_ERROR_LAUNCH_FAILURE;
+        case BridgeError::OpenFheUnavailable: return HAZE_ERROR_LAUNCH_FAILURE;
+    }
+    return HAZE_ERROR_LAUNCH_FAILURE;
 }
 
-// Build a structurally valid 1-element / 1-tower Ciphertext<DCRTPoly> and
-// fill its first NativePoly with `values`. Caller passes pre-acquired
-// g_ctx_mu.
+// Build a 1-element / 1-tower Ciphertext<DCRTPoly> and fill its first
+// NativePoly with `values`. Returns the synthesized ciphertext.
+//
+// TODO(haze:no-keygen): bypass Encrypt + element[1] trim with a direct
+// public-API no-key construction once OpenFHE exposes one. See the
+// rebuild_context_locked TODO.
 lbcrypto::Ciphertext<DCRTPoly>
-synthesize_haze_ciphertext_locked(const std::vector<uint64_t>& values) {
+synthesize_haze_ciphertext(const std::vector<uint64_t>& values) {
     std::vector<double> zeros(g_ctx.ring_dim / 2, 0.0);
     auto pt = g_ctx.cc->MakeCKKSPackedPlaintext(zeros);
-    // RYANPR: I don't think we need actual encryption for the test. I really just want to check that the polynomial operations work. We know the ciphertext is a pair of polynomials; we could fill one with the one we want and one with zeros.
     auto ct = g_ctx.cc->Encrypt(g_ctx.keys.publicKey, pt);
     // Trim the RLWE pair (a, b) down to a 1-element ciphertext so the
     // .bin's NativePoly count matches haze's one-polynomial-per-input
     // model. element[1] would otherwise land in the .bin as Encrypt-noise
     // and the compiler-side would auto-allocate a colliding addr_id for
-    // it. els.resize(1) leaves the result not-decryptable, but we never
-    // decrypt — the compiler-side reads NativePoly values positionally,
-    // not via the CKKS API.
+    // it. The result is not-decryptable, but we never decrypt — the
+    // compiler-side reads NativePoly values positionally, not via the
+    // CKKS API.
     {
         auto& els = ct->GetElements();
         if (els.size() > 1) els.resize(1);
     }
-    // RYANPR: What are you guarding against here?
-    if (!values.empty() &&
-        ct->GetElements().size() > 0 &&
-        ct->GetElements()[0].GetAllElements().size() > 0) {
-        auto& dcrt = ct->GetElements()[0];
-        auto& np = dcrt.GetAllElements()[0];
-        size_t n = np.GetParams()->GetRingDimension();
-        if (values.size() == n) {
-            lbcrypto::NativeVector nv(
-                n, lbcrypto::NativeInteger(np.GetModulus()));
-            for (size_t i = 0; i < n; ++i)
-                nv[i] = lbcrypto::NativeInteger(values[i]);
-            np.SetValues(nv, np.GetFormat());
-        } else {
-            std::cerr << "[haze_replay_bridge] values.size()=" << values.size()
-                      << " != ring_dim=" << n
-                      << " — cannot fill input ciphertext" << std::endl;
-        }
+    if (values.empty()) {
+        // Output template path: caller wants an empty shell, no fill.
+        return ct;
     }
+    auto& dcrt = ct->GetElements()[0];
+    auto& np = dcrt.GetAllElements()[0];
+    size_t n = np.GetParams()->GetRingDimension();
+    if (values.size() != n) {
+        std::ostringstream body;
+        body << "values.size()=" << values.size() << " != ring_dim=" << n
+             << " — cannot fill input ciphertext";
+        haze::log_error("replay_bridge", body.str());
+        return ct;
+    }
+    lbcrypto::NativeVector nv(n, lbcrypto::NativeInteger(np.GetModulus()));
+    for (size_t i = 0; i < n; ++i)
+        nv[i] = lbcrypto::NativeInteger(values[i]);
+    np.SetValues(nv, np.GetFormat());
     return ct;
 }
 
-// Post-recording hook. Synthesizes the per-program OpenFHE artifacts the
-// compiler-side nbcc_fhetch_replay needs to consume haze's pure-FHETCH
-// recording:
-//
-//   - For each captured input, a 1-element / 1-tower Ciphertext<DCRTPoly>
-//     filled with the captured values, serialized as
-//     <prog>.input_<name>.bin + .ids.
-//   - For each captured output, an empty 1-element template serialized as
-//     ciphertext_templates/<name>.template.
-//
-// Both iterations run AFTER trace_writer.stop_recording() (post_recording_hook
-// fires there), so the OpenFHE Encrypt() inside synthesize_haze_ciphertext
-// is recording-disabled and doesn't pollute the trace. Eval keys are
-// skipped — they have a bespoke cereal path written by the auto-facade's
-// serialize_eval_keys.
-// RYANPR: Why do we need this?
+// LOAD-BEARING. Synthesizes per-program OpenFHE artifacts the replay
+// path (in-process fhetch_sim or transport-side nbcc_fhetch_replay)
+// needs to consume haze's pure-FHETCH recording. Must run AFTER
+// trace_writer.stop_recording() — so for_each_captured_* sees the
+// final input/output sets — and BEFORE the replay path's reconstruct
+// step (so cereal type registrations resolve in libnbfhetch's TU).
+// Wired up via niobium::compiler().set_post_recording_hook(...).
 void on_post_recording() {
-    std::lock_guard<std::mutex> lock(g_ctx_mu);
     if (!g_ctx.cc) {
         // No CC initialized for this session — bridge was never called,
-        // so there are no haze-style artifacts to materialize. Quiet no-op.
+        // so there are no haze-style artifacts to materialize.
         return;
     }
-    align_program_info_to_haze();
 
     // ---- Inputs ----
     struct InputAccum {
@@ -253,42 +292,47 @@ void on_post_recording() {
 
     for (auto& [name, acc] : inputs_by_name) {
         try {
-            auto ct = synthesize_haze_ciphertext_locked(acc.values);
+            auto ct = synthesize_haze_ciphertext(acc.values);
             if (!niobium::detail::write_ciphertext_input_bin(
                     name, ct, acc.addr_ids)) {
-                std::cerr << "[haze_replay_bridge] write_ciphertext_input_bin "
-                          << "failed for '" << name << "'" << std::endl;
+                haze::log_error(
+                    "replay_bridge",
+                    "write_ciphertext_input_bin failed for '" + name + "'");
             }
         } catch (const std::exception& e) {
-            std::cerr << "[haze_replay_bridge] input bin synthesis for '"
-                      << name << "' threw: " << e.what() << std::endl;
+            haze::log_error(
+                "replay_bridge",
+                "input bin synthesis for '" + name + "' threw: " + e.what());
         }
     }
 
     // ---- Outputs ----
-    // Auto-write a 1-element template for each named output. The
-    // compiler-side fills the first NativePoly with simulator output;
-    // templates are otherwise empty. This removes the burden from test
-    // code of having to call hazeReplayBridgeWriteTemplate per output —
-    // tests just call hazeReplay() and the bridge handles it.
+    // Auto-write a 1-element template for each named output. The replay
+    // path fills the first NativePoly with simulator output; templates
+    // are otherwise empty. This removes the burden from test code of
+    // having to call hazeReplayBridgeWriteTemplate per output — tests
+    // just call hazeReplay() and the bridge handles it.
     niobium::detail::for_each_captured_output(
         [&](const std::string& name) {
             try {
-                auto ct = synthesize_haze_ciphertext_locked({});
+                auto ct = synthesize_haze_ciphertext({});
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
-                    std::cerr << "[haze_replay_bridge] write_ciphertext_template "
-                              << "failed for '" << name << "'" << std::endl;
+                    haze::log_error(
+                        "replay_bridge",
+                        "write_ciphertext_template failed for '" + name + "'");
                 }
             } catch (const std::exception& e) {
-                std::cerr << "[haze_replay_bridge] template synthesis for '"
-                          << name << "' threw: " << e.what() << std::endl;
+                haze::log_error(
+                    "replay_bridge",
+                    "template synthesis for '" + name + "' threw: " + e.what());
             }
         });
 }
 
-// Push the bridge's CryptoContext into niobium::compiler() via the
-// existing OpenFHE-aware capture path. capture_crypto_context lives
-// inside libnbfhetch (auto_facade.cpp), so the cereal polymorphic
+// Push the bridge's CryptoContext into niobium::compiler() (libnbfhetch's
+// "dummy" compiler — NOT the niobium-compiler nbcc) via the existing
+// OpenFHE-aware capture path. capture_crypto_context lives inside
+// libnbfhetch (auto_facade.cpp), so the cereal polymorphic
 // registrations for CryptoContextImpl<DCRTPoly> resolve in the same
 // shared library where the cc.dat serialization runs.
 //
@@ -301,9 +345,9 @@ void on_post_recording() {
 //
 // We want the first three but NOT the fourth — haze records pure
 // polynomial-level ops, no bootstrap precompute. Clear the hook
-// immediately after capture so stop() doesn't fire it.
-// RYANPR: I assume this is the fhetch compiler, not the real compiler.
-void push_crypto_to_compiler_locked() {
+// immediately after capture so stop() doesn't fire it. Set our own
+// post_recording_hook so on_post_recording fires on stop().
+void push_crypto_to_compiler() {
     niobium::compiler().capture_crypto_context(g_ctx.cc);
     niobium::compiler().set_auto_capture_at_stop(nullptr);
     niobium::compiler().set_post_recording_hook(&on_post_recording);
@@ -317,25 +361,24 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(
     uint64_t* picked_modulus) noexcept {
     if (picked_modulus == nullptr) return HAZE_ERROR_INVALID_VALUE;
 
-    std::lock_guard<std::mutex> lock(g_ctx_mu);
     try {
-        if (!rebuild_context_locked(ring_dim, desired_modulus))
-            return HAZE_ERROR_INVALID_VALUE;
+        auto rebuild = rebuild_context_locked(ring_dim, desired_modulus);
+        if (!rebuild) return to_haze_error(rebuild.error());
 
-        align_program_info_to_haze();
-        // capture_crypto_context populates ring dimension + modulus chain
-        // AND serializes <program_dir>/cryptocontext.dat from inside
-        // libnbfhetch's TU (where cereal type registrations resolve).
-        // Also registers our post_recording_hook so write_haze_input_bins
-        // runs at stop() time without libnbfhetch needing to know about
-        // haze-specific artifacts.
-        push_crypto_to_compiler_locked();
+        // capture_crypto_context populates ring dimension + modulus
+        // chain AND serializes <program_dir>/cryptocontext.dat from
+        // inside libnbfhetch's TU (where cereal type registrations
+        // resolve). Also registers our post_recording_hook so the
+        // bridge's input-bin / template synthesis runs at stop() time
+        // without libnbfhetch needing to know about haze-specific
+        // artifacts.
+        push_crypto_to_compiler();
 
         *picked_modulus = g_ctx.picked_modulus;
         return HAZE_SUCCESS;
     } catch (const std::exception& e) {
-        std::cerr << "[haze_replay_bridge] init threw: " << e.what()
-                  << std::endl;
+        haze::log_error("replay_bridge",
+                        std::string{"init threw: "} + e.what());
         return HAZE_ERROR_LAUNCH_FAILURE;
     } catch (...) {
         return HAZE_ERROR_LAUNCH_FAILURE;
