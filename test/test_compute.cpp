@@ -1,6 +1,7 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include "integration_helpers.hpp"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -17,13 +18,16 @@ static constexpr int kModIdx = 0;
 TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
     // Constant polynomials: a[i] = 1, b[i] = 2 → expected sum = 3
-    std::vector<uint64_t> a(kRingDim, 1), b(kRingDim, 2);
+    std::vector<uint64_t> a(kRingDim, 1);
+    std::vector<uint64_t> b(kRingDim, 2);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -44,13 +48,16 @@ TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]") {
 TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
     // a[i] = 10, b[i] = 3 → expected difference = 7
-    std::vector<uint64_t> a(kRingDim, 10), b(kRingDim, 3);
+    std::vector<uint64_t> a(kRingDim, 10);
+    std::vector<uint64_t> b(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -71,7 +78,8 @@ TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]") 
 TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
@@ -95,7 +103,8 @@ TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H", "[integ
 TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
@@ -123,7 +132,9 @@ TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[inte
 TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_src = nullptr, *d_ntt = nullptr, *d_intt = nullptr;
+    void *d_src = nullptr;
+    void *d_ntt = nullptr;
+    void *d_intt = nullptr;
     REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_ntt, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_intt, kBytes) == HAZE_SUCCESS);
@@ -154,11 +165,13 @@ TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]") {
 TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 4), b(kRingDim, 5);
+    std::vector<uint64_t> a(kRingDim, 4);
+    std::vector<uint64_t> b(kRingDim, 5);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -179,11 +192,13 @@ TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integratio
 TEST_CASE("hazeAdd in-place (dst == src2) produces correct result", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 6), b(kRingDim, 7);
+    std::vector<uint64_t> a(kRingDim, 6);
+    std::vector<uint64_t> b(kRingDim, 7);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -230,14 +245,18 @@ TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[integration
 TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_t = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_t = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
     // a=2, b=3 → t = a+b = 5 → dst = t*2 = 10
-    std::vector<uint64_t> a(kRingDim, 2), b(kRingDim, 3);
+    std::vector<uint64_t> a(kRingDim, 2);
+    std::vector<uint64_t> b(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -264,14 +283,18 @@ TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integr
 TEST_CASE("multiple materializations: two independent D2H cycles", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst1 = nullptr, *d_dst2 = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst1 = nullptr;
+    void *d_dst2 = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
 
     // First batch: a=1, b=2 → sum=3
-    std::vector<uint64_t> a(kRingDim, 1), b(kRingDim, 2);
+    std::vector<uint64_t> a(kRingDim, 1);
+    std::vector<uint64_t> b(kRingDim, 2);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
@@ -284,8 +307,8 @@ TEST_CASE("multiple materializations: two independent D2H cycles", "[integration
     }
 
     // Second batch (after first materialization): a=5, b=6 → sum=11
-    std::fill(a.begin(), a.end(), 5);
-    std::fill(b.begin(), b.end(), 6);
+    std::ranges::fill(a, 5);
+    std::ranges::fill(b, 6);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
@@ -310,12 +333,15 @@ TEST_CASE("multiple materializations: two independent D2H cycles", "[integration
 TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 3), b(kRingDim, 3);
+    std::vector<uint64_t> a(kRingDim, 3);
+    std::vector<uint64_t> b(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -349,9 +375,14 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    // src pointers that were never hazeMemcpy'd (no shadow data)
+    // src pointers that were never hazeMemcpy'd (no shadow data). The
+    // ints-to-pointers are deliberate: the test asserts the allocator
+    // classifies these synthetic device addresses as unmapped, which
+    // requires the addresses themselves, not real allocations.
+    // NOLINTBEGIN(performance-no-int-to-ptr)
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
+    // NOLINTEND(performance-no-int-to-ptr)
     REQUIRE(hazeAdd(d_dst, fake1, fake2, kModIdx, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -364,12 +395,15 @@ TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 1), b(kRingDim, 2);
+    std::vector<uint64_t> a(kRingDim, 1);
+    std::vector<uint64_t> b(kRingDim, 2);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -398,14 +432,18 @@ TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
 TEST_CASE("H2D after compute invalidates the polymap binding", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst1 = nullptr, *d_dst2 = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst1 = nullptr;
+    void *d_dst2 = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
 
     // First pass: a=2, b=3 → dst1 = a + b = 5
-    std::vector<uint64_t> a1(kRingDim, 2), b1(kRingDim, 3);
+    std::vector<uint64_t> a1(kRingDim, 2);
+    std::vector<uint64_t> b1(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
@@ -431,14 +469,18 @@ TEST_CASE("H2D after compute invalidates the polymap binding", "[integration]") 
 TEST_CASE("memset after compute invalidates the polymap binding", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst1 = nullptr, *d_dst2 = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst1 = nullptr;
+    void *d_dst2 = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
 
     // First pass: a=4, b=5 → dst1 = 9.
-    std::vector<uint64_t> a1(kRingDim, 4), b1(kRingDim, 5);
+    std::vector<uint64_t> a1(kRingDim, 4);
+    std::vector<uint64_t> b1(kRingDim, 5);
     REQUIRE(hazeMemcpy(d_a, a1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);

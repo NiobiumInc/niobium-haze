@@ -14,14 +14,13 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "common/thread_safety.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
-#include <mutex>
-#include <utility>
 #include <vector>
 
 namespace haze {
@@ -81,7 +80,7 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
     if (!pool_free_.empty()) {
         DevAddr addr = pool_free_.back();
         pool_free_.pop_back();
-        if (map_.find(addr) != map_.end()) {
+        if (map_.contains(addr)) {
             return addr;
         }
         // Pool free list out of sync with the map — fall through to a
@@ -260,7 +259,7 @@ bool DeviceAllocator::is_device_pointer(const void *ptr) const noexcept {
     if (ptr == nullptr)
         return false;
     HazeLockGuard lock(mutex_);
-    return map_.find(to_dev_addr(ptr)) != map_.end();
+    return map_.contains(to_dev_addr(ptr));
 }
 
 hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
@@ -272,25 +271,32 @@ hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
     // attribute fields outside the lock. Snapshotting closes the window
     // where a concurrent free() / unregister between membership check
     // and attribute write could flip the answer.
-    enum { kUnknown, kDevice, kHost } classification = kUnknown;
+    enum class Classification : uint8_t { Unknown, Device, Host };
+    auto classification = Classification::Unknown;
     if (ptr != nullptr) {
         HazeLockGuard lock(mutex_);
-        if (map_.find(to_dev_addr(ptr)) != map_.end()) {
-            classification = kDevice;
-        } else if (host_set_.find(ptr) != host_set_.end()) {
-            classification = kHost;
+        if (map_.contains(to_dev_addr(ptr))) {
+            classification = Classification::Device;
+        } else if (host_set_.contains(ptr)) {
+            classification = Classification::Host;
         }
     }
     switch (classification) {
-    case kDevice:
+    case Classification::Device:
         attrs->type = HAZE_MEMORY_TYPE_DEVICE;
-        attrs->devicePointer = const_cast<void *>(ptr);
+        // hazePointerAttributes mirrors cudaPointerAttributes: the
+        // devicePointer / hostPointer fields are non-const void*, but
+        // the input here is const void*. The cast is contained to the
+        // two assignments at the C-ABI boundary.
+        attrs->devicePointer =
+            const_cast<void *>(ptr); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         break;
-    case kHost:
+    case Classification::Host:
         attrs->type = HAZE_MEMORY_TYPE_HOST;
-        attrs->hostPointer = const_cast<void *>(ptr);
+        attrs->hostPointer =
+            const_cast<void *>(ptr); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         break;
-    case kUnknown:
+    case Classification::Unknown:
         attrs->type = HAZE_MEMORY_TYPE_UNREGISTERED;
         break;
     }

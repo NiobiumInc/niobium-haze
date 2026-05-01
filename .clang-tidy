@@ -1,3 +1,22 @@
+# Disabled-check rationale:
+#
+# - cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+#   cppcoreguidelines-pro-bounds-constant-array-index:
+#   incompatible with the C ABI haze exposes and exercises in tests.
+#   `hazeBasisConvert(void**, const void**, ...)` and friends accept raw
+#   pointers, and tests construct call sites with `const T arr[] = {...}`
+#   to mirror real consumer code. gsl::span / gsl::array_view are not
+#   in the dependency graph, and replacing every literal with std::array
+#   plus std::data() obscures the C-ABI parity intent.
+#
+# - cppcoreguidelines-owning-memory:
+#   the C ABI returns and accepts opaque pointers as ownership-transfer
+#   handles (hazeStream_t, hazeEvent_t, hazeMalloc, hazeHostAlloc,
+#   hazeFree). gsl::owner<> annotations would have to thread through
+#   the public C header, which is not C++. Lifetime is enforced by the
+#   shape of the API, and the call-side resource sites are reviewed as
+#   such.
+
 Checks: >
   -*,
   bugprone-*,
@@ -6,12 +25,16 @@ Checks: >
   performance-*,
   readability-*,
   clang-analyzer-*,
+  misc-include-cleaner,
   -modernize-use-trailing-return-type,
   -cppcoreguidelines-avoid-do-while,
   -readability-identifier-length,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-owning-memory,
   -cppcoreguidelines-avoid-magic-numbers,
   -readability-magic-numbers,
   -modernize-use-nodiscard,
@@ -34,5 +57,22 @@ Checks: >
   -modernize-use-auto,
   -modernize-use-using,
   -readability-implicit-bool-conversion
-WarningsAsErrors: "bugprone-use-after-move,performance-unnecessary-copy-initialization,performance-for-range-copy"
-HeaderFilterRegex: "^(?!.*nlohmann).*(haze|src)/.*"
+# WarningsAsErrors is empty: local `clang-tidy -p build <file>` invocations
+# emit warnings only. CI's `clang-tidy --warnings-as-errors='*'` (in the
+# haze-clang-tidy flake derivation) is the single source of error
+# promotion, so a developer hand-running clang-tidy locally is never
+# blocked while the CI gate stays strict.
+WarningsAsErrors: ""
+# clang-tidy uses LLVM's POSIX-ERE regex, which lacks lookaround
+# support. Match first-party headers by structural prefix; the
+# ExcludeHeaderFilterRegex below handles vendor exclusion.
+HeaderFilterRegex: ".*/(include/haze|src|test|replay_bridge/(include|src))/.*\\.(h|hpp)$"
+ExcludeHeaderFilterRegex: ".*niobium-haze/vendor/.*"
+CheckOptions:
+  # OpenFHE is vendor code with an umbrella `openfhe.h` and serializer
+  # headers (`*-ser.h`) that register cereal hooks via static init.
+  # include-cleaner cannot model either pattern: it flags umbrella as
+  # unused, and -ser headers as unused even when serialization is
+  # called. Skip OpenFHE-shaped paths so the cleaner stays focused on
+  # first-party include hygiene.
+  misc-include-cleaner.IgnoreHeaders: "openfhe\\.h;.*-ser\\.h;.*/openfhe/.*"

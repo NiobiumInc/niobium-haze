@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <haze/haze_types.h>
 #include <new>
 
 namespace haze {
@@ -24,8 +25,8 @@ std::atomic<uint64_t> g_next_event_id{1};
 } // namespace
 
 hazeStream_t stream_create() noexcept {
-    return new (std::nothrow)
-        haze_stream_s{g_next_stream_id.fetch_add(1, std::memory_order_relaxed), false};
+    return new (std::nothrow) haze_stream_s{
+        .id = g_next_stream_id.fetch_add(1, std::memory_order_relaxed), .is_default = false};
 }
 
 void stream_destroy(hazeStream_t s) noexcept {
@@ -42,7 +43,7 @@ hazeStream_t stream_default() noexcept {
     // magic statics handle the thread-safe init), destroyed at normal
     // process exit. No heap allocation, no leak, no mutex needed for
     // the lazy init.
-    static haze_stream_s instance{0, true};
+    static haze_stream_s instance{.id = 0, .is_default = true};
     return &instance;
 }
 
@@ -53,8 +54,8 @@ void streams_reset() noexcept {
 }
 
 hazeEvent_t event_create() noexcept {
-    return new (std::nothrow)
-        haze_event_s{g_next_event_id.fetch_add(1, std::memory_order_relaxed), false};
+    return new (std::nothrow) haze_event_s{
+        .id = g_next_event_id.fetch_add(1, std::memory_order_relaxed), .recorded = false};
 }
 
 void event_destroy(hazeEvent_t e) noexcept {

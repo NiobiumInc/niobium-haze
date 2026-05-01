@@ -13,6 +13,7 @@
 #include "common/log.hpp"
 
 #include <iostream>
+#include <string_view>
 
 namespace haze {
 

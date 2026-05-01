@@ -16,10 +16,10 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
-#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -132,10 +132,11 @@ class DeviceAllocator {
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
-  private:
-    DeviceAllocator() = default;
     DeviceAllocator(const DeviceAllocator &) = delete;
     DeviceAllocator &operator=(const DeviceAllocator &) = delete;
+
+  private:
+    DeviceAllocator() = default;
 
     // Helper (caller holds mutex_).
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);

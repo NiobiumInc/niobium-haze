@@ -12,9 +12,10 @@
 // from the Product.
 #include "common/errors.hpp"
 
-#include <cstdio>
+#include <cstdio> // IWYU pragma: keep — stderr macro lives here per ISO C++; libstdc++ leaks it through <print> which include-cleaner picks up first
 #include <cstdlib>
 #include <haze/haze_types.h>
+#include <print>
 
 namespace haze {
 
@@ -67,9 +68,9 @@ void record_internal_error(HazeInternalError err, const char *context) noexcept 
     if (!debug_logging_enabled())
         return;
     if (context != nullptr) {
-        std::fprintf(stderr, "[haze] internal error: %s (%s)\n", internal_error_name(err), context);
+        std::println(stderr, "[haze] internal error: {} ({})", internal_error_name(err), context);
     } else {
-        std::fprintf(stderr, "[haze] internal error: %s\n", internal_error_name(err));
+        std::println(stderr, "[haze] internal error: {}", internal_error_name(err));
     }
 }
 

@@ -38,7 +38,11 @@ inline uintptr_t to_uintptr(DevAddr a) noexcept {
 }
 
 inline void *to_void_ptr(DevAddr a) noexcept {
-    return reinterpret_cast<void *>(static_cast<uintptr_t>(a));
+    // DevAddr is a uintptr_t-alias strong-type; the cast back to void*
+    // at the C ABI boundary is unavoidable. The optimizer-aliasing
+    // performance hint does not apply to handle types.
+    return reinterpret_cast<void *>( // NOLINT(performance-no-int-to-ptr)
+        static_cast<uintptr_t>(a));
 }
 
 } // namespace haze

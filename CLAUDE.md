@@ -163,14 +163,24 @@ is disabled (`-fno-sanitize=enum`) so the C-ABI `hazeError_t` survives
 forward-compat enum extension across library versions.
 
 Lint and format use the in-tree `.clang-format` (LLVM, indent 4, column 100)
-and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.;
-`-Werror` upgrades `bugprone-use-after-move` and a couple of
-`performance-*` checks):
+and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.).
+Local `clang-tidy` invocations emit warnings only; CI is the single source
+of error promotion via `--warnings-as-errors='*'`:
 
 ```sh
 clang-format -i src/**/*.cpp src/**/*.hpp include/haze/*.h
-clang-tidy -p build src/api/compute.cpp     # one file
+clang-tidy -p build src/api/compute.cpp     # one file, warnings-only
 ```
+
+Before committing, the static-analysis gate must be clean. CI enforces
+this through two flake checks — `nix build .#checks.<sys>.clang-tidy`
+runs `clang-tidy --warnings-as-errors='*'` over first-party `src/`,
+`replay_bridge/`, and `test/` `.cpp` files; `nix build
+.#checks.<sys>.clangd-check` runs `clangd --check` and fails on any
+warning line. Both ride on the configured `compile_commands.json` and
+must report zero warnings on first-party sources. The dev-shell
+equivalent for a quick local pass is `clang-tidy -p build
+--warnings-as-errors='*' <files>` and `clangd --check=<file>`.
 
 Compiler diagnostics: `-Wall -Wextra -Werror -Wpedantic -Wshadow -Wconversion`,
 plus `-Wthread-safety` under clang. Clang's TSA is the canonical enforcement

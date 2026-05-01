@@ -31,10 +31,10 @@
 #include "core/backend.hpp"
 
 #include "common/errors.hpp"
+#include "common/thread_safety.hpp"
 #include "core/config.hpp"
 
 #include <atomic>
-#include <mutex>
 #include <niobium/compiler.h>
 #include <string>
 
@@ -53,7 +53,7 @@ bool CompilerBackend::ensure_initialized() noexcept {
         return true;
 
     // Slow path: serialize concurrent first callers so init runs once.
-    std::lock_guard lock(init_mutex_);
+    HazeLockGuard lock(init_mutex_);
     if (initialized_.load(std::memory_order_relaxed))
         return true;
 
@@ -141,7 +141,7 @@ bool CompilerBackend::replay() noexcept {
 }
 
 void CompilerBackend::reset() noexcept {
-    std::lock_guard lock(init_mutex_);
+    HazeLockGuard lock(init_mutex_);
     initialized_.store(false, std::memory_order_release);
 }
 

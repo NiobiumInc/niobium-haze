@@ -45,6 +45,9 @@
 #define HAZE_REPLAY_BRIDGE_H
 
 #include <haze/haze_types.h>
+// replay_bridge.h is a C-compatible public header (consumed by both
+// C and C++ TUs); the C-style stdint.h form must stay.
+// NOLINTNEXTLINE(modernize-deprecated-headers)
 #include <stdint.h>
 
 #ifdef __cplusplus

@@ -15,7 +15,6 @@
 #include "core/allocator.hpp"
 #include "core/epoch.hpp"
 
-#include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <haze/haze.h>
@@ -54,7 +53,11 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
     // uses 4K — sysconf returns the right value either way.
     static const size_t kHostAllocAlignment = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void *p = nullptr;
-    if (posix_memalign(&p, kHostAllocAlignment, size) != 0)
+    // posix_memalign is exposed via <cstdlib> on the toolchain we
+    // build with, but include-cleaner does not model POSIX extensions
+    // and would direct us at <stdlib.h>, which modernize-deprecated-
+    // headers in turn rejects. Suppress the cleaner here only.
+    if (posix_memalign(&p, kHostAllocAlignment, size) != 0) // NOLINT(misc-include-cleaner)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     haze::allocator().register_host_pointer(p);
     *ptr = p;

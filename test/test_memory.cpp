@@ -80,7 +80,7 @@ TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
 
     std::vector<uint64_t> src(kN);
     for (size_t i = 0; i < kN; ++i)
-        src[i] = static_cast<uint64_t>(i + 1);
+        src[i] = static_cast<uint64_t>(i) + 1;
 
     REQUIRE(hazeMemcpy(dev, src.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -127,7 +127,7 @@ TEST_CASE("hazeMemset fills shadow buffer", "[unit]") {
     std::vector<uint8_t> result(kBytes, 0);
     REQUIRE(hazeMemcpy(result.data(), dev, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
-    REQUIRE(std::all_of(result.begin(), result.end(), [](uint8_t b) { return b == 0xAB; }));
+    REQUIRE(std::ranges::all_of(result, [](uint8_t b) { return b == 0xAB; }));
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
 }
 

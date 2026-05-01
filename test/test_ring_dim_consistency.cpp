@@ -77,12 +77,15 @@ inline void h2d(void *dev, const std::vector<uint64_t> &src) {
 TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096", "[integration]") {
     setup_4096();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kN, 7), b(kN, 11);
+    std::vector<uint64_t> a(kN, 7);
+    std::vector<uint64_t> b(kN, 11);
     h2d(d_a, a);
     h2d(d_b, b);
     REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
@@ -107,13 +110,18 @@ TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ en
           "[integration]") {
     setup_4096();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_c = nullptr, *d_t = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_c = nullptr;
+    void *d_t = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_c, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kN, 1), b(kN, 2), c(kN, 3);
+    std::vector<uint64_t> a(kN, 1);
+    std::vector<uint64_t> b(kN, 2);
+    std::vector<uint64_t> c(kN, 3);
     h2d(d_a, a);
     h2d(d_b, b);
     h2d(d_c, c);
@@ -147,7 +155,8 @@ TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles", "[integrati
     for (int iter = 0; iter < 50; ++iter) {
         setup_4096();
 
-        void *d_a = nullptr, *d_dst = nullptr;
+        void *d_a = nullptr;
+        void *d_dst = nullptr;
         REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
         REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
@@ -157,8 +166,9 @@ TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles", "[integrati
 
         std::vector<uint64_t> out(kN, 0);
         d2h(out, d_dst);
+        const uint64_t expected = static_cast<uint64_t>(iter) + 1;
         for (uint64_t i = 0; i < kN; ++i) {
-            REQUIRE(out[i] == static_cast<uint64_t>(iter + 1));
+            REQUIRE(out[i] == expected);
         }
 
         REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
@@ -179,7 +189,8 @@ TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity con
           "[integration]") {
     setup_4096();
 
-    void *src = nullptr, *dst = nullptr;
+    void *src = nullptr;
+    void *dst = nullptr;
     REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
 
@@ -222,7 +233,8 @@ TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N", 
     // Two epochs, both at N=4096, separated by an explicit reset.
     setup_4096();
     {
-        void *d_a = nullptr, *d_dst = nullptr;
+        void *d_a = nullptr;
+        void *d_dst = nullptr;
         REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
         REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
         std::vector<uint64_t> a(kN, 5);
@@ -238,7 +250,8 @@ TEST_CASE("ring_dim consistency: hazeDeviceReset between two epochs at same N", 
 
     setup_4096(); // reset + reconfigure at the same N
     {
-        void *d_a = nullptr, *d_dst = nullptr;
+        void *d_a = nullptr;
+        void *d_dst = nullptr;
         REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
         REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
         std::vector<uint64_t> a(kN, 9);

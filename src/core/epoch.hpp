@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
-#include <mutex>
 #include <niobium/fhetch_api.h>
 #include <string>
 #include <unordered_map>
@@ -100,10 +99,11 @@ class EpochState {
     void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
 
-  private:
-    EpochState() = default;
     EpochState(const EpochState &) = delete;
     EpochState &operator=(const EpochState &) = delete;
+
+  private:
+    EpochState() = default;
 
     // Internal helper: drain pending outputs through the backend. Caller
     // holds mutex_. Always resets epoch state at the end (cleared on both
