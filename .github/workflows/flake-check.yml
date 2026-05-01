@@ -1,0 +1,106 @@
+name: flake-check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flake-check-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flake-check:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    # Skip on fork PRs: the org App token is not available, so the
+    # private niobium-fhetch submodule cannot be cloned. Mirrors
+    # build-test.yml.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # App-token pattern matches build-test.yml so same-repo PRs can
+      # read the private niobium-fhetch submodule. Fork PRs are
+      # skipped via the job-level `if:` above.
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout (with private niobium-fhetch submodule)
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Free disk space
+        # nix store with openfhe + niobium-fhetch + haze easily blows
+        # past ubuntu-latest's ~14 GB of free space. Reclaim ~25 GB up
+        # front, same recipe as build-test.yml.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h
+
+      - name: Verify nested submodules cloned
+        run: |
+          test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
+          test -d vendor/niobium-fhetch/vendor/json
+
+      - name: Mark worktree dirty for nix submodule ingestion
+        # nix issue #13324: with `inputs.self.submodules = true` and a
+        # clean parent worktree, nix re-fetches submodules from their
+        # remotes during flake source ingestion. The sandbox does not
+        # see actions/checkout's App token, so the private
+        # niobium-fhetch remote fails. Touching an untracked file
+        # marks the worktree dirty, which makes nix copy submodules
+        # from the local checkout instead.
+        run: touch .ci-dirty
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Magic Nix Cache
+        # Free, zero-config /nix/store cache backed by GitHub Actions
+        # cache. Covers openfhe (~20-30 min cold), niobium-fhetch, and
+        # haze across runs. Documented combo is nix-installer-action
+        # then magic-nix-cache-action.
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: nix flake check
+        # -L (= --print-build-logs) streams every derivation's build
+        # log to the workflow output, so test failures and OpenFHE
+        # build errors are visible inline. --keep-going lets every
+        # check run before the job fails, matching local behaviour.
+        run: nix flake check -L --keep-going
+
+      - name: Collect nix build logs on failure
+        if: failure()
+        # /nix/var/log/nix/drvs/ is where nix persists per-derivation
+        # build logs; tarballing it gives the failed derivation's full
+        # log even if the streamed -L output was truncated.
+        run: |
+          sudo tar -czf nix-drv-logs.tgz -C / nix/var/log/nix/drvs 2>/dev/null || true
+          ls -la nix-drv-logs.tgz || true
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-check-logs-${{ github.run_attempt }}
+          path: nix-drv-logs.tgz
+          if-no-files-found: ignore
+          retention-days: 7
