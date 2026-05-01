@@ -4,21 +4,34 @@ project(haze LANGUAGES C CXX VERSION 0.1.0)
 # ---------------------------------------------------------------------------
 # niobium-fhetch resolution
 # ---------------------------------------------------------------------------
-# Two-tier lookup:
-#   1. If NIOBIUM_HAZE_FHETCH_DIR is set, add_subdirectory() that external
-#      source tree. Parents (e.g. niobium-client) that already own a
-#      niobium-fhetch checkout point haze at it via this cache var.
-#   2. Else, fall back to vendor/niobium-fhetch — haze's own submodule.
-#      Used for standalone builds (run `make sync` from this directory
-#      to populate it).
-#
-# OPENFHE_INSTALL_DIR is honored by niobium-fhetch's own CMakeLists when
-# we add it via either path, so injecting it here covers transitive
-# OpenFHE discovery for both branches.
+# Three-tier lookup, tried in order:
+#   1. HAZE_USE_PREBUILT_FHETCH=ON  → find_package(NiobiumFhetch CONFIG).
+#      Used by nix flake builds where fhetch is its own derivation.
+#   2. NIOBIUM_HAZE_FHETCH_DIR set  → add_subdirectory(<that source tree>).
+#      Used by parents (e.g. niobium-client) with their own checkout.
+#   3. vendor/niobium-fhetch exists → add_subdirectory(vendor/niobium-fhetch).
+#      Used by standalone Makefile builds.
+
+option(HAZE_USE_PREBUILT_FHETCH
+  "Use find_package(NiobiumFhetch CONFIG) instead of an in-tree add_subdirectory build. OFF (default) matches the Makefile flow; ON is for nix flake builds."
+  OFF)
 
 set(NIOBIUM_HAZE_FHETCH_DIR "" CACHE PATH
-    "External niobium-fhetch source tree to use instead of haze's vendor/niobium-fhetch (empty = use the vendored submodule)")
-if(NIOBIUM_HAZE_FHETCH_DIR)
+    "External niobium-fhetch source tree (empty = use vendor/niobium-fhetch)")
+
+if(HAZE_USE_PREBUILT_FHETCH)
+  find_package(NiobiumFhetch CONFIG REQUIRED)
+  # TODO(niobium-fhetch): export Niobium::fhetch directly. fhetch's
+  # install(EXPORT) names its target after the library
+  # (Niobium::niobium_fhetch); the Niobium::fhetch alias only exists
+  # in-tree. Wrap it here so the rest of haze can link Niobium::fhetch
+  # uniformly across branches. GLOBAL is required so the wrapper is
+  # visible from add_subdirectory(replay_bridge).
+  if(NOT TARGET Niobium::fhetch)
+    add_library(Niobium::fhetch INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Niobium::fhetch INTERFACE Niobium::niobium_fhetch)
+  endif()
+elseif(NIOBIUM_HAZE_FHETCH_DIR)
   add_subdirectory(${NIOBIUM_HAZE_FHETCH_DIR}
                    ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build)
 elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
@@ -26,32 +39,38 @@ elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
 else()
   message(FATAL_ERROR
     "haze cannot find niobium-fhetch. Either pass "
+    "-DHAZE_USE_PREBUILT_FHETCH=ON (with NiobiumFhetch on CMAKE_PREFIX_PATH), "
     "-DNIOBIUM_HAZE_FHETCH_DIR=<path/to/niobium-fhetch>, or run "
     "`make sync` from this directory to init vendor/niobium-fhetch.")
 endif()
 
-# OPENFHE_INSTALL_DIR may be set by:
-#   - the parent build (niobium-client passes it explicitly)
-#   - haze's own Makefile (standalone build)
-#   - the user via -D
-# When unset, niobium-fhetch's CMakeLists defaults to its own
-# vendor/lib/openfhe install. The test executable below also reads it
-# for the OpenFHE BigInteger reference oracle.
+# Required in every branch: the in-tree fhetch CMakeLists reads it for
+# OpenFHE discovery, and the test oracle (test_basis_convert.cpp)
+# reads it for the libOPENFHEcore BigInteger reference link.
 if(NOT DEFINED OPENFHE_INSTALL_DIR)
   message(FATAL_ERROR
     "OPENFHE_INSTALL_DIR is not set. Pass -DOPENFHE_INSTALL_DIR=<path> or "
     "use haze's Makefile, which derives it from niobium-fhetch's install tree.")
 endif()
 
-# OPENFHE_LIBRARY_PATH locates libOPENFHEcore for the haze_tests reference
-# oracle (test_basis_convert.cpp). Most callers already supply it:
-#   - niobium-client sets it at the parent CMake level, pointing at
-#     OpenFHE's *build* output dir to dodge an extra install copy.
-#   - niobium-fhetch's CMakeLists sets it to ${OPENFHE_INSTALL_DIR}/lib
-#     when haze pulls fhetch in via add_subdirectory.
-# This fallback only fires when haze is built against an externally-resolved
-# Niobium::fhetch target whose enclosing project did not also provide
-# OPENFHE_LIBRARY_PATH (a partial-parent scenario).
+# TODO(niobium-fhetch): expose OpenFHE includes via $<INSTALL_INTERFACE>
+# so they propagate through find_package. Today they're
+# $<BUILD_INTERFACE> only and don't survive the install-tree handoff,
+# so re-attach them here. No-op in the add_subdirectory branches.
+if(HAZE_USE_PREBUILT_FHETCH)
+  set_property(TARGET Niobium::fhetch APPEND PROPERTY
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${OPENFHE_INSTALL_DIR}/include/openfhe"
+      "${OPENFHE_INSTALL_DIR}/include/openfhe/core"
+      "${OPENFHE_INSTALL_DIR}/include/openfhe/pke"
+      "${OPENFHE_INSTALL_DIR}/include/openfhe/binfhe"
+  )
+endif()
+
+# OPENFHE_LIBRARY_PATH is used by haze_tests's libOPENFHEcore reference
+# oracle (test_basis_convert.cpp). Parents (e.g. niobium-client) may
+# set it explicitly to point at OpenFHE's build dir; otherwise default
+# to the install layout.
 if(NOT DEFINED OPENFHE_LIBRARY_PATH)
   set(OPENFHE_LIBRARY_PATH "${OPENFHE_INSTALL_DIR}/lib")
 endif()
