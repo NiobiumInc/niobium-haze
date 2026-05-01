@@ -68,14 +68,20 @@ jobs:
           echo "rev=$rev" >> "$GITHUB_OUTPUT"
 
       - name: Cache OpenFHE install dir
+        # The build/ directory caches CMake state, including absolute
+        # paths to compilers in /nix/store. Bumping flake.lock changes
+        # those store paths, which would leave CMakeCache.txt pointing
+        # at non-existent compiler binaries on a fresh runner. Hashing
+        # flake.lock into the key invalidates the cache whenever the
+        # nix toolchain moves.
         uses: actions/cache@v5
         with:
           path: |
             vendor/niobium-fhetch/vendor/lib/openfhe
             vendor/niobium-fhetch/vendor/openfhe/build
-          key: ubuntu-latest-openfhe-haze-${{ steps.openfhe_rev.outputs.rev }}
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}
           restore-keys: |
-            ubuntu-latest-openfhe-haze-
+            ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
 
       - name: Rewrite niobium-fhetch submodule URL for token auth
         # nix issue #13324: with `inputs.self.submodules = true` in
