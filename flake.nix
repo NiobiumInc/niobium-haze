@@ -38,25 +38,27 @@
         ] ./.;
 
       # Dev shell + make-wrapping apps share this toolchain. clang-tools
-      # is taken from llvmPackages_19 so clangd/clang-tidy parse C++23
-      # the same way the build's clang does.
+      # is the unversioned package so clangd/clang-tidy track whatever
+      # clang nixpkgs-unstable currently ships, matching clangStdenv
+      # below.
       hazeTools =
         pkgs: with pkgs; [
           cmake
           catch2_3
           jujutsu
-          llvmPackages_19.clang-tools
+          clang-tools
           nixfmt
         ];
 
       # Three-derivation hermetic build: openfhe → niobium-fhetch → haze.
       # Each layer caches independently — haze edits don't reinvalidate
-      # fhetch or openfhe. Pinned to llvmPackages_19.stdenv to match the
-      # dev shell and avoid the macOS SDK / ABI mismatch trap.
+      # fhetch or openfhe. Uses clangStdenv (nixpkgs's default clang)
+      # to match the dev shell and avoid the macOS SDK / ABI mismatch
+      # trap.
       mkPackages =
         pkgs:
         let
-          stdenv = pkgs.llvmPackages_19.stdenv;
+          stdenv = pkgs.clangStdenv;
           fs = pkgs.lib.fileset;
 
           openfheSrc = ./vendor/niobium-fhetch/vendor/openfhe;
@@ -183,17 +185,18 @@
       formatter = forEachSystem (pkgs: pkgs.nixfmt);
 
       devShells = forEachSystem (pkgs: {
-        # Stdenv override pins clang-19 as the auto-discovered cc/c++
-        # for any tool that probes the environment.
+        # Stdenv override sets the default clang (whatever nixpkgs
+        # currently ships) as the auto-discovered cc/c++ for any tool
+        # that probes the environment.
         default =
           (pkgs.mkShell.override {
-            stdenv = pkgs.llvmPackages_19.stdenv;
+            stdenv = pkgs.clangStdenv;
           })
             {
               name = "haze-dev";
               packages = hazeTools pkgs;
               shellHook = ''
-                echo "haze dev shell ready (clang 19, cmake, catch2, jj, clang-tools)."
+                echo "haze dev shell ready (clang, cmake, catch2, jj, clang-tools)."
                 echo "Run 'make sync && make build' to bootstrap, then 'make test'."
               '';
             };
