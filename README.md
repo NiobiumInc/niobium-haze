@@ -173,11 +173,17 @@ EXTERNAL_OPENFHE=1 OPENFHE_INSTALL_DIR=/path/to/openfhe make build MODE=release
 - Catch2 3.x.
 - git (submodule init).
 
-```sh
-# macOS (Homebrew)
-brew install cmake catch2 llvm@19
+Clang 19 is the supported floor. The nix flake (and therefore CI) tracks
+nixpkgs-unstable's default, which is currently newer; pick the most recent
+clang available from your package manager when possible.
 
-# Debian / Ubuntu (Catch2 3.x may need a backport or source build)
+```sh
+# macOS (Homebrew) — `llvm` is unversioned and tracks Homebrew's current
+# release; pin to `llvm@19` only if you need a specific version.
+brew install cmake catch2 llvm
+
+# Debian / Ubuntu (Catch2 3.x may need a backport or source build) — bump
+# clang-19 / llvm-19-dev to a newer apt suffix where available.
 sudo apt install cmake catch2 clang-19 llvm-19-dev
 ```
 
@@ -297,7 +303,7 @@ nix develop                                    # interactive
 nix develop --command make build               # one-shot
 ```
 
-The shell provisions the toolchain (clang 19 as `cc`/`c++`, cmake, Catch2 3,
+The shell provisions the toolchain (clang as `cc`/`c++`, cmake, Catch2 3,
 clang-tools, jujutsu, nixfmt) but otherwise stays out of the way. From there
 the Makefile flow above (`make build`, `make test`, etc.) works unchanged.
 This is the recommended path for editing haze sources — every iteration uses

@@ -22,9 +22,10 @@ entry point.
 
 Required to build, test, and lint:
 
-- A C++23 compiler. Clang 19 is what the project tests against;
-  `-Wthread-safety` (the canonical enforcement path for the lock contracts in
-  `src/common/thread_safety.hpp`) only fires under clang.
+- A C++23 compiler. Clang (the version nixpkgs-unstable currently ships) is
+  what CI tests against; `-Wthread-safety` (the canonical enforcement path for
+  the lock contracts in `src/common/thread_safety.hpp`) only fires under clang.
+  Clang 19 is the supported floor.
 - CMake >= 3.22.
 - Catch2 v3 (`Catch2::Catch2WithMain`), discovered via `find_package`.
 - For lint/format: clang-format, clang-tidy, clangd (any version that
@@ -39,7 +40,7 @@ the project tests against.
 ### Preferred path: nix flake
 
 If `nix` is installed, use it. The flake provides a hermetic devshell
-with everything pinned (clang 19, cmake, clang-tools, catch2_3, jujutsu)
+with everything pinned (clang, cmake, clang-tools, catch2_3, jujutsu)
 plus `MACOSX_DEPLOYMENT_TARGET=14.0` and a nix-pinned `SDKROOT`:
 
 ```sh
@@ -66,7 +67,9 @@ brew link --force --overwrite llvm
 export CC=$(brew --prefix llvm)/bin/clang CXX=$(brew --prefix llvm)/bin/clang++
 ```
 
-Linux (Debian/Ubuntu):
+Linux (Debian/Ubuntu) — clang-19 is the minimum the project supports; pick a
+newer apt package (`clang-20`, `clang-21`, ...) where available to match what
+nix-based CI tests with:
 
 ```sh
 sudo apt install clang-19 cmake catch2 clang-format clang-tidy clangd
