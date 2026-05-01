@@ -1,10 +1,12 @@
 # clangd configuration. See https://clangd.llvm.org/config.
 
 CompileFlags:
-  # Match the project's C++20 standard. CMake propagates -std=c++20 in
-  # compile_commands.json for source files, but headers picked up via
-  # background indexing benefit from an explicit fallback.
-  Add: [-std=c++20]
+  # Match the project's C++23 standard (CMakeLists.txt sets
+  # CMAKE_CXX_STANDARD 23). compile_commands.json already carries
+  # -std=c++23 for source files; this fallback covers headers indexed
+  # without a database entry, and overrides any earlier -std= so
+  # std::expected and other C++23 features resolve under clangd.
+  Add: [-std=c++23]
   CompilationDatabase: build
 
 Diagnostics:
