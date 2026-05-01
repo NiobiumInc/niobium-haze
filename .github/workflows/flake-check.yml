@@ -60,15 +60,22 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Mark worktree dirty for nix submodule ingestion
-        # nix issue #13324: with `inputs.self.submodules = true` and a
-        # clean parent worktree, nix re-fetches submodules from their
-        # remotes during flake source ingestion. The sandbox does not
-        # see actions/checkout's App token, so the private
-        # niobium-fhetch remote fails. Touching an untracked file
-        # marks the worktree dirty, which makes nix copy submodules
-        # from the local checkout instead.
-        run: touch .ci-dirty
+      - name: Rewrite niobium-fhetch submodule URL for token auth
+        # nix issue #13324: with `inputs.self.submodules = true`, nix's
+        # flake source ingestion re-fetches submodules from their
+        # declared URLs. .gitmodules registers niobium-fhetch via SSH,
+        # and the runner has no SSH key. actions/checkout cloned the
+        # submodule via a transient HTTPS rewrite that is NOT carried
+        # over to nix's separate git fetcher. Rewriting the URL to
+        # HTTPS-with-App-token in .gitmodules + .git/config covers nix.
+        # The .gitmodules edit also marks the parent worktree dirty
+        # (modified tracked file), nudging nix toward the local copy.
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config -f .gitmodules submodule.vendor/niobium-fhetch.url \
+            "https://x-access-token:${APP_TOKEN}@github.com/NiobiumInc/niobium-fhetch.git"
+          git submodule sync vendor/niobium-fhetch
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
