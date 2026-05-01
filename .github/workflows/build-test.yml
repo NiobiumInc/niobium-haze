@@ -77,6 +77,17 @@ jobs:
           restore-keys: |
             ubuntu-latest-openfhe-haze-
 
+      - name: Mark worktree dirty for nix submodule ingestion
+        # nix issue #13324: with `inputs.self.submodules = true` in
+        # flake.nix and a clean parent worktree, nix re-fetches
+        # submodules from their remotes during flake source
+        # ingestion. The sandbox does not see actions/checkout's App
+        # token, so the private niobium-fhetch SSH remote fails.
+        # Touching an untracked file marks the worktree dirty, which
+        # makes nix copy submodules from the local checkout instead.
+        # Same trick used in flake-check.yml.
+        run: touch .ci-dirty
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
 
