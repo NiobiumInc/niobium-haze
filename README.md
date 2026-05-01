@@ -352,6 +352,20 @@ hermetically — no live worktree required, suitable for CI.
   path:./vendor/niobium-haze#test-unit`. The apps embed the haze flake's
   self-reference, so they load the haze dev shell regardless of CWD.
 
+## Editor integration (Zed)
+
+`.zed/settings.json` and `.envrc` are checked in. To get accurate
+diagnostics:
+
+```sh
+direnv allow      # one-time, loads the nix devshell
+make build        # populates build/compile_commands.json
+zed .
+```
+
+If `.clang-tidy` or `.clangd` change, restart clangd via Zed's command
+palette → `editor: restart language server`.
+
 ## Testing
 
 Three suites, all built into a single `haze_tests` Catch2 binary and split by

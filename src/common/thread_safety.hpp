@@ -39,7 +39,7 @@
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names
 // here mirror the spellings shown in the clang TSA documentation.
-#if defined(__clang__)
+#ifdef __clang__
 #define HAZE_CAPABILITY(s) __attribute__((capability(s)))
 #define HAZE_SCOPED_CAPABILITY __attribute__((scoped_lockable))
 #define HAZE_GUARDED_BY(x) __attribute__((guarded_by(x)))

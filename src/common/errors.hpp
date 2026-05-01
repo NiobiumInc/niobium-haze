@@ -12,6 +12,7 @@
 // from the Product.
 #pragma once
 
+#include <cstdint>
 #include <haze/haze_types.h>
 
 // Thread-local last-error state. set_error is the inline writer used at
@@ -30,7 +31,7 @@ namespace haze {
 // all surface as HAZE_ERROR_INVALID_VALUE), so the public type would
 // erase information internal callers and debug logs need. Keep the
 // typed enum for that discrimination; map at the C ABI boundary only.
-enum class HazeInternalError {
+enum class HazeInternalError : std::uint8_t {
     InvalidArgument, // params struct field violates the API contract
     NotConfigured,   // ring_dim / modulus not set when required
     UnknownAddress,  // DevAddr not in the allocator's table
@@ -41,7 +42,7 @@ enum class HazeInternalError {
 
 // Map an internal error to the public hazeError_t the C ABI returns.
 // Adding a new internal error variant requires extending this table.
-hazeError_t to_public_error(HazeInternalError) noexcept;
+hazeError_t to_public_error(HazeInternalError err) noexcept;
 
 // Record a failure reason for HAZE_DEBUG=1 logging. Prints to stderr
 // when the env var is set. The context string is unowned and short-lived.

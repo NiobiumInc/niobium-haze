@@ -12,9 +12,10 @@
 // from the Product.
 #pragma once
 
+#include "common/thread_safety.hpp"
+
 #include <cstdint>
 #include <haze/haze_types.h>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -70,12 +71,13 @@ class Config {
 
     void reset() noexcept;
 
-  private:
-    Config() = default;
     Config(const Config &) = delete;
     Config &operator=(const Config &) = delete;
 
-    mutable std::mutex mutex_;
+  private:
+    Config() = default;
+
+    mutable HazeMutex mutex_;
     uint64_t ring_dim_ = 0;
     std::vector<uint64_t> moduli_;
     std::vector<uint64_t> twiddle_generators_;

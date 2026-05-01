@@ -57,7 +57,7 @@ bool extract_polynomial_values(const fhetch::Polynomial &p, std::string_view tag
     const auto tmp =
         fs::temp_directory_path() / (std::string("haze_result_") + std::string(tag) + ".json");
     struct RemoveOnExit {
-        const fs::path &path;
+        fs::path path;
         ~RemoveOnExit() { fs::remove(path); }
     } cleanup{tmp};
 

@@ -18,6 +18,7 @@
 #include "common/thread_safety.hpp"
 #include "core/epoch.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
@@ -94,7 +95,7 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
     // assert (which strips in release).
     std::unordered_set<uint64_t> src_set(p.src_base, p.src_base + p.src_base_len);
     for (size_t j = 0; j < p.rescale_base_len; ++j) {
-        if (src_set.count(p.rescale_base[j]) == 0) {
+        if (!src_set.contains(p.rescale_base[j])) {
             record_internal_error(HazeInternalError::InvalidArgument,
                                   "hazeModDown: rescale_base not subset of src_base");
             return std::unexpected(HazeInternalError::InvalidArgument);
@@ -204,7 +205,7 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     // dst writes.
     for (size_t d = 0; d < p.digit_count; ++d) {
         const auto &d_base = result[d].base();
-        store_mrp_locked(dst + d * d_base.size(), result[d], d_base.data(), d_base.size());
+        store_mrp_locked(dst + (d * d_base.size()), result[d], d_base.data(), d_base.size());
     }
     return {};
 }

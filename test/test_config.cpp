@@ -1,5 +1,6 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
 

@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/log.hpp"
+#include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
+#include <ios>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <sstream>
@@ -57,8 +59,8 @@ void EpochState::ensure_recording_locked() {
         // do_materialize) reset the counter to that base. Without it,
         // poly IDs drift forward across materializations and each epoch's
         // compaction sees a different layout.
-        backend().start_epoch();
-        backend().start_recording();
+        CompilerBackend::start_epoch();
+        CompilerBackend::start_recording();
         recording_ = true;
     }
 }
@@ -117,7 +119,7 @@ void EpochState::store_compute_result_locked(DevAddr addr,
     // / memset gets a new name. Input polys created via
     // lookup_or_create_locked never reach this path, so they are
     // never tagged as fhetch outputs.
-    if (pending_outputs_.find(addr) == pending_outputs_.end()) {
+    if (!pending_outputs_.contains(addr)) {
         pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
     }
 }
@@ -148,7 +150,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
 
     // Step 1: write the per-epoch .fhetch trace and reset the recording
     // bookkeeping in libnbfhetch.
-    const bool stop_ok = backend().stop_epoch();
+    const bool stop_ok = CompilerBackend::stop_epoch();
     if (!stop_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendError,
@@ -160,7 +162,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
     // simulator end-to-end inside libnbfhetch; other targets spawn
     // nbcc_fhetch_replay over the HTTP transport. Both paths produce
     // serialized_probes/<name>.ct for fhetch::result to read in step 3.
-    const bool replay_ok = backend().replay();
+    const bool replay_ok = CompilerBackend::replay();
     if (!replay_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendError,

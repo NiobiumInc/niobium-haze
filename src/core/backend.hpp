@@ -12,8 +12,9 @@
 // from the Product.
 #pragma once
 
+#include "common/thread_safety.hpp"
+
 #include <atomic>
-#include <mutex>
 
 namespace haze {
 
@@ -43,38 +44,39 @@ class CompilerBackend {
     bool is_initialized() const noexcept;
 
     // Begin a new recording (after init or after stop_epoch).
-    void start_recording() noexcept;
+    static void start_recording() noexcept;
 
     // Mark the start of a functional epoch — anchors poly-ID base on
     // first call, resets to that base on subsequent calls.
-    void start_epoch() noexcept;
+    static void start_epoch() noexcept;
 
     // Finalize the current epoch's recording, write the per-epoch .fhetch
     // trace, and reset state for the next epoch. Returns true on success.
     // Does NOT trigger replay; callers materializing results must invoke
     // replay() afterwards (see below).
-    bool stop_epoch() noexcept;
+    static bool stop_epoch() noexcept;
 
     // Trigger replay of the most recently recorded epoch. Behaviour
     // depends on the configured target — see haze.h's hazeSetTarget
     // doc for the two-tier table (local in-process simulator vs HTTP
     // transport). Returns true on success.
-    bool replay() noexcept;
+    static bool replay() noexcept;
 
     // Drop cached state so the next call to ensure_initialized() starts
     // fresh. Mainly for tests via hazeReset().
     void reset() noexcept;
 
-  private:
-    CompilerBackend() = default;
     CompilerBackend(const CompilerBackend &) = delete;
     CompilerBackend &operator=(const CompilerBackend &) = delete;
+
+  private:
+    CompilerBackend() = default;
 
     // Atomic flag enables a lock-free fast path on the hot
     // ensure_initialized check. init_mutex_ serializes the first-call
     // path so concurrent first callers don't all run init.
     std::atomic<bool> initialized_{false};
-    std::mutex init_mutex_;
+    HazeMutex init_mutex_;
 };
 
 inline CompilerBackend &backend() noexcept {

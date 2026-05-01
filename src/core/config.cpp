@@ -12,13 +12,14 @@
 // from the Product.
 #include "core/config.hpp"
 
+#include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
 
 #include <cstdint>
 #include <cstdlib>
 #include <haze/haze_types.h>
-#include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace haze {
@@ -44,7 +45,7 @@ hazeError_t Config::set_ring_dimension(uint64_t n) noexcept {
     // ever sees (new ring_dim, old pool poly_bytes) or vice versa. Lock
     // order is Config -> Allocator; the allocator never calls back into
     // Config, so this direction cannot deadlock.
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (configured_ && ring_dim_ != n)
         return HAZE_ERROR_CONFIGERR;
     ring_dim_ = n;
@@ -57,7 +58,7 @@ hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
         return HAZE_ERROR_INVALID_VALUE;
     if (modulus == 0)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= moduli_.size() || moduli_[i] != modulus)
@@ -69,9 +70,9 @@ hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
     // skipping an index leaves a 0 in the table which Config::modulus()
     // returns indistinguishably from "out of range," and the compute
     // templates would conflate the two failure modes.
-    if (static_cast<int>(moduli_.size()) < idx)
+    if (std::cmp_less(moduli_.size(), idx))
         return HAZE_ERROR_INVALID_VALUE;
-    if (static_cast<int>(moduli_.size()) == idx) {
+    if (std::cmp_equal(moduli_.size(), idx)) {
         moduli_.push_back(modulus);
     } else {
         moduli_[static_cast<size_t>(idx)] = modulus;
@@ -82,14 +83,14 @@ hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
 hazeError_t Config::set_twiddle_generator(int idx, uint64_t generator) noexcept {
     if (idx < 0)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= twiddle_generators_.size() || twiddle_generators_[i] != generator)
             return HAZE_ERROR_CONFIGERR;
         return HAZE_SUCCESS;
     }
-    if (static_cast<int>(twiddle_generators_.size()) <= idx) {
+    if (std::cmp_less_equal(twiddle_generators_.size(), idx)) {
         twiddle_generators_.resize(static_cast<size_t>(idx) + 1, 0);
     }
     twiddle_generators_[static_cast<size_t>(idx)] = generator;
@@ -97,7 +98,7 @@ hazeError_t Config::set_twiddle_generator(int idx, uint64_t generator) noexcept 
 }
 
 hazeError_t Config::configure_device() noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (ring_dim_ == 0)
         return HAZE_ERROR_INVALID_VALUE;
     configured_ = true;
@@ -105,24 +106,24 @@ hazeError_t Config::configure_device() noexcept {
 }
 
 uint64_t Config::ring_dim() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return ring_dim_;
 }
 
 uint64_t Config::modulus(int idx) const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     if (idx < 0 || static_cast<size_t>(idx) >= moduli_.size())
         return 0;
     return moduli_[static_cast<size_t>(idx)];
 }
 
 bool Config::is_configured() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return configured_;
 }
 
 std::vector<uint64_t> Config::moduli_copy() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return moduli_;
 }
 
@@ -130,7 +131,7 @@ hazeError_t Config::set_program_info(const char *name, const char *version,
                                      const char *description) noexcept {
     if (name == nullptr || version == nullptr || description == nullptr)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     program_name_ = name;
     program_version_ = version;
     program_description_ = description;
@@ -141,30 +142,30 @@ hazeError_t Config::set_program_info(const char *name, const char *version,
 hazeError_t Config::set_target(const char *target) noexcept {
     if (target == nullptr)
         return HAZE_ERROR_INVALID_VALUE;
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     target_ = target;
     target_set_ = true;
     return HAZE_SUCCESS;
 }
 
 std::string Config::program_name() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return program_info_set_ ? program_name_ : std::string{"haze"};
 }
 
 std::string Config::program_version() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return program_info_set_ ? program_version_ : std::string{"0.1"};
 }
 
 std::string Config::program_description() const noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     return program_info_set_ ? program_description_ : std::string{"HAZE runtime"};
 }
 
 std::string Config::target() const noexcept {
     {
-        std::lock_guard lock(mutex_);
+        HazeLockGuard lock(mutex_);
         if (target_set_)
             return target_;
     }
@@ -179,7 +180,7 @@ std::string Config::target() const noexcept {
 }
 
 void Config::reset() noexcept {
-    std::lock_guard lock(mutex_);
+    HazeLockGuard lock(mutex_);
     ring_dim_ = 0;
     moduli_.clear();
     twiddle_generators_.clear();

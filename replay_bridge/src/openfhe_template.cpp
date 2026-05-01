@@ -24,16 +24,20 @@
 
 #include <bit>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <map>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 // libnbfhetch internal helpers used by the bridge. Forward-declared here
@@ -86,7 +90,7 @@ using DCRTPoly = lbcrypto::DCRTPoly;
 // help callers diagnose synthesis issues. Lives in this file (rather
 // than a header) because there's exactly one caller and one
 // implementation TU.
-enum class BridgeError {
+enum class BridgeError : uint8_t {
     InvalidRingDim,
     InvalidModulus,
     KeygenFailed,

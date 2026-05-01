@@ -13,14 +13,18 @@
 #ifndef HAZE_TYPES_H
 #define HAZE_TYPES_H
 
+// haze_types.h is a C-compatible public header (consumed by both C
+// and C++ TUs); the C-style stdint.h / stddef.h forms must stay.
+// NOLINTNEXTLINE(modernize-deprecated-headers)
 #include <stddef.h>
+// NOLINTNEXTLINE(modernize-deprecated-headers)
 #include <stdint.h>
 
 // ---------------------------------------------------------------------------
 // Symbol visibility
 // ---------------------------------------------------------------------------
 
-#if defined(_WIN32)
+#ifdef _WIN32
 #ifdef HAZE_BUILDING_LIBRARY
 #define HAZE_API __declspec(dllexport)
 #else
@@ -33,7 +37,7 @@
 #endif
 
 // Marks a return value that must not be silently discarded.
-#if defined(__cplusplus)
+#ifdef __cplusplus
 #define HAZE_NODISCARD [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)
 #define HAZE_NODISCARD __attribute__((warn_unused_result))
@@ -63,6 +67,13 @@ typedef struct haze_exec_s *hazeGraphExec_t;
 // configerr, iseqerr.
 // ---------------------------------------------------------------------------
 
+// The four typedef-enum types below are the public C ABI. C does not
+// have `enum class`, and adding a `: uint8_t` underlying type is C23-
+// only and not portable, so the C++ Core Guidelines / performance
+// recommendations that flag unscoped enums and oversized base types
+// are silenced for the entire ABI block.
+// NOLINTBEGIN(cppcoreguidelines-use-enum-class,performance-enum-size)
+
 typedef enum {
     HAZE_SUCCESS = 0,
     HAZE_ERROR_INVALID_HANDLE,
@@ -84,9 +95,9 @@ typedef enum {
 
 typedef enum {
     HAZE_OVERLAP_NONE = 0,
-    HAZE_OVERLAP_LOAD = 1u << 0,
-    HAZE_OVERLAP_STORE = 1u << 1,
-    HAZE_OVERLAP_FULL = (1u << 0) | (1u << 1),
+    HAZE_OVERLAP_LOAD = 1U << 0,
+    HAZE_OVERLAP_STORE = 1U << 1,
+    HAZE_OVERLAP_FULL = (1U << 0) | (1U << 1),
 } hazeOverlapFlags;
 
 // ---------------------------------------------------------------------------
@@ -132,6 +143,7 @@ typedef enum {
     HAZE_MEMORY_TYPE_DEVICE = 2,
     HAZE_MEMORY_TYPE_MANAGED = 4
 } hazeMemoryType;
+// NOLINTEND(cppcoreguidelines-use-enum-class,performance-enum-size)
 
 typedef struct {
     hazeMemoryType type;
