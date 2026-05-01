@@ -284,32 +284,67 @@ Path differences vs the standalone build:
 | `haze_tests`  | `build/vendor/niobium-haze/haze_tests` | `build/haze_tests` |
 | Test runs dir | `build/vendor/niobium-haze/runs/`      | `build/runs/`      |
 
-### With the nix flake
+### With the nix flake (optional)
 
-`nix develop` enters `devShells.default` (`haze-dev`). The shell provides
-clang 19, cmake, clang-tools (clang-format / clang-tidy / clangd), Catch2 3.x,
-and jujutsu, with `MACOSX_DEPLOYMENT_TARGET=14.0` and a pinned `SDKROOT`. The
-`shellHook` wires `CMAKE_PREFIX_PATH` and `LD_LIBRARY_PATH` for the
-niobium-compiler / OpenFHE artefacts under `vendor/niobium-compiler` (when
-present).
+The standalone Makefile flow above is the **first-class** path; the flake is
+an opt-in convenience for contributors who already use nix. It provides three
+distinct surfaces.
 
-Inside the shell, the same Make targets work:
+#### 1. Dev shell — fastest iteration
 
 ```sh
-EXTERNAL_OPENFHE=1 make build MODE=release
+nix develop                                    # interactive
+nix develop --command make build               # one-shot
 ```
 
-To run a one-shot build without entering the shell interactively:
+The shell provisions the toolchain (clang 19 as `cc`/`c++`, cmake, Catch2 3,
+clang-tools, jujutsu, nixfmt) but otherwise stays out of the way. From there
+the Makefile flow above (`make build`, `make test`, etc.) works unchanged.
+This is the recommended path for editing haze sources — every iteration uses
+the live worktree without round-tripping through `/nix/store`.
+
+#### 2. `nix run` apps — make targets without entering the shell
 
 ```sh
-nix develop --command bash -c 'EXTERNAL_OPENFHE=1 make build MODE=release'
+nix run .#test-unit                # = nix develop --command make test-unit
+nix run .#test-sim                 # = nix develop --command make test-sim
+nix run .#test                     # = ... make test
+nix run .#build                    # = ... make build
 ```
 
-Heads-up on macOS: if OpenFHE was previously built outside `nix develop`
-against the host SDK and haze is built inside the shell, the two libc++ ABIs
-collide and tests segfault non-deterministically. See [`CLAUDE.md`](CLAUDE.md)
--> "SDK / ABI mismatch trap on macOS" for the rebuild recipe and verification
-steps.
+Each app re-enters the dev shell so cmake's setup hooks fire, then invokes
+the Makefile target against the caller's CWD (which must be a haze worktree).
+
+#### 3. Hermetic packages — cached, reproducible, slow first time
+
+```sh
+nix build .#openfhe                # ~20-30 min cold; cached in /nix/store
+nix build .#niobium-fhetch         # depends on openfhe; reuses cache
+nix build .#haze                   # = .#default; libhaze + haze_tests
+nix flake check                    # devshell + fmt + haze build + tests
+```
+
+Each layer caches independently. OpenFHE only rebuilds when its submodule
+pointer moves; haze edits only invalidate the haze derivation. After
+`nix build .#haze`, the result is at `result/{lib,bin,include}/...`.
+
+The `nix flake check` `unit-tests` and `sim-tests` derivations run `haze_tests`
+hermetically — no live worktree required, suitable for CI.
+
+#### Notes
+
+- `inputs.self.submodules = true` makes the flake source submodule-aware. With
+  a clean haze worktree, nix re-fetches submodules from their remotes (needs
+  SSH auth for the private niobium-fhetch); keep a dirty file in the worktree
+  to force the local checkout instead.
+- The hermetic packages live entirely in `/nix/store`. The macOS SDK / ABI
+  mismatch trap (see [`CLAUDE.md`](CLAUDE.md)) only triggers when **mixing**
+  nix and non-nix builds in the same closure — pure-flake or pure-Makefile
+  workflows are unaffected. Don't `make build` against an OpenFHE that was
+  previously built inside `nix develop` (or vice versa).
+- Invoke from a parent repo with the explicit path: `nix run
+  path:./vendor/niobium-haze#test-unit`. The apps embed the haze flake's
+  self-reference, so they load the haze dev shell regardless of CWD.
 
 ## Testing
 
@@ -350,7 +385,8 @@ niobium-haze/
       vendor/json/          # nested submodule
   CMakeLists.txt            # libhaze + haze_tests + replay_bridge wiring
   Makefile                  # standalone driver (build, test-*, clean)
-  flake.nix                 # nix dev shell + package
+  flake.nix                 # nix dev shell + make-wrapping apps +
+                            # hermetic packages (openfhe, niobium-fhetch, haze)
   CLAUDE.md                 # working notes (incl. macOS SDK trap recipe)
   README.md
 ```
