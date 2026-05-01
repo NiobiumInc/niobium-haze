@@ -9,6 +9,9 @@ out/
 _build/
 dbuild/
 
+# direnv (.envrc itself is tracked; the cache it materialises is not)
+.direnv/
+
 # CMake artefacts beyond the upstream template
 CPackConfig.cmake
 CPackSourceConfig.cmake
