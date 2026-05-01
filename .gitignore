@@ -2,6 +2,9 @@
 # Project-specific rules (not covered by the upstream template below).
 # ============================================================================
 
+# References
+references/
+
 # Build directories
 build-*/
 cmake-build-*/
