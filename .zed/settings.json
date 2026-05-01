@@ -1,0 +1,40 @@
+{
+  "load_direnv": "direct",
+  "lsp": {
+    "clangd": {
+      "binary": {
+        "path": "direnv",
+        "arguments": [
+          "exec",
+          ".",
+          "scripts/zed-clangd.sh",
+          "--background-index",
+          "--clang-tidy",
+          "--header-insertion=never",
+          "--completion-style=detailed",
+          "--pch-storage=memory",
+          "--compile-commands-dir=build"
+        ]
+      }
+    }
+  },
+  "languages": {
+    "C++": {
+      "language_servers": ["clangd"],
+      "format_on_save": "on",
+      "formatter": "language_server",
+      "tab_size": 4,
+      "preferred_line_length": 100
+    },
+    "C": {
+      "language_servers": ["clangd"],
+      "format_on_save": "on",
+      "formatter": "language_server",
+      "tab_size": 4,
+      "preferred_line_length": 100
+    }
+  },
+  "file_types": {
+    "C++": ["hpp", "cpp", "h", "ipp", "tpp"]
+  }
+}
