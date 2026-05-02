@@ -100,39 +100,5 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
 }
 
 // CRT basis conversion (hazeBasisConvert / hazeModDown / hazeModUp) is
-// implemented in haze_basis_convert.cpp.
-
-// Graph capture / execution stubs (CUDA-shape names) — not supported yet.
-
-extern "C" hazeError_t hazeStreamBeginCapture(hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeStreamEndCapture(hazeStream_t /*stream*/, hazeGraph_t *graph) noexcept {
-    if (graph != nullptr)
-        *graph = nullptr;
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGraphInstantiate(hazeGraphExec_t *exec, hazeGraph_t /*graph*/) noexcept {
-    if (exec != nullptr)
-        *exec = nullptr;
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGraphLaunch(hazeGraphExec_t /*exec*/, hazeStream_t /*stream*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGraphExecUpdate(hazeGraphExec_t /*exec*/,
-                                           hazeGraph_t /*graph*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGraphExecDestroy(hazeGraphExec_t /*exec*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
-
-extern "C" hazeError_t hazeGraphDestroy(hazeGraph_t /*graph*/) noexcept {
-    return set_error(HAZE_ERROR_NOT_SUPPORTED);
-}
+// implemented in basis_convert.cpp. Graph capture / execution stubs
+// (hazeStreamBeginCapture, hazeGraph*) live in graph.cpp.

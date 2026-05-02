@@ -148,6 +148,7 @@ add_library(haze SHARED
   src/api/config.cpp
   src/api/device.cpp
   src/api/error.cpp
+  src/api/graph.cpp
   src/api/lifecycle.cpp
   src/api/memory.cpp
   src/api/stream.cpp
