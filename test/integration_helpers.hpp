@@ -23,6 +23,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <vector>
 
 namespace haze::test {
 
@@ -63,6 +64,49 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
     REQUIRE(hazeSetCiphertextModulus(mod_idx, picked) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return picked;
+}
+
+// Negacyclic convolution mod q: c(X) = a(X) * b(X) mod (X^N + 1, q).
+// O(N^2). Uses __uint128_t per-term so ~60-bit primes don't overflow the
+// product. X^N = -1 in this quotient ring, so a contribution at index
+// (i + j) wraps with a sign flip when i + j >= N. Intended as a host
+// oracle for NTT->hazeMul->INTT integration tests, not a hot path.
+//
+// Preconditions: a.size() == b.size(), all coefficients in [0, q).
+// Loop invariant: every c[k] stays in [0, q) after each update — the
+// branches below depend on this. If a future edit reorders or extends
+// the update logic, preserve this invariant or the modular arithmetic
+// will silently corrupt.
+inline std::vector<uint64_t> negacyclic_conv_ref(const std::vector<uint64_t> &a,
+                                                 const std::vector<uint64_t> &b, uint64_t q) {
+    REQUIRE(a.size() == b.size());
+    const std::size_t n = a.size();
+    std::vector<uint64_t> c(n, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (a[i] == 0) {
+            continue;
+        }
+        for (std::size_t j = 0; j < n; ++j) {
+            if (b[j] == 0) {
+                continue;
+            }
+            const __uint128_t prod =
+                static_cast<__uint128_t>(a[i]) * static_cast<__uint128_t>(b[j]);
+            const uint64_t term = static_cast<uint64_t>(prod % q); // term in [0, q).
+            const std::size_t k = (i + j) % n;
+            const uint64_t cur = c[k]; // cur in [0, q) by invariant.
+            if ((i + j) >= n) {
+                // Sign flip: c[k] -= term  (mod q). Result is in [0, q).
+                c[k] = (cur >= term) ? (cur - term) : (cur + (q - term));
+            } else {
+                // c[k] += term  (mod q). cur + term < 2q (both < q), so
+                // one subtract suffices to land back in [0, q).
+                const uint64_t sum = cur + term;
+                c[k] = (sum >= q) ? (sum - q) : sum;
+            }
+        }
+    }
+    return c;
 }
 
 } // namespace haze::test
