@@ -164,23 +164,62 @@ forward-compat enum extension across library versions.
 
 Lint and format use the in-tree `.clang-format` (LLVM, indent 4, column 100)
 and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.).
-Local `clang-tidy` invocations emit warnings only; CI is the single source
-of error promotion via `--warnings-as-errors='*'`:
+
+Three CI gates must pass before a PR merges. Each one has a local
+equivalent — run them before pushing rather than after CI fails:
+
+1. `Check clang-format` — runs `clang-format --dry-run -Werror` over
+   every first-party `.cpp` / `.hpp` / `.h` / `.c` under `src/`,
+   `include/`, `replay_bridge/`, `test/`. Reproduce locally:
+
+   ```sh
+   # Apply formatting in place to fix anything the gate would reject.
+   find src include replay_bridge test \
+     \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
+     -print0 | xargs -0 clang-format -i
+
+   # Same dry-run -Werror sweep CI runs (exits non-zero on any diff).
+   find src include replay_bridge test \
+     \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
+     -print0 | xargs -0 clang-format --dry-run -Werror
+   ```
+
+2. `clang-tidy + clangd-check` — `clang-tidy --warnings-as-errors='*'`
+   over first-party `src/`, `replay_bridge/`, `test/` `.cpp` files,
+   plus `clangd --check` with a grep-for-warnings post-pass (clangd
+   exits zero on warnings without it). Both ride the configured
+   `compile_commands.json` and must report zero warnings.
+
+3. `nix flake check` — superset that re-runs the two lint derivations
+   plus `unit-tests`, `sim-tests`, `fmt` (nixfmt), and the devshell
+   build. Slowest, but is the strongest pre-push signal.
+
+Reproduce 2 and 3 with the same flake derivations CI uses. Substitute
+your host system (`aarch64-darwin`, `x86_64-linux`, or `aarch64-linux`)
+for `<sys>`:
 
 ```sh
-clang-format -i src/**/*.cpp src/**/*.hpp include/haze/*.h
-clang-tidy -p build src/api/compute.cpp     # one file, warnings-only
+# Just the lint gates (matches CI's "clang-tidy + clangd-check" job).
+nix build -L --keep-going \
+  .#checks.<sys>.clang-tidy \
+  .#checks.<sys>.clangd-check
+
+# Everything (matches CI's "nix flake check" job; runs lint + tests).
+nix flake check -L --keep-going
 ```
 
-Before committing, the static-analysis gate must be clean. CI enforces
-this through two flake checks — `nix build .#checks.<sys>.clang-tidy`
-runs `clang-tidy --warnings-as-errors='*'` over first-party `src/`,
-`replay_bridge/`, and `test/` `.cpp` files; `nix build
-.#checks.<sys>.clangd-check` runs `clangd --check` and fails on any
-warning line. Both ride on the configured `compile_commands.json` and
-must report zero warnings on first-party sources. The dev-shell
-equivalent for a quick local pass is `clang-tidy -p build
---warnings-as-errors='*' <files>` and `clangd --check=<file>`.
+When iterating on a single file, skip the flake build and call the
+linters directly — but keep `--warnings-as-errors='*'` so local output
+matches what CI promotes to errors:
+
+```sh
+clang-tidy -p build --warnings-as-errors='*' src/api/compute.cpp
+clangd --check=src/api/compute.cpp
+```
+
+A bare `clang-tidy -p build <file>` (no `--warnings-as-errors`) prints
+the same diagnostics as warnings; CI will still fail. Always pass
+`--warnings-as-errors='*'` locally when validating before push.
 
 Compiler diagnostics: `-Wall -Wextra -Werror -Wpedantic -Wshadow -Wconversion`,
 plus `-Wthread-safety` under clang. Clang's TSA is the canonical enforcement
