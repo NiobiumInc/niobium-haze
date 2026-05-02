@@ -79,13 +79,16 @@ TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]") 
 TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
     // Constant polynomials: a[i] = 3, b[i] = 5 -> expected product = 15
-    std::vector<uint64_t> a(kRingDim, 3), b(kRingDim, 5);
+    std::vector<uint64_t> a(kRingDim, 3);
+    std::vector<uint64_t> b(kRingDim, 5);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -160,7 +163,9 @@ TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[inte
 TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]") {
     const uint64_t q = haze::test::setup_integration_compute_config();
 
-    void *d_src = nullptr, *d_ntt = nullptr, *d_intt = nullptr;
+    void *d_src = nullptr;
+    void *d_ntt = nullptr;
+    void *d_intt = nullptr;
     REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_ntt, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_intt, kBytes) == HAZE_SUCCESS);
@@ -241,9 +246,12 @@ inline std::vector<uint64_t> run_ntt_mul_intt(const std::vector<uint64_t> &a,
     REQUIRE(a.size() == kRingDim);
     REQUIRE(b.size() == kRingDim);
 
-    void *d_a = nullptr, *d_b = nullptr;
-    void *d_a_eval = nullptr, *d_b_eval = nullptr;
-    void *d_c_eval = nullptr, *d_c = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_a_eval = nullptr;
+    void *d_b_eval = nullptr;
+    void *d_c_eval = nullptr;
+    void *d_c = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_a_eval, kBytes) == HAZE_SUCCESS);
@@ -282,10 +290,11 @@ TEST_CASE("polynomial product: monomial * monomial via NTT.Mul.INTT", "[integrat
     const std::pair<uint64_t, uint64_t> pairs[] = {{0, 0},
                                                    {kRingDim / 2, kRingDim / 2},
                                                    {kRingDim - 1, kRingDim - 1},
-                                                   {kRingDim / 2 + 1, kRingDim / 2}};
+                                                   {(kRingDim / 2) + 1, kRingDim / 2}};
 
     for (const auto &[i, j] : pairs) {
-        std::vector<uint64_t> a(kRingDim, 0), b(kRingDim, 0);
+        std::vector<uint64_t> a(kRingDim, 0);
+        std::vector<uint64_t> b(kRingDim, 0);
         a[i] = 1;
         b[j] = 1;
 
@@ -306,7 +315,8 @@ TEST_CASE("polynomial product: linear * constant via NTT.Mul.INTT", "[integratio
     const uint64_t q = haze::test::setup_integration_compute_config();
 
     // a(X) = 11 + 13*X, b(X) = 17.
-    std::vector<uint64_t> a(kRingDim, 0), b(kRingDim, 0);
+    std::vector<uint64_t> a(kRingDim, 0);
+    std::vector<uint64_t> b(kRingDim, 0);
     a[0] = 11;
     a[1] = 13;
     b[0] = 17;
@@ -329,7 +339,8 @@ TEST_CASE("polynomial product: random small coefficients via NTT.Mul.INTT", "[in
 
     // Deterministic small coefficients (< 1024). Catches obvious convolution
     // bugs without 128-bit overflow concerns in the oracle.
-    std::vector<uint64_t> a(kRingDim), b(kRingDim);
+    std::vector<uint64_t> a(kRingDim);
+    std::vector<uint64_t> b(kRingDim);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         a[k] = ((k * 31ULL + 7ULL) ^ (k << 3)) & 0x3FFULL;
         b[k] = ((k * 17ULL + 5ULL) ^ (k << 2)) & 0x3FFULL;
@@ -349,7 +360,8 @@ TEST_CASE("polynomial product: random full-range coefficients via NTT.Mul.INTT",
     // Full-range coefficients uniform over [0, q). Exercises modular
     // reduction in the convolution. Pattern mirrors
     // test_basis_convert.cpp:make_residue.
-    std::vector<uint64_t> a(kRingDim), b(kRingDim);
+    std::vector<uint64_t> a(kRingDim);
+    std::vector<uint64_t> b(kRingDim);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         const __uint128_t va =
             (static_cast<__uint128_t>(0x9E3779B97F4A7C15ULL) * (k + 1) * 7) + (k & 0xFFFF) + 13;
@@ -450,11 +462,13 @@ TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[integration
 TEST_CASE("hazeMul in-place (dst == src1) produces correct result", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 4), b(kRingDim, 5);
+    std::vector<uint64_t> a(kRingDim, 4);
+    std::vector<uint64_t> b(kRingDim, 5);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -475,11 +489,13 @@ TEST_CASE("hazeMul in-place (dst == src1) produces correct result", "[integratio
 TEST_CASE("hazeMul in-place (dst == src2) produces correct result", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 6), b(kRingDim, 7);
+    std::vector<uint64_t> a(kRingDim, 6);
+    std::vector<uint64_t> b(kRingDim, 7);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -560,14 +576,18 @@ TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integr
 TEST_CASE("multi-operation chain: mul then add in one recording", "[integration]") {
     haze::test::setup_integration_compute_config();
 
-    void *d_a = nullptr, *d_b = nullptr, *d_t = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_t = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
     // a=2, b=3 -> t = a*b = 6 -> dst = t + b = 9
-    std::vector<uint64_t> a(kRingDim, 2), b(kRingDim, 3);
+    std::vector<uint64_t> a(kRingDim, 2);
+    std::vector<uint64_t> b(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
@@ -740,9 +760,14 @@ TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
     void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    // src pointers that were never hazeMemcpy'd (no shadow data)
+    // src pointers that were never hazeMemcpy'd (no shadow data). The
+    // ints-to-pointers are deliberate: the test asserts the allocator
+    // classifies these synthetic device addresses as unmapped, which
+    // requires the addresses themselves, not real allocations.
+    // NOLINTBEGIN(performance-no-int-to-ptr)
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
+    // NOLINTEND(performance-no-int-to-ptr)
     REQUIRE(hazeMul(d_dst, fake1, fake2, kModIdx, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -755,12 +780,15 @@ TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    void *d_a = nullptr, *d_b = nullptr, *d_dst = nullptr;
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    std::vector<uint64_t> a(kRingDim, 1), b(kRingDim, 2);
+    std::vector<uint64_t> a(kRingDim, 1);
+    std::vector<uint64_t> b(kRingDim, 2);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
