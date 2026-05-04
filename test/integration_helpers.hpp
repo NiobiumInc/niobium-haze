@@ -19,7 +19,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
-#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
@@ -54,10 +53,6 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  int mod_idx = 0) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    if (const char *env_target = std::getenv("HAZE_TARGET");
-        env_target != nullptr && *env_target != '\0') {
-        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
-    }
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus, &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);

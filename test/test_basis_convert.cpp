@@ -16,7 +16,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
@@ -46,10 +45,6 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 static void configure_three_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    if (const char *env_target = std::getenv("HAZE_TARGET");
-        env_target != nullptr && *env_target != '\0') {
-        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
-    }
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
@@ -534,10 +529,6 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 void configure_sixteen_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    if (const char *env_target = std::getenv("HAZE_TARGET");
-        env_target != nullptr && *env_target != '\0') {
-        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
-    }
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
     for (int i = 0; std::cmp_less(i, kSrcLimbs + kPLimbs); ++i) {
