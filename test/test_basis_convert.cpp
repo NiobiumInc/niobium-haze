@@ -16,8 +16,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <haze/replay_bridge.h>
 #include <math/math-hal.h>
 #include <utility>
 #include <vector>
@@ -32,9 +34,24 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 
 // Reset HAZE state up front so test ordering does not leak epoch /
 // allocator state between cases under --order rand.
+//
+// The bridge init is required to satisfy the simulator's "ring dimension
+// must be set" precondition (capture_crypto_context populates it) and to
+// register the post-recording hook that writes per-input bins / per-output
+// templates for downstream replay. The picked modulus is intentionally NOT
+// fed back into haze's table — the simulator pulls primes from the FHETCH
+// trace's modulus_table (built from src_base / dst_base / etc. directly),
+// and the multi-residue tests need to keep their explicit kQ0 / kQ1 / kQ2
+// values rather than be clobbered by the bridge's single picked prime.
 static void configure_three_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    if (const char *env_target = std::getenv("HAZE_TARGET");
+        env_target != nullptr && *env_target != '\0') {
+        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
+    }
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
@@ -82,13 +99,7 @@ TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
 }
 
-// The [!mayfail] cases below are blocked on multi-residue support in the
-// replay bridge. Recording succeeds, but the D2H-triggered replay returns
-// HAZE_ERROR_NOT_SUPPORTED because the bridge cannot synthesise an OpenFHE
-// CryptoContext for multi-modulus traces yet. They run and report assertion
-// failures, but Catch2 does not propagate those as suite failures. Remove the
-// tag from each marked TEST_CASE once the bridge gains MRP support.
-TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration][!mayfail]") {
+TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]") {
     // rescale_base contains a prime not present in src_base. The HAZE
     // layer must reject this BEFORE opening an EpochSession — otherwise
     // the next D2H would replay a dirty recording and crash.
@@ -207,8 +218,7 @@ TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
 // Cross-checking non-trivial FBC values against an OpenFHE reference
 // is deferred to integration tests (FIDESlib examples).
 
-TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[integration]") {
     // src_base = {q0, q1}, dst_base = {q0, q1, q2}. Every prime in
     // src_base is also in dst_base, so the first two dst residues are
     // same-modulus copies of the corresponding src residues. The third
@@ -261,7 +271,7 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values",
     }
 }
 
-TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") {
     // FBC of zero polynomials is zero on every target modulus, so we
     // can verify the non-trivial dst residues without computing FBC.
     configure_three_moduli();
@@ -306,7 +316,7 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration][!m
     }
 }
 
-TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integration]") {
     // Aliasing src[i] == dst[j] for any (i,j) is documented as safe in
     // core/basis_convert.cpp because all reads complete before any
     // store. Test the simplest case: same-modulus 1->1 convert with
@@ -337,7 +347,7 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integr
     REQUIRE(hazeFree(p0) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration][!mayfail]") {
+TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     // ApproxModDown is rescale_fbc(x, rescale_base): CRT-divide x by
     // P=prod(rescale_base) with rounding. For x identically zero on
     // every residue, every output is also zero — we can assert exact
@@ -394,8 +404,7 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration][!may
     REQUIRE(hazeFree(d1) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeModUp: zero input produces zero output across both digits",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[integration]") {
     // dig_decomp(x, digit_bases, p_base): for each digit i, take the
     // x|_{digit_bases[i]} subset and FBC-extend it onto src_base ∪
     // p_base. For x identically zero, every digit's every output is
@@ -516,9 +525,21 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 // Configure HAZE with the full 16-prime moduli table once so the same
 // state covers basis_convert (uses 12 src + 1 dst extension), ModDown
 // (12 src), and ModUp (12 src + 4 p) tests.
+//
+// Same bridge-init rationale as configure_three_moduli: needed for the
+// simulator's ring-dim precondition + post-recording hook registration.
+// The picked modulus is intentionally not realigned; the trace's
+// modulus_table carries the real kBigBase[i] values from the recorded
+// sr_* ops.
 void configure_sixteen_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    if (const char *env_target = std::getenv("HAZE_TARGET");
+        env_target != nullptr && *env_target != '\0') {
+        REQUIRE(hazeSetTarget(env_target) == HAZE_SUCCESS);
+    }
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
     for (int i = 0; std::cmp_less(i, kSrcLimbs + kPLimbs); ++i) {
         REQUIRE(hazeSetCiphertextModulus(i, kBigBase[static_cast<size_t>(i)]) == HAZE_SUCCESS);
     }
@@ -762,8 +783,7 @@ void check_against_reference(const std::vector<void *> &dst,
 
 } // namespace
 
-TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference",
-          "[integration][!mayfail]") {
+TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
@@ -797,7 +817,7 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference",
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration][!mayfail]") {
+TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
@@ -834,7 +854,7 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration][!mayf
     free_all(dst_ptrs);
 }
 
-TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration][!mayfail]") {
+TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") {
     configure_sixteen_moduli();
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
