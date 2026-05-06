@@ -159,6 +159,7 @@ add_library(haze SHARED
   src/core/config.cpp
   src/core/device.cpp
   src/core/epoch.cpp
+  src/core/mrp_polymap.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
   # Shared leaf utilities.

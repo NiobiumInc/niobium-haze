@@ -18,6 +18,7 @@
 #pragma once
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
@@ -59,6 +60,57 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
     REQUIRE(hazeSetCiphertextModulus(mod_idx, picked) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return picked;
+}
+
+// Deterministic non-trivial residue. Avoids zeros and all-equal
+// coefficients across primes so per-residue bugs cannot hide behind a
+// trivial input.
+inline std::vector<uint64_t> make_residue(uint64_t prime, uint64_t seed, std::size_t n) {
+    std::vector<uint64_t> r(n);
+    for (std::size_t k = 0; k < n; ++k) {
+        const __uint128_t v = (static_cast<__uint128_t>(seed) * (k + 1) * 7U) +
+                              static_cast<__uint128_t>(k & 0xFFFFU) + 13U;
+        r[k] = static_cast<uint64_t>(v % prime);
+    }
+    return r;
+}
+
+// Allocate one HAZE poly slot per residue and H2D each row of `residues`
+// into it. Returned vector is parallel to `residues`; ownership stays with
+// the caller (free with free_all_residues). Aborts the test on any HAZE
+// error to keep the body of the test linear.
+inline std::vector<void *>
+allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
+    std::vector<void *> ptrs(residues.size(), nullptr);
+    for (std::size_t i = 0; i < residues.size(); ++i) {
+        const std::size_t bytes = residues[i].size() * sizeof(uint64_t);
+        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                HAZE_SUCCESS);
+    }
+    return ptrs;
+}
+
+// Allocate `count` empty polynomial slots of `bytes` bytes each.
+inline std::vector<void *> allocate_dst_residues(std::size_t count, std::size_t bytes) {
+    std::vector<void *> ptrs(count, nullptr);
+    for (std::size_t i = 0; i < count; ++i) {
+        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+    }
+    return ptrs;
+}
+
+inline void free_all_residues(const std::vector<void *> &ptrs) {
+    for (void *p : ptrs) {
+        REQUIRE(hazeFree(p) == HAZE_SUCCESS);
+    }
+}
+
+// Convenience: produce a parallel vector<const void *> view over a
+// vector<void *>. Useful when passing dst slots as src in a chained
+// recording.
+inline std::vector<const void *> to_const(const std::vector<void *> &ptrs) {
+    return {ptrs.begin(), ptrs.end()};
 }
 
 // Negacyclic convolution mod q: c(X) = a(X) * b(X) mod (X^N + 1, q).

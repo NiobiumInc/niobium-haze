@@ -1,665 +1,1218 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+//
+// Compute API integration tests, parameterised over a per-shape "driver":
+//
+//   SrpDriver — single-residue (kNumResidues == 1). Wraps the SRP entry
+//               points (hazeAdd, hazeSub, hazeMul, hazeAddScalar,
+//               hazeSubScalar, hazeMulScalar, hazeNTT, hazeINTT).
+//
+//   MrpDriver — multi-residue (kNumResidues == 3). Wraps the MRP entry
+//               points (hazeAddMrp, hazeSubMrp, ..., hazeNTTMrp,
+//               hazeINTTMrp). Three NTT-friendly primes (kQ0/kQ1/kQ2)
+//               make every residue distinct, and assertions check every
+//               coefficient of every residue so single-residue regressions
+//               cannot hide.
+//
+// Each scenario lives in a Catch2 TEMPLATE_TEST_CASE that fans out across
+// both drivers, so the body is identical and the test names show up
+// per-driver in the runner output.
+//
+// Cases without an MRP counterpart (the modulus-index error path,
+// hazeAutomorph, the synchronization no-op) stay as plain TEST_CASE.
+
 #include "integration_helpers.hpp"
 
-#include <algorithm>
+#include <catch2/catch_message.hpp>
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <haze/replay_bridge.h>
 #include <utility>
 #include <vector>
 
-static constexpr uint64_t kRingDim = 4096;
-static constexpr size_t kBytes = kRingDim * sizeof(uint64_t);
-static constexpr uint64_t kModulus = 576460752303415297ULL;
-static constexpr int kModIdx = 0;
+namespace {
 
-TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]") {
-    haze::test::setup_integration_compute_config();
+constexpr uint64_t kRingDim = 4096;
+constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // Constant polynomials: a[i] = 1, b[i] = 2 → expected sum = 3
-    std::vector<uint64_t> a(kRingDim, 1);
-    std::vector<uint64_t> b(kRingDim, 2);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 3);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]") {
-    haze::test::setup_integration_compute_config();
-
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // a[i] = 10, b[i] = 3 → expected difference = 7
-    std::vector<uint64_t> a(kRingDim, 10);
-    std::vector<uint64_t> b(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeSub(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 7);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integration]") {
-    haze::test::setup_integration_compute_config();
-
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // Constant polynomials: a[i] = 3, b[i] = 5 -> expected product = 15
-    std::vector<uint64_t> a(kRingDim, 3);
-    std::vector<uint64_t> b(kRingDim, 5);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeMul(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 15);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H", "[integration]") {
-    haze::test::setup_integration_compute_config();
-
-    void *d_a = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // a[i] = 2, scalar = 4 → expected product = 8
-    std::vector<uint64_t> a(kRingDim, 2);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeMulScalar(d_dst, d_a, 4, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 8);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[integration]") {
-    haze::test::setup_integration_compute_config();
-
-    void *d_a = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // a[i] = 5, scalar = 3 → expected = 8
-    std::vector<uint64_t> a(kRingDim, 5);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeAddScalar(d_dst, d_a, 3, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 8);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-}
+// Three NTT-friendly primes (q ≡ 1 mod 2N) for N=4096. Same values used
+// by test_basis_convert.cpp's configure_three_moduli — keeps multi-residue
+// fixtures consistent across the suite.
+constexpr uint64_t kQ0 = 576460752303415297ULL;
+constexpr uint64_t kQ1 = 576460752303439873ULL;
+constexpr uint64_t kQ2 = 576460752303702017ULL;
 
 // ---------------------------------------------------------------------------
-// NTT / INTT round-trip
+// SrpDriver: single-residue path. kNumResidues == 1 collapses every
+// vector<>-shaped argument to a single element and dispatches the SRP
+// entry points directly.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]") {
-    const uint64_t q = haze::test::setup_integration_compute_config();
+struct SrpDriver {
+    static constexpr std::size_t kNumResidues = 1;
+    static constexpr const char *kShape = "SRP";
 
-    void *d_src = nullptr;
-    void *d_ntt = nullptr;
-    void *d_intt = nullptr;
-    REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_ntt, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_intt, kBytes) == HAZE_SUCCESS);
+    // Populated by setup(); the test body uses `base[i]` as the per-residue
+    // modulus when constructing inputs and per-residue oracles.
+    std::vector<uint64_t> base;
 
-    // Non-constant deterministic input. Constants are eigenvectors of the
-    // negacyclic NTT, so a constant-input round-trip would still pass under
-    // swapped forward/inverse twiddles or a wrong ring-dim scaling — this
-    // input forces every butterfly stage to actually run.
-    std::vector<uint64_t> src(kRingDim);
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        src[i] = (i * 1234567ULL + 7ULL) % q;
-    }
-    REQUIRE(hazeMemcpy(d_src, src.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeNTT(d_ntt, d_src, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTT(d_intt, d_ntt, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_intt, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == src[i]);
+    // Returns the picked prime so callers that want q (e.g. for
+    // negacyclic_conv_ref) can grab it without re-deriving from `base`.
+    uint64_t setup() {
+        const uint64_t q =
+            haze::test::setup_integration_compute_config(kRingDim, kQ0, /*mod_idx=*/0);
+        base = {q};
+        return q;
     }
 
-    REQUIRE(hazeFree(d_src) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_ntt) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_intt) == HAZE_SUCCESS);
+    // Op methods don't read `base` (the SRP entry points take a single
+    // mod_idx and pull the modulus from haze's config table), so they are
+    // static. The MrpDriver counterparts read `base` and stay instance
+    // methods. Catch2's `d.method(...)` call site syntax works for both.
+    static void add(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+                    const std::vector<const void *> &s2) {
+        REQUIRE(hazeAdd(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void sub(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+                    const std::vector<const void *> &s2) {
+        REQUIRE(hazeSub(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+                    const std::vector<const void *> &s2) {
+        REQUIRE(hazeMul(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void add_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                           const std::vector<uint64_t> &scalars) {
+        REQUIRE(hazeAddScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void sub_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                           const std::vector<uint64_t> &scalars) {
+        REQUIRE(hazeSubScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void mul_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                           const std::vector<uint64_t> &scalars) {
+        REQUIRE(hazeMulScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void ntt(const std::vector<void *> &dst, const std::vector<const void *> &src) {
+        REQUIRE(hazeNTT(dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void intt(const std::vector<void *> &dst, const std::vector<const void *> &src) {
+        REQUIRE(hazeINTT(dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    }
+    static void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                          uint64_t k) {
+        REQUIRE(hazeAutomorph(dst[0], src[0], k, nullptr) == HAZE_SUCCESS);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// MrpDriver: multi-residue path. Three explicit primes; each call goes
+// through the hazeXxxMrp entry points with the full (base, base_len)
+// pair. Mirrors test_basis_convert.cpp's pattern of feeding explicit
+// kQ0/kQ1/kQ2 into hazeSetCiphertextModulus rather than the OpenFHE-
+// picked single prime — the simulator reads moduli out of the trace's
+// modulus_table, so the picked prime is for bridge plumbing only.
+// ---------------------------------------------------------------------------
+
+struct MrpDriver {
+    static constexpr std::size_t kNumResidues = 3;
+    static constexpr const char *kShape = "MRP";
+
+    std::vector<uint64_t> base;
+
+    uint64_t setup() {
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+        REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+        uint64_t picked = 0;
+        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+        REQUIRE(picked != 0);
+        REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+        REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
+        REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
+        REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+        base = {kQ0, kQ1, kQ2};
+        return kQ0;
+    }
+
+    void add(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+             const std::vector<const void *> &s2) const {
+        REQUIRE(hazeAddMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void sub(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+             const std::vector<const void *> &s2) const {
+        REQUIRE(hazeSubMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
+             const std::vector<const void *> &s2) const {
+        REQUIRE(hazeMulMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void add_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                    const std::vector<uint64_t> &scalars) const {
+        REQUIRE(hazeAddScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
+                                 nullptr) == HAZE_SUCCESS);
+    }
+    void sub_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                    const std::vector<uint64_t> &scalars) const {
+        REQUIRE(hazeSubScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
+                                 nullptr) == HAZE_SUCCESS);
+    }
+    void mul_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                    const std::vector<uint64_t> &scalars) const {
+        REQUIRE(hazeMulScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
+                                 nullptr) == HAZE_SUCCESS);
+    }
+    void ntt(const std::vector<void *> &dst, const std::vector<const void *> &src) const {
+        REQUIRE(hazeNTTMrp(dst.data(), src.data(), base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void intt(const std::vector<void *> &dst, const std::vector<const void *> &src) const {
+        REQUIRE(hazeINTTMrp(dst.data(), src.data(), base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                   uint64_t k) const {
+        REQUIRE(hazeAutomorphMrp(dst.data(), src.data(), k, base.data(), base.size(), nullptr) ==
+                HAZE_SUCCESS);
+    }
+    void rot_automorph_coeff(const std::vector<void *> &dst, const std::vector<const void *> &src,
+                             uint64_t offset) const {
+        REQUIRE(hazeRotAutomorphCoeffMrp(dst.data(), src.data(), offset, base.data(), base.size(),
+                                         nullptr) == HAZE_SUCCESS);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Per-residue oracles. Each takes the per-residue modulus and operates on
+// vectors already reduced mod q, so the result is in [0, q) by induction.
+// ---------------------------------------------------------------------------
+
+inline uint64_t add_mod(uint64_t a, uint64_t b, uint64_t q) {
+    const uint64_t s = a + b;
+    return (s >= q) ? s - q : s;
 }
 
-TEST_CASE("NTT round-trip on constant input (smoke test)", "[integration]") {
-    haze::test::setup_integration_compute_config();
-
-    void *d_src = nullptr;
-    void *d_ntt = nullptr;
-    void *d_intt = nullptr;
-    REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_ntt, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_intt, kBytes) == HAZE_SUCCESS);
-
-    // Constant polys are eigenvectors of NTT and survive even pathological
-    // twiddle / scaling bugs. Kept as a fast smoke check; the non-constant
-    // case above is the real correctness assertion.
-    std::vector<uint64_t> src(kRingDim, 7);
-    REQUIRE(hazeMemcpy(d_src, src.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeNTT(d_ntt, d_src, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTT(d_intt, d_ntt, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_intt, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 7);
-    }
-
-    REQUIRE(hazeFree(d_src) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_ntt) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_intt) == HAZE_SUCCESS);
+inline uint64_t sub_mod(uint64_t a, uint64_t b, uint64_t q) {
+    return (a >= b) ? a - b : a + (q - b);
 }
 
-// ---------------------------------------------------------------------------
-// Polynomial product via NTT -> hazeMul -> INTT
-// ---------------------------------------------------------------------------
-// hazeMul is component-wise on the residue. To use it as a ring multiply
-// a(X)*b(X) mod (X^N+1, q), inputs are pushed into evaluation form via NTT
-// first; the pointwise product there equals negacyclic convolution in
-// coefficient form after INTT. The host oracle is
-// haze::test::negacyclic_conv_ref.
+inline uint64_t mul_mod(uint64_t a, uint64_t b, uint64_t q) {
+    return static_cast<uint64_t>((static_cast<__uint128_t>(a) * static_cast<__uint128_t>(b)) % q);
+}
+
+// Verify all coefficients of all residues against the per-residue oracle.
+// Sentinel-fills `got` so a missing D2H surfaces immediately, and tags
+// every assertion with (residue, slot) for fast triage.
+template <typename Driver>
+void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
+                               const std::vector<std::vector<uint64_t>> &expected) {
+    REQUIRE(dst.size() == Driver::kNumResidues);
+    REQUIRE(expected.size() == Driver::kNumResidues);
+    for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
+        std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
+        REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            INFO(Driver::kShape << " residue " << i << " (mod " << d.base[i] << ") slot " << k);
+            REQUIRE(got[k] == expected[i][k]);
+        }
+    }
+}
+
+// Build a parallel pair of per-residue inputs differentiated by both `seed`
+// and the residue index, then pre-compute the per-residue oracle for an
+// op that maps (a, b) → r mod q. Caller supplies the reducing function.
+template <typename Op>
+void make_two_residue_inputs(const std::vector<uint64_t> &base,
+                             std::vector<std::vector<uint64_t>> &a_out,
+                             std::vector<std::vector<uint64_t>> &b_out,
+                             std::vector<std::vector<uint64_t>> &expected_out, uint64_t seed_a,
+                             uint64_t seed_b, Op op) {
+    const std::size_t k = base.size();
+    a_out.assign(k, {});
+    b_out.assign(k, {});
+    expected_out.assign(k, {});
+    for (std::size_t i = 0; i < k; ++i) {
+        const uint64_t q = base[i];
+        a_out[i] = haze::test::make_residue(q, seed_a + i, kRingDim);
+        b_out[i] = haze::test::make_residue(q, seed_b + i, kRingDim);
+        expected_out[i].resize(kRingDim);
+        for (uint64_t s = 0; s < kRingDim; ++s) {
+            expected_out[i][s] = op(a_out[i][s], b_out[i][s], q);
+        }
+    }
+}
+
+} // namespace
+
+// ===========================================================================
+// Pointwise operations (Add / Sub / Mul) — non-trivial inputs across every
+// residue. Constants would be fully reproducible by aliasing the polymap
+// across residues; make_residue makes each (residue, slot) pair distinct.
+// ===========================================================================
+
+TEMPLATE_TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]", SrpDriver,
+                   MrpDriver) {
+    TestType d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/424242ULL,
+                            /*seed_b=*/911223ULL, add_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.add(dst, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(dst);
+}
+
+TEMPLATE_TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integration]", SrpDriver,
+                   MrpDriver) {
+    TestType d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/123456ULL,
+                            /*seed_b=*/789012ULL, sub_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.sub(dst, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(dst);
+}
+
+TEMPLATE_TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integration]", SrpDriver,
+                   MrpDriver) {
+    TestType d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xC0FFEEULL,
+                            /*seed_b=*/0xBEEFFEEDULL, mul_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.mul(dst, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(dst);
+}
+
+// ===========================================================================
+// Scalar variants. Each residue gets a distinct scalar derived from the
+// shared `kBaseScalar` so the oracle has to compute (a[i][k] op (s mod q[i])).
+// MRP's `mr_*ps` ops take an MRS, so per-residue scalars are essential —
+// asserting only one prime would mask wrong-base bugs.
+// ===========================================================================
+
+namespace {
+// Derive a non-trivial per-residue scalar that fits in the prime, exercising
+// reduction-on-input rather than a tiny constant that lives in [0, q) for
+// every prime.
+inline std::vector<uint64_t> derive_scalars(const std::vector<uint64_t> &base, uint64_t k_base) {
+    std::vector<uint64_t> s(base.size());
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        s[i] = (k_base + (i * 31ULL + 17ULL)) % base[i];
+    }
+    return s;
+}
+} // namespace
+
+TEMPLATE_TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    const std::vector<uint64_t> scalars = derive_scalars(d.base, /*k_base=*/100003ULL);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0xA110CULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            expected[i][k] = add_mod(a[i][k], scalars[i], d.base[i]);
+        }
+    }
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.add_scalar(dst, haze::test::to_const(da), scalars);
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(dst);
+}
+
+TEMPLATE_TEST_CASE("hazeSubScalar: pointwise scalar subtraction retrieved after D2H",
+                   "[integration]", SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    const std::vector<uint64_t> scalars = derive_scalars(d.base, /*k_base=*/200003ULL);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0xB055ULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            expected[i][k] = sub_mod(a[i][k], scalars[i], d.base[i]);
+        }
+    }
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.sub_scalar(dst, haze::test::to_const(da), scalars);
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(dst);
+}
+
+TEMPLATE_TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    const std::vector<uint64_t> scalars = derive_scalars(d.base, /*k_base=*/300007ULL);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0xC0DEULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            expected[i][k] = mul_mod(a[i][k], scalars[i], d.base[i]);
+        }
+    }
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.mul_scalar(dst, haze::test::to_const(da), scalars);
+    check_against_per_residue(d, dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(dst);
+}
+
+// ===========================================================================
+// NTT round-trip per residue. INTT(NTT(x)) must recover the original
+// coefficients exactly for every residue.
+//
+// Constants are eigenvectors of NTT and survive even pathological twiddle /
+// scaling bugs, so each residue uses a deterministic non-constant input.
+// ===========================================================================
+
+TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> src(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        src[i].resize(kRingDim);
+        const uint64_t q = d.base[i];
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            src[i][k] = (k * (1234567ULL + i) + 7ULL) % q;
+        }
+    }
+
+    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_ntt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_intt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.ntt(d_ntt, haze::test::to_const(d_src));
+    d.intt(d_intt, haze::test::to_const(d_ntt));
+
+    check_against_per_residue(d, d_intt, src);
+
+    haze::test::free_all_residues(d_src);
+    haze::test::free_all_residues(d_ntt);
+    haze::test::free_all_residues(d_intt);
+}
+
+// ===========================================================================
+// Galois automorphism (eval form) round-trip.
+//
+// The op X -> X^k is a permutation of the 2N-th-root-of-unity evaluation
+// slots, so applying automorph(k) followed by automorph(k_inv) where
+// k * k_inv ≡ 1 (mod 2N) recovers the input exactly. This tests the Galois
+// action — NOT a coefficient-form negacyclic rotation (which is the
+// separate IR op sr_rot_automorph_coeff and has no MRP variant).
+//
+// The round-trip is bracketed by NTT / INTT so the trace's modulus_table
+// carries a real prime (sr_automorph_eval itself uses COPY_MODULUS as a
+// sentinel; without an accompanying real-modulus op, the replay bridge has
+// no prime to bind the H2D input bytes to). This also matches how
+// rotation is used in real CKKS workloads: ciphertexts are produced in
+// evaluation form, automorph is applied there, and the result stays in
+// evaluation form — INTT here is just to compare against the original
+// coefficient-form input.
+// ===========================================================================
+
+TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[integration]",
+                   SrpDriver, MrpDriver) {
+    // Direction-sensitive check for the eval-form Galois automorphism.
+    // Spec: output_slot[i] = +src_slot[((k*(2i+1) - 1) mod 2N) / 2]
+    // (signs[i] = 1; pure permutation, no sign flip in the op itself).
+    // Acting on a coefficient-form impulse f(X) = X^1, the round-trip
+    // ntt → automorph(_, k) → intt produces the polynomial X^(j*k mod 2N)
+    // reduced mod X^N+1 (i.e. with a sign flip if j*k mod 2N >= N).
+    // Choose k=5, j=1 so j*k = 5 < N → no wrap, expected coefficient is
+    // +1 at position 5. The round-trip test below is direction-symmetric
+    // and would not catch a substitution-direction bug here.
+    TestType d;
+    d.setup();
+
+    constexpr uint64_t k = 5;
+    constexpr uint64_t j = 1;
+    constexpr uint64_t out_pos = (j * k) % (2 * kRingDim);
+    static_assert(out_pos < kRingDim,
+                  "j*k must be < N for the impulse to land without a sign flip");
+
+    std::vector<std::vector<uint64_t>> src(TestType::kNumResidues,
+                                           std::vector<uint64_t>(kRingDim, 0));
+    for (auto &row : src) {
+        row[j] = 1;
+    }
+
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues,
+                                                std::vector<uint64_t>(kRingDim, 0));
+    for (auto &row : expected) {
+        row[out_pos] = 1;
+    }
+
+    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_aut = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_back = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.ntt(d_eval, haze::test::to_const(d_src));
+    d.automorph(d_aut, haze::test::to_const(d_eval), k);
+    d.intt(d_back, haze::test::to_const(d_aut));
+
+    check_against_per_residue(d, d_back, expected);
+
+    haze::test::free_all_residues(d_src);
+    haze::test::free_all_residues(d_eval);
+    haze::test::free_all_residues(d_aut);
+    haze::test::free_all_residues(d_back);
+}
+
+TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == x", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    // k=5 is the standard CKKS rotation generator for power-of-2 N. For
+    // N=4096 (so 2N=8192), 5 * 3277 = 16385 = 2*8192 + 1, so 3277 is k's
+    // multiplicative inverse modulo 2N — applying automorph(5) then
+    // automorph(3277) is X -> X^(5*3277) = X^1 = identity.
+    constexpr uint64_t k = 5;
+    constexpr uint64_t k_inv = 3277;
+    static_assert((k * k_inv) % (2 * kRingDim) == 1,
+                  "k * k_inv must be ≡ 1 mod 2N for the round-trip to be identity");
+
+    std::vector<std::vector<uint64_t>> src(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        src[i] = haze::test::make_residue(d.base[i], 0xA170ULL + i, kRingDim);
+    }
+
+    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_aut1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_aut2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_back = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.ntt(d_eval, haze::test::to_const(d_src));
+    d.automorph(d_aut1, haze::test::to_const(d_eval), k);
+    d.automorph(d_aut2, haze::test::to_const(d_aut1), k_inv);
+    d.intt(d_back, haze::test::to_const(d_aut2));
+
+    check_against_per_residue(d, d_back, src);
+
+    haze::test::free_all_residues(d_src);
+    haze::test::free_all_residues(d_eval);
+    haze::test::free_all_residues(d_aut1);
+    haze::test::free_all_residues(d_aut2);
+    haze::test::free_all_residues(d_back);
+}
+
+// ===========================================================================
+// Negacyclic-coefficient rotation: rot(_, k) is multiplication by X^k in
+// R_q = Z_q[X]/(X^N+1). Composing rot(_, k) ∘ rot(_, N-k) is multiplication
+// by X^N, which equals -1 in R_q — so the result is -x per coefficient
+// per residue. This single property exercises both the coefficient shift
+// itself and the sign flip on wraparound (without it, the test would
+// produce +x instead of -x).
+//
+// As with the automorph_eval round-trip, the test brackets the rotations
+// with an ntt/intt round-trip so the bridge captures the input addresses
+// (sr_rot_automorph_coeff alone does not register inputs into the bridge's
+// haze.inputs.json manifest, so the simulator sees uninitialized data;
+// the ntt acts as the "approved" op that pulls the input through). The
+// ntt+intt pair is identity per the NTT round-trip test, so the rotation
+// property is preserved.
+//
+// MrpDriver-only (haze does not expose a coefficient-form rotation in
+// the SRP API, so there is no SrpDriver::rot_automorph_coeff to dispatch
+// against from a TEMPLATE_TEST_CASE).
+// ===========================================================================
+
+TEST_CASE("hazeRotAutomorphCoeffMrp: impulse lands at the spec-defined position", "[integration]") {
+    // Direction-sensitive check. The round-trip property below
+    // (rot(_, k) ∘ rot(_, N-k) == -x) is symmetric under inversion of
+    // the rotation direction, so it cannot catch a left-vs-right swap
+    // in the simulator's exec_rot_automorph_coeff. Pin the direction by
+    // feeding a sparse input and asserting the spec's exact landing
+    // position per FHETCH spec:
+    //   output[i] = signs[i] * src[(i + offset) mod N],
+    //   signs[i] = (-1)^((i + offset) // N).
+    // For src = [1, 2, 0, 0, ..., 0] and offset = 1, the only nonzero
+    // outputs are output[0] = +src[1] = 2 and output[N-1] = -src[0] = q-1.
+    MrpDriver d;
+    d.setup();
+
+    constexpr uint64_t offset = 1;
+    std::vector<std::vector<uint64_t>> src(MrpDriver::kNumResidues,
+                                           std::vector<uint64_t>(kRingDim, 0));
+    for (auto &row : src) {
+        row[0] = 1;
+        row[1] = 2;
+    }
+
+    std::vector<std::vector<uint64_t>> expected(MrpDriver::kNumResidues,
+                                                std::vector<uint64_t>(kRingDim, 0));
+    for (std::size_t r = 0; r < MrpDriver::kNumResidues; ++r) {
+        const uint64_t q = d.base[r];
+        for (uint64_t i = 0; i < kRingDim; ++i) {
+            const uint64_t src_pos_unwrapped = i + offset;
+            const uint64_t v = src[r][src_pos_unwrapped % kRingDim];
+            const bool wraps = src_pos_unwrapped >= kRingDim;
+            expected[r][i] = wraps ? (q - v) % q : v;
+        }
+    }
+    // Sanity-check the oracle before pinning it on the device:
+    REQUIRE(expected[0][0] == 2);
+    REQUIRE(expected[0][kRingDim - 1] == d.base[0] - 1);
+    REQUIRE(expected[0][1] == 0);
+    REQUIRE(expected[0][kRingDim - 2] == 0);
+
+    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto d_rot = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+
+    d.ntt(d_eval, haze::test::to_const(d_src));
+    d.intt(d_coef, haze::test::to_const(d_eval));
+    d.rot_automorph_coeff(d_rot, haze::test::to_const(d_coef), offset);
+
+    check_against_per_residue(d, d_rot, expected);
+
+    haze::test::free_all_residues(d_src);
+    haze::test::free_all_residues(d_eval);
+    haze::test::free_all_residues(d_coef);
+    haze::test::free_all_residues(d_rot);
+}
+
+TEST_CASE("hazeRotAutomorphCoeffMrp: rot(_, k) ∘ rot(_, N-k) == -x", "[integration]") {
+    MrpDriver d;
+    d.setup();
+
+    constexpr uint64_t k = 1;
+    constexpr uint64_t k_complement = kRingDim - 1;
+    static_assert(k + k_complement == kRingDim,
+                  "k + k_complement must equal N for the composition to land at X^N = -1");
+
+    std::vector<std::vector<uint64_t>> src(MrpDriver::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(MrpDriver::kNumResidues);
+    for (std::size_t i = 0; i < MrpDriver::kNumResidues; ++i) {
+        src[i] = haze::test::make_residue(d.base[i], 0xC0FFEEULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t j = 0; j < kRingDim; ++j) {
+            // -src[i][j] mod q; the (q - x) % q form handles x == 0
+            // correctly (q % q = 0).
+            expected[i][j] = (d.base[i] - src[i][j]) % d.base[i];
+        }
+    }
+
+    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto d_aut1 = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto d_aut2 = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+
+    d.ntt(d_eval, haze::test::to_const(d_src));
+    d.intt(d_coef, haze::test::to_const(d_eval));
+    d.rot_automorph_coeff(d_aut1, haze::test::to_const(d_coef), k);
+    d.rot_automorph_coeff(d_aut2, haze::test::to_const(d_aut1), k_complement);
+
+    check_against_per_residue(d, d_aut2, expected);
+
+    haze::test::free_all_residues(d_src);
+    haze::test::free_all_residues(d_eval);
+    haze::test::free_all_residues(d_coef);
+    haze::test::free_all_residues(d_aut1);
+    haze::test::free_all_residues(d_aut2);
+}
+
+// ===========================================================================
+// Polynomial product via NTT.Mul.INTT, per residue.
+//
+// Each residue independently does negacyclic convolution: the host oracle
+// negacyclic_conv_ref runs once per (residue, base[i]) pair, and every
+// coefficient must agree with what hazeMul-on-evaluation-form-then-INTT
+// produces in coefficient form.
+//
+// The four sub-cases cover: monomial * monomial across the X^N=-1 boundary,
+// linear * constant, deterministic small coefficients, and full-range
+// random coefficients.
+// ===========================================================================
 
 namespace {
 
-// Drives one ring-multiply test case end-to-end. Records H2D(a), NTT(a),
-// H2D(b), NTT(b), Mul, INTT into one recording, then D2H to flush. The
-// returned coefficient-form result is compared against the host oracle by
-// the caller.
-inline std::vector<uint64_t> run_ntt_mul_intt(const std::vector<uint64_t> &a,
-                                              const std::vector<uint64_t> &b) {
-    REQUIRE(a.size() == kRingDim);
-    REQUIRE(b.size() == kRingDim);
+// Per-driver helper: H2D each residue of `a` and `b`, run NTT on each,
+// MUL on each (per-residue or via mr_mulp), then INTT on each. Returns
+// the per-residue coefficient-form result. Mirrors the original SRP-only
+// run_ntt_mul_intt but folds into the driver dispatch so SRP and MRP
+// share the same orchestration.
+template <typename Driver>
+std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
+                                                    const std::vector<std::vector<uint64_t>> &a,
+                                                    const std::vector<std::vector<uint64_t>> &b) {
+    REQUIRE(a.size() == Driver::kNumResidues);
+    REQUIRE(b.size() == Driver::kNumResidues);
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_a_eval = nullptr;
-    void *d_b_eval = nullptr;
-    void *d_c_eval = nullptr;
-    void *d_c = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_a_eval, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b_eval, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_c_eval, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_c, kBytes) == HAZE_SUCCESS);
+    auto d_a = haze::test::allocate_and_h2d_residues(a);
+    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto d_a_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
+    auto d_b_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
+    auto d_c_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
+    auto d_c = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
 
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeNTT(d_a_eval, d_a, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTT(d_b_eval, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeMul(d_c_eval, d_a_eval, d_b_eval, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTT(d_c, d_c_eval, kModIdx, nullptr) == HAZE_SUCCESS);
+    d.ntt(d_a_eval, haze::test::to_const(d_a));
+    d.ntt(d_b_eval, haze::test::to_const(d_b));
+    d.mul(d_c_eval, haze::test::to_const(d_a_eval), haze::test::to_const(d_b_eval));
+    d.intt(d_c, haze::test::to_const(d_c_eval));
 
-    std::vector<uint64_t> c(kRingDim, 0);
-    REQUIRE(hazeMemcpy(c.data(), d_c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    std::vector<std::vector<uint64_t>> c(Driver::kNumResidues, std::vector<uint64_t>(kRingDim, 0));
+    for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
+        REQUIRE(hazeMemcpy(c[i].data(), d_c[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+    }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_a_eval) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b_eval) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_c_eval) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_c) == HAZE_SUCCESS);
-
+    haze::test::free_all_residues(d_a);
+    haze::test::free_all_residues(d_b);
+    haze::test::free_all_residues(d_a_eval);
+    haze::test::free_all_residues(d_b_eval);
+    haze::test::free_all_residues(d_c_eval);
+    haze::test::free_all_residues(d_c);
     return c;
 }
 
 } // namespace
 
-TEST_CASE("polynomial product: monomial * monomial via NTT.Mul.INTT", "[integration]") {
-    const uint64_t q = haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("polynomial product: monomial * monomial via NTT.Mul.INTT", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    // (i, j) pairs spanning the X^N = -1 wraparound boundary. Includes
-    // an asymmetric pair at i+j = N+1 to catch off-by-one errors in the
-    // wrap threshold that pure same-exponent squares miss.
+    // (i, j) pairs spanning the X^N = -1 wraparound boundary. The asymmetric
+    // pair at i+j = N+1 catches off-by-one errors in the wrap threshold that
+    // pure same-exponent squares miss.
     const std::pair<uint64_t, uint64_t> pairs[] = {{0, 0},
                                                    {kRingDim / 2, kRingDim / 2},
                                                    {kRingDim - 1, kRingDim - 1},
                                                    {(kRingDim / 2) + 1, kRingDim / 2}};
 
     for (const auto &[i, j] : pairs) {
-        std::vector<uint64_t> a(kRingDim, 0);
-        std::vector<uint64_t> b(kRingDim, 0);
-        a[i] = 1;
-        b[j] = 1;
-
-        const auto c = run_ntt_mul_intt(a, b);
-        const auto expected = haze::test::negacyclic_conv_ref(a, b, q);
-
-        for (uint64_t k = 0; k < kRingDim; ++k) {
-            REQUIRE(c[k] == expected[k]);
+        // Monomial inputs are identical across residues — the per-residue
+        // oracle still encodes the wrap rule independently for every prime.
+        std::vector<std::vector<uint64_t>> a(TestType::kNumResidues,
+                                             std::vector<uint64_t>(kRingDim, 0));
+        std::vector<std::vector<uint64_t>> b(TestType::kNumResidues,
+                                             std::vector<uint64_t>(kRingDim, 0));
+        for (auto &row : a) {
+            row[i] = 1;
         }
-        // Hand-check the wrap rule alongside the oracle.
-        const uint64_t k = (i + j) % kRingDim;
-        const bool wrap = (i + j) >= kRingDim;
-        REQUIRE(c[k] == (wrap ? (q - 1) : 1));
+        for (auto &row : b) {
+            row[j] = 1;
+        }
+
+        const auto c = run_ntt_mul_intt(d, a, b);
+
+        for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+            const uint64_t q = d.base[r];
+            const auto expected = haze::test::negacyclic_conv_ref(a[r], b[r], q);
+            for (uint64_t k = 0; k < kRingDim; ++k) {
+                INFO(TestType::kShape << " residue " << r << " (mod " << q << ") slot " << k);
+                REQUIRE(c[r][k] == expected[k]);
+            }
+            // Hand-check the wrap rule alongside the oracle.
+            const uint64_t k = (i + j) % kRingDim;
+            const bool wrap = (i + j) >= kRingDim;
+            REQUIRE(c[r][k] == (wrap ? (q - 1) : 1));
+        }
     }
 }
 
-TEST_CASE("polynomial product: linear * constant via NTT.Mul.INTT", "[integration]") {
-    const uint64_t q = haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("polynomial product: linear * constant via NTT.Mul.INTT", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    // a(X) = 11 + 13*X, b(X) = 17.
-    std::vector<uint64_t> a(kRingDim, 0);
-    std::vector<uint64_t> b(kRingDim, 0);
-    a[0] = 11;
-    a[1] = 13;
-    b[0] = 17;
-
-    const auto c = run_ntt_mul_intt(a, b);
-    const auto expected = haze::test::negacyclic_conv_ref(a, b, q);
-
-    for (uint64_t k = 0; k < kRingDim; ++k) {
-        REQUIRE(c[k] == expected[k]);
+    // a(X) = 11 + 13*X (per residue, identical), b(X) = 17.
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues,
+                                         std::vector<uint64_t>(kRingDim, 0));
+    std::vector<std::vector<uint64_t>> b(TestType::kNumResidues,
+                                         std::vector<uint64_t>(kRingDim, 0));
+    for (auto &row : a) {
+        row[0] = 11;
+        row[1] = 13;
     }
-    REQUIRE(c[0] == 11ULL * 17ULL);
-    REQUIRE(c[1] == 13ULL * 17ULL);
-    for (uint64_t k = 2; k < kRingDim; ++k) {
-        REQUIRE(c[k] == 0);
-    }
-}
-
-TEST_CASE("polynomial product: random small coefficients via NTT.Mul.INTT", "[integration]") {
-    const uint64_t q = haze::test::setup_integration_compute_config();
-
-    // Deterministic small coefficients (< 1024). Catches obvious convolution
-    // bugs without 128-bit overflow concerns in the oracle.
-    std::vector<uint64_t> a(kRingDim);
-    std::vector<uint64_t> b(kRingDim);
-    for (uint64_t k = 0; k < kRingDim; ++k) {
-        a[k] = ((k * 31ULL + 7ULL) ^ (k << 3)) & 0x3FFULL;
-        b[k] = ((k * 17ULL + 5ULL) ^ (k << 2)) & 0x3FFULL;
+    for (auto &row : b) {
+        row[0] = 17;
     }
 
-    const auto c = run_ntt_mul_intt(a, b);
-    const auto expected = haze::test::negacyclic_conv_ref(a, b, q);
+    const auto c = run_ntt_mul_intt(d, a, b);
 
-    for (uint64_t k = 0; k < kRingDim; ++k) {
-        REQUIRE(c[k] == expected[k]);
+    for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+        const uint64_t q = d.base[r];
+        const auto expected = haze::test::negacyclic_conv_ref(a[r], b[r], q);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            INFO(TestType::kShape << " residue " << r << " (mod " << q << ") slot " << k);
+            REQUIRE(c[r][k] == expected[k]);
+        }
+        REQUIRE(c[r][0] == 11ULL * 17ULL);
+        REQUIRE(c[r][1] == 13ULL * 17ULL);
+        for (uint64_t k = 2; k < kRingDim; ++k) {
+            REQUIRE(c[r][k] == 0);
+        }
     }
 }
 
-TEST_CASE("polynomial product: random full-range coefficients via NTT.Mul.INTT", "[integration]") {
-    const uint64_t q = haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("polynomial product: random small coefficients via NTT.Mul.INTT",
+                   "[integration]", SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    // Deterministic small coefficients (< 1024). The pattern differs per
+    // residue (via base index) so each residue genuinely runs a different
+    // convolution.
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
+    for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+        a[r].resize(kRingDim);
+        b[r].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            a[r][k] = ((k * 31ULL + 7ULL + r) ^ (k << 3)) & 0x3FFULL;
+            b[r][k] = ((k * 17ULL + 5ULL + r) ^ (k << 2)) & 0x3FFULL;
+        }
+    }
+
+    const auto c = run_ntt_mul_intt(d, a, b);
+
+    for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+        const auto expected = haze::test::negacyclic_conv_ref(a[r], b[r], d.base[r]);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            INFO(TestType::kShape << " residue " << r << " (mod " << d.base[r] << ") slot " << k);
+            REQUIRE(c[r][k] == expected[k]);
+        }
+    }
+}
+
+TEMPLATE_TEST_CASE("polynomial product: random full-range coefficients via NTT.Mul.INTT",
+                   "[integration]", SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
     // Full-range coefficients uniform over [0, q). Exercises modular
-    // reduction in the convolution. Pattern mirrors
-    // test_basis_convert.cpp:make_residue.
-    std::vector<uint64_t> a(kRingDim);
-    std::vector<uint64_t> b(kRingDim);
-    for (uint64_t k = 0; k < kRingDim; ++k) {
-        const __uint128_t va =
-            (static_cast<__uint128_t>(0x9E3779B97F4A7C15ULL) * (k + 1) * 7) + (k & 0xFFFF) + 13;
-        const __uint128_t vb =
-            (static_cast<__uint128_t>(0xBB67AE8584CAA73BULL) * (k + 1) * 11) + (k & 0xFFFF) + 17;
-        a[k] = static_cast<uint64_t>(va % q);
-        b[k] = static_cast<uint64_t>(vb % q);
+    // reduction in the convolution. Pattern mirrors test_basis_convert.cpp's
+    // make_residue but uses different seeds per residue.
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
+    for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+        const uint64_t q = d.base[r];
+        a[r].resize(kRingDim);
+        b[r].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            const __uint128_t va =
+                (static_cast<__uint128_t>(0x9E3779B97F4A7C15ULL) * (k + 1) * (7 + r)) +
+                (k & 0xFFFF) + 13;
+            const __uint128_t vb =
+                (static_cast<__uint128_t>(0xBB67AE8584CAA73BULL) * (k + 1) * (11 + r)) +
+                (k & 0xFFFF) + 17;
+            a[r][k] = static_cast<uint64_t>(va % q);
+            b[r][k] = static_cast<uint64_t>(vb % q);
+        }
     }
 
-    const auto c = run_ntt_mul_intt(a, b);
-    const auto expected = haze::test::negacyclic_conv_ref(a, b, q);
+    const auto c = run_ntt_mul_intt(d, a, b);
 
-    for (uint64_t k = 0; k < kRingDim; ++k) {
-        REQUIRE(c[k] == expected[k]);
+    for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
+        const auto expected = haze::test::negacyclic_conv_ref(a[r], b[r], d.base[r]);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            INFO(TestType::kShape << " residue " << r << " (mod " << d.base[r] << ") slot " << k);
+            REQUIRE(c[r][k] == expected[k]);
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// In-place operations
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// In-place operations. dst[i] aliasing src1[i] / src2[i] / both must
+// produce the right answer per residue. The lookup_or_create_locked copy
+// semantics on each residue make this safe whether the IR op is sr_* or
+// mr_*; the templated coverage proves it.
+// ===========================================================================
 
-TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, 0x1ULL, 0x2ULL, add_mod);
 
-    std::vector<uint64_t> a(kRingDim, 4);
-    std::vector<uint64_t> b(kRingDim, 5);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
 
-    // dst == src1 (in-place update of d_a)
-    REQUIRE(hazeAdd(d_a, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    // dst aliases src1 (in-place update of `da`).
+    d.add(da, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, da, expected);
 
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 9);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
 }
 
-TEST_CASE("hazeAdd in-place (dst == src2) produces correct result", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeAdd in-place (dst == src2) produces correct result", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, 0x10ULL, 0x20ULL, add_mod);
 
-    std::vector<uint64_t> a(kRingDim, 6);
-    std::vector<uint64_t> b(kRingDim, 7);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
 
-    // dst == src2 (in-place update of d_b)
-    REQUIRE(hazeAdd(d_b, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    // dst aliases src2 (in-place update of `db`).
+    d.add(db, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, db, expected);
 
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_b, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 13);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
 }
 
-TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> a(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    // Both sources and destination alias the same allocation.
-    REQUIRE(hazeAdd(d_a, d_a, d_a, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 6);
+    // Per-residue input; expected is x + x mod q.
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0x5EEDULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            expected[i][k] = add_mod(a[i][k], a[i][k], d.base[i]);
+        }
     }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    d.add(da, haze::test::to_const(da), haze::test::to_const(da));
+    check_against_per_residue(d, da, expected);
+    haze::test::free_all_residues(da);
 }
 
-TEST_CASE("hazeMul in-place (dst == src1) produces correct result", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeMul in-place (dst == src1) produces correct result", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, 0xA1ULL, 0xB2ULL, mul_mod);
 
-    std::vector<uint64_t> a(kRingDim, 4);
-    std::vector<uint64_t> b(kRingDim, 5);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
 
-    // dst == src1 (in-place update of d_a)
-    REQUIRE(hazeMul(d_a, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    d.mul(da, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, da, expected);
 
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 20);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
 }
 
-TEST_CASE("hazeMul in-place (dst == src2) produces correct result", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeMul in-place (dst == src2) produces correct result", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, 0xA10ULL, 0xB20ULL, mul_mod);
 
-    std::vector<uint64_t> a(kRingDim, 6);
-    std::vector<uint64_t> b(kRingDim, 7);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
 
-    // dst == src2 (in-place update of d_b)
-    REQUIRE(hazeMul(d_b, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    d.mul(db, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, db, expected);
 
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_b, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 42);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
 }
 
-TEST_CASE("hazeMul in-place squaring-style (dst == src1 == src2)", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("hazeMul in-place squaring-style (dst == src1 == src2)", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> a(kRingDim, 4);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    // Both sources and destination alias the same allocation.
-    REQUIRE(hazeMul(d_a, d_a, d_a, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 16);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0xCAFEULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            expected[i][k] = mul_mod(a[i][k], a[i][k], d.base[i]);
+        }
     }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    d.mul(da, haze::test::to_const(da), haze::test::to_const(da));
+    check_against_per_residue(d, da, expected);
+    haze::test::free_all_residues(da);
 }
 
-// ---------------------------------------------------------------------------
-// Multi-operation chains
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Multi-operation chains and lazy-recording semantics. These verify that
+// the EpochSession bundles multiple compute calls into one recording and
+// that polymap invalidation paths (H2D / memset) work in the MRP fan-out
+// just as they do for SRP.
+// ===========================================================================
 
-TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_t = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // a=2, b=3 → t = a+b = 5 → dst = t*2 = 10
-    std::vector<uint64_t> a(kRingDim, 2);
-    std::vector<uint64_t> b(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeAdd(d_t, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalar(d_dst, d_t, 2, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 10);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
+    const std::vector<uint64_t> scalars = derive_scalars(d.base, /*k_base=*/13ULL);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0xADD0ULL + i, kRingDim);
+        b[i] = haze::test::make_residue(d.base[i], 0xADD1ULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            const uint64_t s = add_mod(a[i][k], b[i][k], d.base[i]);
+            expected[i][k] = mul_mod(s, scalars[i], d.base[i]);
+        }
     }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_t) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto d_t = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.add(d_t, haze::test::to_const(da), haze::test::to_const(db));
+    d.mul_scalar(d_dst, haze::test::to_const(d_t), scalars);
+    check_against_per_residue(d, d_dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(d_t);
+    haze::test::free_all_residues(d_dst);
 }
 
-TEST_CASE("multi-operation chain: mul then add in one recording", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEMPLATE_TEST_CASE("multi-operation chain: mul then add in one recording", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_t = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-
-    // a=2, b=3 -> t = a*b = 6 -> dst = t + b = 9
-    std::vector<uint64_t> a(kRingDim, 2);
-    std::vector<uint64_t> b(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeMul(d_t, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst, d_t, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> result(kRingDim, 0);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(result[i] == 9);
+    std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> expected(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a[i] = haze::test::make_residue(d.base[i], 0x10AULL + i, kRingDim);
+        b[i] = haze::test::make_residue(d.base[i], 0x10BULL + i, kRingDim);
+        expected[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            const uint64_t m = mul_mod(a[i][k], b[i][k], d.base[i]);
+            expected[i][k] = add_mod(m, b[i][k], d.base[i]);
+        }
     }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_t) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto d_t = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.mul(d_t, haze::test::to_const(da), haze::test::to_const(db));
+    d.add(d_dst, haze::test::to_const(d_t), haze::test::to_const(db));
+    check_against_per_residue(d, d_dst, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(d_t);
+    haze::test::free_all_residues(d_dst);
 }
 
-// ---------------------------------------------------------------------------
-// Multiple materializations
-// ---------------------------------------------------------------------------
+TEMPLATE_TEST_CASE("multiple materializations: two independent D2H cycles", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
 
-TEST_CASE("multiple materializations: two independent D2H cycles", "[integration]") {
-    haze::test::setup_integration_compute_config();
+    // First batch.
+    std::vector<std::vector<uint64_t>> a1;
+    std::vector<std::vector<uint64_t>> b1;
+    std::vector<std::vector<uint64_t>> exp1;
+    make_two_residue_inputs(d.base, a1, b1, exp1, 0x111ULL, 0x222ULL, add_mod);
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst1 = nullptr;
-    void *d_dst2 = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
+    auto da = haze::test::allocate_and_h2d_residues(a1);
+    auto db = haze::test::allocate_and_h2d_residues(b1);
+    auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
-    // First batch: a=1, b=2 → sum=3
-    std::vector<uint64_t> a(kRingDim, 1);
-    std::vector<uint64_t> b(kRingDim, 2);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    d.add(d_dst1, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, d_dst1, exp1);
 
-    std::vector<uint64_t> r1(kRingDim, 0);
-    REQUIRE(hazeMemcpy(r1.data(), d_dst1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(r1[i] == 3);
+    // Second batch (after first materialisation).
+    std::vector<std::vector<uint64_t>> a2(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> b2(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> exp2(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a2[i] = haze::test::make_residue(d.base[i], 0x333ULL + i, kRingDim);
+        b2[i] = haze::test::make_residue(d.base[i], 0x444ULL + i, kRingDim);
+        exp2[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            exp2[i][k] = add_mod(a2[i][k], b2[i][k], d.base[i]);
+        }
+        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(db[i], b2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                HAZE_SUCCESS);
     }
+    d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, d_dst2, exp2);
 
-    // Second batch (after first materialization): a=5, b=6 → sum=11
-    std::ranges::fill(a, 5);
-    std::ranges::fill(b, 6);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(r2[i] == 11);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst2) == HAZE_SUCCESS);
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(d_dst1);
+    haze::test::free_all_residues(d_dst2);
 }
 
-// ---------------------------------------------------------------------------
-// hazeDeviceSynchronize is a no-op (does not trigger materialization)
-// ---------------------------------------------------------------------------
+TEMPLATE_TEST_CASE("H2D after compute invalidates the polymap binding", "[integration]", SrpDriver,
+                   MrpDriver) {
+    TestType d;
+    d.setup();
+
+    // First pass: dst1 = a1 + b.
+    std::vector<std::vector<uint64_t>> a1;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> exp1;
+    make_two_residue_inputs(d.base, a1, b, exp1, 0xAA1ULL, 0xBBBULL, add_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a1);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.add(d_dst1, haze::test::to_const(da), haze::test::to_const(db));
+
+    // Overwrite a's shadow before flushing — recording is still active.
+    // dst2 must reflect the *new* a, not the stale binding.
+    std::vector<std::vector<uint64_t>> a2(TestType::kNumResidues);
+    std::vector<std::vector<uint64_t>> exp2(TestType::kNumResidues);
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        a2[i] = haze::test::make_residue(d.base[i], 0xAA2ULL + i, kRingDim);
+        exp2[i].resize(kRingDim);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            exp2[i][k] = add_mod(a2[i][k], b[i][k], d.base[i]);
+        }
+        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                HAZE_SUCCESS);
+    }
+    d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
+    check_against_per_residue(d, d_dst2, exp2);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(d_dst1);
+    haze::test::free_all_residues(d_dst2);
+}
+
+TEMPLATE_TEST_CASE("memset after compute invalidates the polymap binding", "[integration]",
+                   SrpDriver, MrpDriver) {
+    TestType d;
+    d.setup();
+
+    // First pass: dst1 = a + b.
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> exp1;
+    make_two_residue_inputs(d.base, a, b, exp1, 0xAA1ULL, 0xBBBULL, add_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+    auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
+
+    d.add(d_dst1, haze::test::to_const(da), haze::test::to_const(db));
+
+    // memset zeros each residue's shadow; second add must read all zeros.
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        REQUIRE(hazeMemset(da[i], 0, kBytes) == HAZE_SUCCESS);
+    }
+    d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
+
+    // Expected: 0 + b[i][k] = b[i][k] (already in [0, q)).
+    check_against_per_residue(d, d_dst2, b);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(d_dst1);
+    haze::test::free_all_residues(d_dst2);
+}
+
+// ===========================================================================
+// SRP-only cases below: things that don't have an MRP shape (modulus-index
+// errors don't apply to MRP because the MRP shims take primes directly,
+// not indices), or that test record-and-replay-orthogonal behaviour where
+// SRP coverage is sufficient.
+// ===========================================================================
 
 TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integration]") {
     haze::test::setup_integration_compute_config();
@@ -676,14 +1229,11 @@ TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integratio
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-    // Sync between compute and D2H must not flush the recording
+    REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    // If sync had flushed state, result would be stale/zero. Correct: 6.
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(result[i] == 6);
     }
@@ -693,14 +1243,10 @@ TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integratio
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
 }
 
-// ---------------------------------------------------------------------------
-// Error cases
-// ---------------------------------------------------------------------------
-
 TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     void *d_dst = nullptr;
@@ -714,7 +1260,7 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeAdd(d_dst, fake1, fake2, kModIdx, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAdd(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
@@ -723,7 +1269,7 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
 TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     void *d_a = nullptr;
@@ -738,11 +1284,8 @@ TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    // Negative index maps to zero modulus, which is rejected.
     REQUIRE(hazeAdd(d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-
-    // Index past the end of the moduli table (also zero modulus).
     REQUIRE(hazeAdd(d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -754,21 +1297,17 @@ TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
 TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
 
-    // src pointers that were never hazeMemcpy'd (no shadow data). The
-    // ints-to-pointers are deliberate: the test asserts the allocator
-    // classifies these synthetic device addresses as unmapped, which
-    // requires the addresses themselves, not real allocations.
     // NOLINTBEGIN(performance-no-int-to-ptr)
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeMul(d_dst, fake1, fake2, kModIdx, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeMul(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
@@ -777,7 +1316,7 @@ TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
 TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(kModIdx, kModulus) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     void *d_a = nullptr;
@@ -792,11 +1331,8 @@ TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    // Negative index maps to zero modulus, which is rejected.
     REQUIRE(hazeMul(d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-
-    // Index past the end of the moduli table (also zero modulus).
     REQUIRE(hazeMul(d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -806,82 +1342,83 @@ TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
 }
 
 // ---------------------------------------------------------------------------
-// H2D / memset polymap-invalidation regression tests
+// MRP-shim argument validation. Mirrors the basis-convert null-pointer
+// rejection pattern so a bad call surfaces before any EpochSession opens.
 // ---------------------------------------------------------------------------
-// H2D and memset must drop any polymap binding for the target address.
-// Without invalidation, a sequence of (H2D → compute → H2D → compute) within
-// one recording would replay the FIRST H2D's data on the second compute,
-// because lookup_or_create finds the still-bound polynomial from the first
-// pass and skips the fresh shadow data. Same shape applies to memset.
 
-TEST_CASE("H2D after compute invalidates the polymap binding", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEST_CASE("hazeAddMrp rejects null arrays / zero base length", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst1 = nullptr;
-    void *d_dst2 = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
+    const uint64_t base[] = {kQ0};
+    void *dst_polys[] = {nullptr};
+    const void *src_polys[] = {nullptr};
 
-    // First pass: a=2, b=3 → dst1 = a + b = 5
-    std::vector<uint64_t> a1(kRingDim, 2);
-    std::vector<uint64_t> b1(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    // Overwrite a's shadow before flushing — recording is still active.
-    // dst2 must reflect a=20, b=3 (sum=23), not the stale a=2.
-    std::vector<uint64_t> a2(kRingDim, 20);
-    REQUIRE(hazeMemcpy(d_a, a2.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
-
-    std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(r2[i] == 23);
-    }
-
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst2) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(nullptr, src_polys, src_polys, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAddMrp(dst_polys, nullptr, src_polys, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAddMrp(dst_polys, src_polys, nullptr, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAddMrp(dst_polys, src_polys, src_polys, nullptr, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAddMrp(dst_polys, src_polys, src_polys, base, 0, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
 }
 
-TEST_CASE("memset after compute invalidates the polymap binding", "[integration]") {
-    haze::test::setup_integration_compute_config();
+TEST_CASE("hazeAddScalarMrp rejects null scalars array", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    void *d_a = nullptr;
-    void *d_b = nullptr;
-    void *d_dst1 = nullptr;
-    void *d_dst2 = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst2, kBytes) == HAZE_SUCCESS);
+    const uint64_t base[] = {kQ0};
+    void *dst_polys[] = {nullptr};
+    const void *src_polys[] = {nullptr};
 
-    // First pass: a=4, b=5 → dst1 = 9.
-    std::vector<uint64_t> a1(kRingDim, 4);
-    std::vector<uint64_t> b1(kRingDim, 5);
-    REQUIRE(hazeMemcpy(d_a, a1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst1, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddScalarMrp(dst_polys, src_polys, /*scalars=*/nullptr, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
 
-    // memset zeros the shadow; second add must read all zeros for d_a.
-    REQUIRE(hazeMemset(d_a, 0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst2, d_a, d_b, kModIdx, nullptr) == HAZE_SUCCESS);
+TEST_CASE("hazeNTTMrp rejects null arrays / zero base length", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    std::vector<uint64_t> r2(kRingDim, 0);
-    REQUIRE(hazeMemcpy(r2.data(), d_dst2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    for (uint64_t i = 0; i < kRingDim; ++i) {
-        REQUIRE(r2[i] == 5);
-    }
+    const uint64_t base[] = {kQ0};
+    void *dst_polys[] = {nullptr};
+    const void *src_polys[] = {nullptr};
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst2) == HAZE_SUCCESS);
+    REQUIRE(hazeNTTMrp(nullptr, src_polys, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(dst_polys, nullptr, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(dst_polys, src_polys, nullptr, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(dst_polys, src_polys, base, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeAutomorphMrp rejects null arrays / zero base length", "[unit]") {
+    // Distinct shape from hazeNTTMrp (carries a uint64_t index argument),
+    // so the validation code lives in its own shim block — covered here
+    // to ensure the same null-pointer guarantees apply.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    const uint64_t base[] = {kQ0};
+    void *dst_polys[] = {nullptr};
+    const void *src_polys[] = {nullptr};
+
+    REQUIRE(hazeAutomorphMrp(nullptr, src_polys, 5, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAutomorphMrp(dst_polys, nullptr, 5, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAutomorphMrp(dst_polys, src_polys, 5, nullptr, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAutomorphMrp(dst_polys, src_polys, 5, base, 0, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
 }

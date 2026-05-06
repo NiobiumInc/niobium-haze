@@ -185,10 +185,71 @@ HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
 HAZE_API hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
                               hazeStream_t stream) HAZE_NOEXCEPT;
 
-// Automorphism / rotation.
+// Automorphism / rotation. hazeAutomorph(_, k) records the eval-form
+// Galois action f(X) → f(X^k): in slot terms, output slot i reads from
+// input slot j where 2j+1 ≡ k·(2i+1) (mod 2N). Specific values of k give
+// CKKS-style slot rotations; in general the action is the permutation
+// determined by k.
+//
+// `index` (= k) must be odd in [1, 2N-1]; the action is then invertible.
+// Applying automorph(k) then automorph(k') with k·k' ≡ 1 (mod 2N) yields
+// the identity, so to invert the action — i.e. permute in the opposite
+// direction — pass the multiplicative inverse of k modulo 2N as `index`.
 
 HAZE_API hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
                                    hazeStream_t stream) HAZE_NOEXCEPT;
+
+// Multi-residue polynomial (MRP) variants of the pointwise / scalar / NTT /
+// automorph ops above. Each MRP allocation lives across `base_len` separate
+// haze allocations (one per residue / prime in `base`). The `dst` and
+// `src*` arguments are non-null arrays of `base_len` poly pointers; `base`
+// is a non-null array of `base_len` ciphertext-modulus primes (same primes
+// passed to hazeSetCiphertextModulus). Scalar variants take a parallel
+// `scalars` array of length `base_len` — `scalars[i]` is reduced
+// (semantically) modulo `base[i]`.
+//
+// hazeAutomorphMrp is the same eval-form Galois action as hazeAutomorph
+// applied to every residue — see the hazeAutomorph comment above for the
+// `index` convention and the inversion rule (pass the multiplicative
+// inverse of k modulo 2N to permute the other way).
+//
+// hazeRotAutomorphCoeffMrp is the negacyclic LEFT shift in coefficient
+// form (offset in [0, N-1]; output[i] reads input at (i+offset) mod N,
+// with a sign flip on wraparound since X^N = -1). Equivalently,
+// multiplication by X^{-offset} in R_q. Distinct semantics, distinct IR
+// op (mr_rot_automorph_coeff).
+//
+// Each call records a single `mr_*` IR op that fans out to per-residue
+// `sr_*` instructions inside niobium-fhetch.
+
+HAZE_API hazeError_t hazeAddMrp(void *const *dst, const void *const *src1, const void *const *src2,
+                                const uint64_t *base, size_t base_len,
+                                hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSubMrp(void *const *dst, const void *const *src1, const void *const *src2,
+                                const uint64_t *base, size_t base_len,
+                                hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMulMrp(void *const *dst, const void *const *src1, const void *const *src2,
+                                const uint64_t *base, size_t base_len,
+                                hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src,
+                                      const uint64_t *scalars, const uint64_t *base,
+                                      size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src,
+                                      const uint64_t *scalars, const uint64_t *base,
+                                      size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
+                                      const uint64_t *scalars, const uint64_t *base,
+                                      size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
+                                size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
+                                 size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src, uint64_t index,
+                                      const uint64_t *base, size_t base_len,
+                                      hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *const *src,
+                                              uint64_t offset, const uint64_t *base,
+                                              size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // CRT basis conversion (composite operations: ModUp, ModDown,
 // generalised basis convert).

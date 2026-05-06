@@ -14,9 +14,8 @@
 #include "core/basis_convert.hpp"
 
 #include "common/errors.hpp"
-#include "common/handle.hpp"
-#include "common/thread_safety.hpp"
 #include "core/epoch.hpp"
+#include "core/mrp_polymap.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +23,6 @@
 #include <haze/haze_types.h>
 #include <niobium/fhetch_api.h>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 namespace haze {
@@ -32,35 +30,6 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 namespace {
-
-// Build an MRP from per-modulus device pointers + their primes.
-// Caller holds the EpochSession lock. Failures propagate the underlying
-// HazeInternalError from lookup_or_create_locked (UnknownAddress / NoData
-// / NotConfigured / AllocTooSmall).
-std::expected<fhetch::MRP, HazeInternalError> build_mrp_locked(const void *const *polys,
-                                                               const uint64_t *base, size_t len)
-    HAZE_REQUIRES(epoch().mutex()) {
-    std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-    pairs.reserve(len);
-    for (size_t i = 0; i < len; ++i) {
-        auto poly = epoch().lookup_or_create_locked(to_dev_addr(polys[i]));
-        if (!poly) {
-            return std::unexpected(poly.error());
-        }
-        pairs.emplace_back(std::move(*poly), base[i]);
-    }
-    return fhetch::MRP::from_pairs(pairs);
-}
-
-// Store each residue of `mrp` at the matching dst pointer. The base
-// argument names which moduli to read from the MRP (in dst_polys' order).
-// Caller holds the EpochSession lock.
-void store_mrp_locked(void *const *dst_polys, const fhetch::MRP &mrp, const uint64_t *base,
-                      size_t len) HAZE_REQUIRES(epoch().mutex()) {
-    for (size_t i = 0; i < len; ++i) {
-        epoch().store_compute_result_locked(to_dev_addr(dst_polys[i]), mrp[base[i]]);
-    }
-}
 
 // Validation helpers. Each returns InvalidArgument on the first failure
 // and records a debug-log breadcrumb. Pre-flight checks live here so
