@@ -339,10 +339,14 @@ hermetically — no live worktree required, suitable for CI.
 
 #### Notes
 
-- `inputs.self.submodules = true` makes the flake source submodule-aware. With
-  a clean haze worktree, nix re-fetches submodules from their remotes (needs
-  SSH auth for the private niobium-fhetch); keep a dirty file in the worktree
-  to force the local checkout instead.
+- The flake declares a dedicated `haze-vendor` input (`git+file:.?submodules=1`)
+  that only the hermetic `mkPackages` derivations consume; the dev shell never
+  references it. Lazy fetching means `nix develop` evaluates without touching
+  the submodule remote, so a clean haze worktree drops straight into the dev
+  shell without SSH auth. `nix build .#haze` / `nix flake check` /
+  `nix flake update` still touch the input and need SSH on a clean worktree
+  (nix issue #13324) — refresh the lock from a host that has SSH (typically
+  the Mac side) and commit `flake.lock` so VM / CI consumers reuse it.
 - The hermetic packages live entirely in `/nix/store`. The macOS SDK / ABI
   mismatch trap (see [`CLAUDE.md`](CLAUDE.md)) only triggers when **mixing**
   nix and non-nix builds in the same closure — pure-flake or pure-Makefile
