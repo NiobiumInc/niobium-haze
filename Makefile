@@ -127,6 +127,8 @@ Usage: make <target> [MODE=debug|release]
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
     sync                Init vendor/niobium-fhetch submodule
+    sync-flake-lock     Realign flake.lock niobium-fhetch-src rev with
+                        the vendor/niobium-fhetch submodule rev in HEAD
 
   Test:
     test-unit           Run unit suite (HAZE_TARGET=local; no FHE math)
@@ -158,6 +160,9 @@ help: ## Display this help message
 
 sync: ## Init vendor/niobium-fhetch + its nested openfhe / json submodules (recursive)
 	git submodule update --init --recursive vendor/niobium-fhetch
+
+sync-flake-lock: ## Realign flake.lock niobium-fhetch-src rev to match the submodule rev recorded in HEAD
+	scripts/sync-fhetch-rev.sh
 
 # ==============================================================================
 # OpenFHE Build (skipped when EXTERNAL_OPENFHE=1)
