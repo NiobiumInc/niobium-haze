@@ -8,15 +8,18 @@
 # Two paths:
 #
 # - With nix on PATH, defer to `nix flake lock --override-input`. This
-#   refetches and recomputes every derived field (narHash, lastModified,
-#   revCount) precisely.
+#   refetches and recomputes every derived field (narHash,
+#   lastModified, revCount) precisely.
 #
-# - Without nix, fall back to a jq-driven JSON edit: update `rev` and
-#   drop `narHash` from the lock entry. The next nix invocation
-#   (e.g. CI's `nix flake check`) refetches and fills `narHash` back
-#   in, so non-nix contributors can update the lock without installing
-#   nix locally. The CI rev-equality gate keys on `rev` only, so the
-#   intermediate lock state is enough to merge.
+# - Without nix, fall back to a python3 JSON edit: update `rev` and
+#   drop `narHash`. The next nix invocation (e.g. CI's `nix flake
+#   check`) refetches and refills `narHash`, so non-nix contributors
+#   can update the lock without installing nix locally. The CI
+#   rev-equality gate keys on `rev` only, so the intermediate lock
+#   state is enough to merge. python3 is used (instead of jq) because
+#   it is more widely pre-installed; its JSON dump with
+#   indent=2/sort_keys=True is byte-identical to what nix writes,
+#   keeping the diff minimal.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
@@ -36,25 +39,27 @@ if command -v nix >/dev/null 2>&1; then
     exit 0
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo "error: need either nix or jq on PATH to update flake.lock" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: need either nix or python3 on PATH to update flake.lock" >&2
     exit 1
 fi
 
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
+python3 - "$submodule_rev" <<'PYEOF'
+import json
+import pathlib
+import sys
 
-jq --arg rev "$submodule_rev" \
-    '.nodes."niobium-fhetch-src".locked.rev = $rev
-     | del(.nodes."niobium-fhetch-src".locked.narHash)' \
-    flake.lock > "$tmp"
+rev = sys.argv[1]
+path = pathlib.Path("flake.lock")
+data = json.loads(path.read_text())
+locked = data["nodes"]["niobium-fhetch-src"]["locked"]
 
-if cmp -s "$tmp" flake.lock; then
-    echo "flake.lock already in sync"
-    exit 0
-fi
+if locked.get("rev") == rev and "narHash" in locked:
+    print("flake.lock already in sync")
+    sys.exit(0)
 
-mv "$tmp" flake.lock
-trap - EXIT
-
-echo "flake.lock updated (narHash cleared; nix will recompute on next invocation)"
+locked["rev"] = rev
+locked.pop("narHash", None)
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+print("flake.lock updated (narHash cleared; nix will recompute on next invocation)")
+PYEOF
