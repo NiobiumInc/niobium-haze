@@ -36,13 +36,10 @@ jobs:
       - name: Verify clang-format version
         run: clang-format --version
 
-      - name: Run clang-format --dry-run -Werror
-        # First-party C/C++ trees only. vendor/ is third-party / submodule
-        # territory and uses upstream's own formatting. The .clang-format at
-        # repo root governs every match here.
-        # --dry-run -Werror prints diffs and exits non-zero if any file
-        # needs reformatting.
-        run: |
-          find src include replay_bridge test \
-            \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
-            -print0 | xargs -0 clang-format --dry-run -Werror
+      - name: Run scripts/clang-format.sh --check
+        # The script encapsulates the tree set, file globs, and
+        # --dry-run -Werror flags so local runs (`scripts/clang-format.sh
+        # --check`), `nix flake check` (the haze-clang-format derivation),
+        # and this gate stay byte-for-byte identical. vendor/ is excluded
+        # there for the same reason — upstream owns its formatting.
+        run: scripts/clang-format.sh --check

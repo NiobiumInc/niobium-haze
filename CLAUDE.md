@@ -170,19 +170,21 @@ equivalent — run them before pushing rather than after CI fails:
 
 1. `Check clang-format` — runs `clang-format --dry-run -Werror` over
    every first-party `.cpp` / `.hpp` / `.h` / `.c` under `src/`,
-   `include/`, `replay_bridge/`, `test/`. Reproduce locally:
+   `include/`, `replay_bridge/`, `test/`. The CI gate, the
+   `haze-clang-format` flake check, and the local script all dispatch
+   through `scripts/clang-format.sh` so behavior matches across all
+   three. Reproduce locally:
 
    ```sh
    # Apply formatting in place to fix anything the gate would reject.
-   find src include replay_bridge test \
-     \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
-     -print0 | xargs -0 clang-format -i
+   scripts/clang-format.sh
 
    # Same dry-run -Werror sweep CI runs (exits non-zero on any diff).
-   find src include replay_bridge test \
-     \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.c' \) \
-     -print0 | xargs -0 clang-format --dry-run -Werror
+   scripts/clang-format.sh --check
    ```
+
+   The script resolves the repo root via `git rev-parse`, so it works
+   from any subdirectory.
 
 2. `clang-tidy + clangd-check` — `clang-tidy --warnings-as-errors='*'`
    over first-party `src/`, `replay_bridge/`, `test/` `.cpp` files,
