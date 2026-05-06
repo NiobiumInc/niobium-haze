@@ -16,7 +16,9 @@
 #include "common/handle.hpp"
 #include "core/config.hpp"
 #include "core/epoch.hpp"
+#include "core/mrp_polymap.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
@@ -83,6 +85,71 @@ template <auto OpFn> hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t 
     if (!p)
         return set_error(to_public_error(p.error()));
     epoch().store_compute_result_locked(dst, OpFn(*p, index));
+    return HAZE_SUCCESS;
+}
+
+// MRP compute templates. Same shape as the SRP templates above but
+// fan out across one DevAddr per residue via build_mrp_locked /
+// store_mrp_locked from core/mrp_polymap.hpp. In-place safety carries
+// over per-residue (the helpers' copy semantics are documented there).
+
+// MRP polynomial-polynomial. Used by hazeAddMrp, hazeSubMrp, hazeMulMrp.
+template <auto OpFn>
+hazeError_t binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *src2,
+                             const uint64_t *base, std::size_t base_len) noexcept {
+    EpochSession session;
+    auto m1 = build_mrp_locked(src1, base, base_len);
+    if (!m1)
+        return set_error(to_public_error(m1.error()));
+    auto m2 = build_mrp_locked(src2, base, base_len);
+    if (!m2)
+        return set_error(to_public_error(m2.error()));
+    niobium::fhetch::MRP result = OpFn(*m1, *m2);
+    store_mrp_locked(dst, result, base, base_len);
+    return HAZE_SUCCESS;
+}
+
+// MRP polynomial-scalar. `scalars[i]` pairs with `base[i]`.
+// Used by hazeAddScalarMrp, hazeSubScalarMrp, hazeMulScalarMrp.
+template <auto OpFn>
+hazeError_t binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scalars,
+                             const uint64_t *base, std::size_t base_len) noexcept {
+    EpochSession session;
+    auto m = build_mrp_locked(src, base, base_len);
+    if (!m)
+        return set_error(to_public_error(m.error()));
+    niobium::fhetch::MRP result = OpFn(*m, build_mrs(scalars, base, base_len));
+    store_mrp_locked(dst, result, base, base_len);
+    return HAZE_SUCCESS;
+}
+
+// MRP polynomial-only (no per-modulus argument). The fhetch `mr_ntt` /
+// `mr_intt` ops carry their moduli base inside the MRP itself and take
+// no extra modulus parameter — so this shape cannot reuse `unary_pq_op`.
+// Used by hazeNTTMrp, hazeINTTMrp.
+template <auto OpFn>
+hazeError_t unary_p_op_mrp(void *const *dst, const void *const *src, const uint64_t *base,
+                           std::size_t base_len) noexcept {
+    EpochSession session;
+    auto m = build_mrp_locked(src, base, base_len);
+    if (!m)
+        return set_error(to_public_error(m.error()));
+    niobium::fhetch::MRP result = OpFn(*m);
+    store_mrp_locked(dst, result, base, base_len);
+    return HAZE_SUCCESS;
+}
+
+// MRP polynomial-with-index. Used by hazeAutomorphMrp (mr_automorph_eval
+// takes an odd integer k in [1, 2N-1] and is otherwise modulus-independent).
+template <auto OpFn>
+hazeError_t unary_pi_op_mrp(void *const *dst, const void *const *src, uint64_t index,
+                            const uint64_t *base, std::size_t base_len) noexcept {
+    EpochSession session;
+    auto m = build_mrp_locked(src, base, base_len);
+    if (!m)
+        return set_error(to_public_error(m.error()));
+    niobium::fhetch::MRP result = OpFn(*m, index);
+    store_mrp_locked(dst, result, base, base_len);
     return HAZE_SUCCESS;
 }
 
