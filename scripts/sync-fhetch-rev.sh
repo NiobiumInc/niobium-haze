@@ -15,6 +15,6 @@ if [[ -z $submodule_rev ]]; then
     exit 1
 fi
 
-echo "syncing flake.lock niobium-fhetch rev -> $submodule_rev"
-nix flake lock --override-input niobium-fhetch \
+echo "syncing flake.lock niobium-fhetch-src rev -> $submodule_rev"
+nix flake lock --override-input niobium-fhetch-src \
     "git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?rev=${submodule_rev}&submodules=1"

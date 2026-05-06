@@ -20,7 +20,7 @@
     # submodule rev recorded in haze's index matches the rev pinned
     # in flake.lock here. `scripts/sync-fhetch-rev.sh` keeps them
     # aligned after a fhetch bump.
-    niobium-fhetch = {
+    niobium-fhetch-src = {
       url = "git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?submodules=1";
       flake = false;
     };
@@ -30,7 +30,7 @@
     {
       self,
       nixpkgs,
-      niobium-fhetch,
+      niobium-fhetch-src,
     }:
     let
       # x86_64-darwin omitted: niobium ships Apple Silicon only.
@@ -75,29 +75,24 @@
           stdenv = pkgs.clangStdenv;
           fs = pkgs.lib.fileset;
 
-          # niobium-fhetch input is the fhetch repo root (with its
-          # vendor/openfhe and vendor/json sub-submodules embedded
-          # via `?submodules=1`). Resolving via the input keeps the
-          # devShell evaluation path free of submodule fetching.
-          fhetchRoot = niobium-fhetch;
-
-          openfheSrc = fhetchRoot + "/vendor/openfhe";
-
-          # niobium-fhetch minus its OpenFHE submodule (separate
-          # derivation) and any in-tree build dirs `make build` may
-          # have written. maybeMissing tolerates a clean checkout
-          # where those build dirs do not exist.
-          fhetchSrc = fs.toSource {
-            root = fhetchRoot;
-            fileset = fs.difference fhetchRoot (
-              fs.unions [
-                (fhetchRoot + "/vendor/openfhe")
-                (fs.maybeMissing (fhetchRoot + "/vendor/lib"))
-                (fs.maybeMissing (fhetchRoot + "/build"))
-                (fs.maybeMissing (fhetchRoot + "/dbuild"))
-              ]
-            );
-          };
+          # niobium-fhetch-src input is the fhetch repo root (with
+          # its vendor/openfhe and vendor/json sub-submodules embedded
+          # via `?submodules=1`). The input is named -src so it does
+          # not shadow the local `niobium-fhetch` derivation defined
+          # below — let-bindings in nix are mutually recursive, so a
+          # collision would cause infinite recursion.
+          #
+          # The input value is a /nix/store-path-typed string, not a
+          # nix `path`, so it cannot feed into fs.toSource directly
+          # (nix forbids appending such strings to paths to preserve
+          # store purity). Used straight as a derivation `src`, the
+          # fresh git fetch already lacks the build dirs (build/,
+          # dbuild/, vendor/lib/) that fs.toSource was filtering out
+          # of a worktree-rooted source. The vendor/openfhe submodule
+          # is included but harmless: cmake is pointed at the prebuilt
+          # openfhe derivation via -DOPENFHE_INSTALL_DIR.
+          fhetchSrc = niobium-fhetch-src;
+          openfheSrc = niobium-fhetch-src + "/vendor/openfhe";
 
           hazeBuildSrc = fs.toSource {
             root = ./.;
