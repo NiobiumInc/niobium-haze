@@ -181,8 +181,7 @@ extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src
 
 extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *const *src,
                                                 uint64_t offset, const uint64_t *base,
-                                                size_t base_len,
-                                                hazeStream_t /*stream*/) noexcept {
+                                                size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return haze::unary_pi_op_mrp<fhetch::mr_rot_automorph_coeff>(dst, src, offset, base, base_len);
