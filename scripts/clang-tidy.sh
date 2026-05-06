@@ -3,8 +3,8 @@
 # first-party .cpp files.
 #
 # Usage:
-#   scripts/clang-tidy.sh             # default; uses build/ for compile_commands.json
-#   BUILD_DIR=dbuild scripts/clang-tidy.sh
+#   scripts/clang-tidy.sh             # default; uses dbuild/ for compile_commands.json
+#   BUILD_DIR=build scripts/clang-tidy.sh
 #   PARALLEL_JOBS=4 scripts/clang-tidy.sh
 #   scripts/clang-tidy.sh --help
 #
@@ -39,7 +39,7 @@ else
     cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
-build_dir="${BUILD_DIR:-build}"
+build_dir="${BUILD_DIR:-dbuild}"
 if [[ ! -f "$build_dir/compile_commands.json" ]]; then
     printf '%s: no compile_commands.json under %s/. Run `make build` first.\n' \
         "$(basename "$0")" "$build_dir" >&2

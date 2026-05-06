@@ -3,8 +3,8 @@
 # scanning the diagnostic output for warnings/errors.
 #
 # Usage:
-#   scripts/clangd-check.sh             # default; uses build/ for compile_commands.json
-#   BUILD_DIR=dbuild scripts/clangd-check.sh
+#   scripts/clangd-check.sh             # default; uses dbuild/ for compile_commands.json
+#   BUILD_DIR=build scripts/clangd-check.sh
 #   scripts/clangd-check.sh --help
 #
 # Resolves the repo root via `git rev-parse` (falls back to the script's
@@ -42,7 +42,7 @@ else
     cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
-build_dir="${BUILD_DIR:-build}"
+build_dir="${BUILD_DIR:-dbuild}"
 if [[ ! -f "$build_dir/compile_commands.json" ]]; then
     printf '%s: no compile_commands.json under %s/. Run `make build` first.\n' \
         "$(basename "$0")" "$build_dir" >&2

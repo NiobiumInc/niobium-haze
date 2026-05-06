@@ -12,7 +12,7 @@ CompileFlags:
   # without a database entry, and overrides any earlier -std= so
   # std::expected and other C++23 features resolve under clangd.
   Add: [-std=c++23]
-  CompilationDatabase: build
+  CompilationDatabase: dbuild
 
 Diagnostics:
   UnusedIncludes: Strict
