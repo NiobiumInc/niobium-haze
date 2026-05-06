@@ -4,20 +4,28 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Pull vendor/niobium-fhetch (and its transitive openfhe / json
-    # submodules) into self.outPath so the hermetic packages can read
-    # source from `./vendor/...` paths.
-    #
-    # Caveat (nix issue #13324): with a clean parent worktree, nix
-    # re-fetches submodules from their remotes rather than using the
-    # local checkout — that needs auth for the private niobium-fhetch
-    # remote. Keep a dirty file in the haze worktree to force local
-    # use, or commit submodule bumps before invoking nix.
-    self.submodules = true;
+    # Submodule-aware view of this flake, consumed only by the
+    # hermetic mkPackages derivations (openfhe, niobium-fhetch, haze
+    # and the lint checks). Routing the submodule recursion through a
+    # dedicated input — instead of `self.submodules = true` on the
+    # whole flake — keeps the devShell evaluation free of submodule
+    # resolution and the SSH-auth dependency it carries on a clean
+    # parent worktree (nix issue #13324). Lazy fetching means
+    # `nix develop` never accesses this input and never fetches it;
+    # only `nix build .#haze` / `nix flake check` / `nix flake update`
+    # touch it.
+    haze-vendor = {
+      url = "git+file:.?submodules=1";
+      flake = false;
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      haze-vendor,
+    }:
     let
       # x86_64-darwin omitted: niobium ships Apple Silicon only.
       systems = [
@@ -61,20 +69,25 @@
           stdenv = pkgs.clangStdenv;
           fs = pkgs.lib.fileset;
 
-          openfheSrc = ./vendor/niobium-fhetch/vendor/openfhe;
+          # Submodule-aware tree comes from the haze-vendor input
+          # rather than `./vendor/...` so nothing in the devShell
+          # evaluation path depends on submodule resolution.
+          fhetchRoot = haze-vendor + "/vendor/niobium-fhetch";
+
+          openfheSrc = fhetchRoot + "/vendor/openfhe";
 
           # niobium-fhetch minus its OpenFHE submodule (separate
           # derivation) and any in-tree build dirs `make build` may
           # have written. maybeMissing tolerates a clean checkout
           # where those build dirs do not exist.
           fhetchSrc = fs.toSource {
-            root = ./vendor/niobium-fhetch;
-            fileset = fs.difference ./vendor/niobium-fhetch (
+            root = fhetchRoot;
+            fileset = fs.difference fhetchRoot (
               fs.unions [
-                ./vendor/niobium-fhetch/vendor/openfhe
-                (fs.maybeMissing ./vendor/niobium-fhetch/vendor/lib)
-                (fs.maybeMissing ./vendor/niobium-fhetch/build)
-                (fs.maybeMissing ./vendor/niobium-fhetch/dbuild)
+                (fhetchRoot + "/vendor/openfhe")
+                (fs.maybeMissing (fhetchRoot + "/vendor/lib"))
+                (fs.maybeMissing (fhetchRoot + "/build"))
+                (fs.maybeMissing (fhetchRoot + "/dbuild"))
               ]
             );
           };
