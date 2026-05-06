@@ -12,8 +12,7 @@
           "--clang-tidy",
           "--header-insertion=never",
           "--completion-style=detailed",
-          "--pch-storage=memory",
-          "--compile-commands-dir=build"
+          "--pch-storage=memory"
         ]
       }
     }

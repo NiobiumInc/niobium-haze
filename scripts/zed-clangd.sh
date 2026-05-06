@@ -17,7 +17,18 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 project_root=$(cd "$script_dir/.." && pwd)
-db="$project_root/build/compile_commands.json"
+
+# Prefer the debug build tree for editor diagnostics; fall back to
+# release. Default to dbuild/ when neither exists yet — debug is the
+# Makefile default, so that's where the next `make build` will land.
+if [[ -f "$project_root/dbuild/compile_commands.json" ]]; then
+    db_dir="dbuild"
+elif [[ -f "$project_root/build/compile_commands.json" ]]; then
+    db_dir="build"
+else
+    db_dir="dbuild"
+fi
+db="$project_root/$db_dir/compile_commands.json"
 
 driver=""
 if [[ -f "$db" ]]; then
@@ -42,4 +53,4 @@ if [[ -z "$clangd_bin" ]]; then
     exit 1
 fi
 
-exec "$clangd_bin" "--query-driver=$driver" "$@"
+exec "$clangd_bin" "--query-driver=$driver" "--compile-commands-dir=$db_dir" "$@"

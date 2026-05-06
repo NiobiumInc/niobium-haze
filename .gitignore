@@ -11,6 +11,7 @@ cmake-build-*/
 out/
 _build/
 dbuild/
+dbuild-*/
 
 # direnv (.envrc itself is tracked; the cache it materialises is not)
 .direnv/

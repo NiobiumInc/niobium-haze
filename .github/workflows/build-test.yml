@@ -112,13 +112,13 @@ jobs:
         run: nix develop --command bash -c 'clang --version && cmake --version'
 
       - name: Build (OpenFHE + haze, release)
-        run: nix develop --command make build
+        run: nix develop --command make build MODE=release
 
       - name: Run unit suite (HAZE_TARGET=local, no FHE math)
-        run: nix develop --command make test-unit
+        run: nix develop --command make test-unit MODE=release
 
       - name: Run sim suite (in-process FHETCH simulator)
-        run: nix develop --command make test-sim
+        run: nix develop --command make test-sim MODE=release
 
       - name: Upload build logs on failure
         if: failure()
