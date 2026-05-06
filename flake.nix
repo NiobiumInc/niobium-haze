@@ -332,6 +332,12 @@
               name = "haze-dev";
               packages = hazeTools pkgs;
               shellHook = ''
+                # Resolve haze worktree root via git so scripts/ stays
+                # on PATH even after `cd`-ing to a subdirectory. Falls
+                # back to PWD when invoked outside a git checkout.
+                haze_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+                if [ -z "$haze_root" ]; then haze_root="$PWD"; fi
+                export PATH="$haze_root/scripts:$PATH"
                 echo "haze dev shell ready (clang, cmake, catch2, jj, clang-tools)."
                 echo "Run 'make sync && make build' to bootstrap, then 'make test'."
               '';
