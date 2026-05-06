@@ -84,6 +84,7 @@
             fileset = fs.unions [
               ./CMakeLists.txt
               ./include
+              ./scripts
               ./src
               ./test
               ./replay_bridge
@@ -260,51 +261,21 @@
                 touch "$out"
               '';
 
+          # Both lint derivations dispatch through the scripts in
+          # scripts/, which are also runnable directly from a haze
+          # checkout (`scripts/clang-tidy.sh`, `scripts/clangd-check.sh`).
+          # The derivations exist so `nix flake check` stays the CI gate
+          # — they wrap each script in a hermetic toolchain (pinned
+          # clang-tools, configured cmake build dir for
+          # compile_commands.json) without duplicating lint logic.
           haze-clang-tidy = mkLintDerivation {
             name = "haze-clang-tidy";
-            # `--warnings-as-errors='*'` overrides .clang-tidy's
-            # narrower WarningsAsErrors: list, treating every enabled
-            # check as an error. Headers are linted transitively via
-            # the .cpp that includes them; only feed first-party .cpp
-            # to clang-tidy.
-            lintScript = ''
-              find src replay_bridge test -name '*.cpp' -print0 \
-                | xargs -0 -n4 -P"$NIX_BUILD_CORES" clang-tidy -p build \
-                    --warnings-as-errors='*' --quiet
-            '';
+            lintScript = "bash scripts/clang-tidy.sh";
           };
 
           haze-clangd-check = mkLintDerivation {
             name = "haze-clangd-check";
-            # `--check-locations=false` skips clangd's per-token
-            # feature-test sweep (hover, ExtractFunction, etc.). Those
-            # tweak tests print `E[...] tweak: ... FAIL` for break /
-            # continue tokens in any function with a switch, which
-            # makes clangd exit non-zero with no real diagnostic. The
-            # flag does not filter parser, sema, or clang-tidy
-            # diagnostics — they flow through both paths.
-            #
-            # Match warning / error diagnostic lines explicitly so
-            # `.clangd`'s Diagnostics block (UnusedIncludes /
-            # MissingIncludes: Strict) drives include hygiene through
-            # the same gate. Capture into `report` (not `out`) since
-            # `$out` is the nix output path and must not be
-            # overwritten.
-            lintScript = ''
-              files=$(find src replay_bridge test -name '*.cpp')
-              count=$(printf '%s\n' "$files" | grep -c .)
-              echo "haze-clangd-check: linting $count first-party .cpp files"
-              failed=0
-              for f in $files; do
-                report=$(clangd --check="$f" --check-locations=false 2>&1) || true
-                if echo "$report" | grep -qE ': (warning|error):'; then
-                  echo "=== $f ==="
-                  echo "$report"
-                  failed=1
-                fi
-              done
-              test "$failed" = 0
-            '';
+            lintScript = "bash scripts/clangd-check.sh";
           };
         in
         {
