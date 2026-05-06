@@ -55,13 +55,39 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Rewrite niobium-fhetch submodule URL for token auth
+      - name: Verify flake.lock niobium-fhetch rev matches submodule
+        # Strict gate: the niobium-fhetch flake input must pin the same
+        # rev that haze's index records for the vendor/niobium-fhetch
+        # submodule. Drift is impossible to merge because we'd be
+        # building/testing different fhetch sources via nix vs. via
+        # `make build`. After a fhetch bump, run scripts/sync-fhetch-rev.sh
+        # to realign flake.lock with the new submodule rev.
+        run: |
+          submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
+          lock_rev=$(jq -r '.nodes."niobium-fhetch".locked.rev' flake.lock)
+          if [ "$submodule_rev" != "$lock_rev" ]; then
+            echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
+            echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
+            exit 1
+          fi
+
+      - name: Configure git to use App token for github.com fetches
+        # nix's libgit2 fetcher resolves git+ssh://git@github.com/...
+        # URLs in the flake. The runner has no SSH key, so rewrite
+        # ssh://git@github.com/ -> https://x-access-token:${TOKEN}@github.com/
+        # globally; libgit2 honors insteadOf rules. This covers both
+        # the niobium-fhetch flake input and any sub-submodule fetches
+        # (openfhe, json) that the input's `?submodules=1` triggers.
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config -f .gitmodules submodule.vendor/niobium-fhetch.url \
-            "https://x-access-token:${APP_TOKEN}@github.com/NiobiumInc/niobium-fhetch.git"
-          git submodule sync vendor/niobium-fhetch
+          # --add: insteadOf is multivalued, both forms must coexist.
+          git config --global --add \
+            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
+            "ssh://git@github.com/"
+          git config --global --add \
+            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
+            "git@github.com:"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
@@ -133,22 +159,31 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Rewrite niobium-fhetch submodule URL for token auth
-        # nix issue #13324: with `inputs.self.submodules = true`, nix's
-        # flake source ingestion re-fetches submodules from their
-        # declared URLs. .gitmodules registers niobium-fhetch via SSH,
-        # and the runner has no SSH key. actions/checkout cloned the
-        # submodule via a transient HTTPS rewrite that is NOT carried
-        # over to nix's separate git fetcher. Rewriting the URL to
-        # HTTPS-with-App-token in .gitmodules + .git/config covers nix.
-        # The .gitmodules edit also marks the parent worktree dirty
-        # (modified tracked file), nudging nix toward the local copy.
+      - name: Verify flake.lock niobium-fhetch rev matches submodule
+        # See lint job for rationale: strict gate that the flake input
+        # rev equals the submodule rev recorded in haze's index.
+        run: |
+          submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
+          lock_rev=$(jq -r '.nodes."niobium-fhetch".locked.rev' flake.lock)
+          if [ "$submodule_rev" != "$lock_rev" ]; then
+            echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
+            echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
+            exit 1
+          fi
+
+      - name: Configure git to use App token for github.com fetches
+        # See lint job: rewrites SSH github.com URLs to HTTPS with the
+        # App token so libgit2 (used by nix's git fetcher) can pull
+        # the niobium-fhetch flake input and its sub-submodules.
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config -f .gitmodules submodule.vendor/niobium-fhetch.url \
-            "https://x-access-token:${APP_TOKEN}@github.com/NiobiumInc/niobium-fhetch.git"
-          git submodule sync vendor/niobium-fhetch
+          git config --global --add \
+            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
+            "ssh://git@github.com/"
+          git config --global --add \
+            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
+            "git@github.com:"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
