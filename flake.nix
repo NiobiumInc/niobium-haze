@@ -227,6 +227,39 @@
             '';
             meta.platforms = pkgs.lib.platforms.unix;
           };
+          # Source for the format check: clang-format reads .clang-format
+          # from the tree root, so we ship that plus the trees the script
+          # walks (src/, include/, replay_bridge/, test/) and the script
+          # itself. Kept separate from hazeBuildSrc because the format
+          # check doesn't need CMakeLists / a configured build dir.
+          hazeFmtSrc = fs.toSource {
+            root = ./.;
+            fileset = fs.unions [
+              ./.clang-format
+              ./scripts
+              ./include
+              ./src
+              ./test
+              ./replay_bridge
+            ];
+          };
+
+          haze-clang-format =
+            pkgs.runCommand "haze-clang-format"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.clang-tools
+                  pkgs.findutils
+                  pkgs.gnused
+                ];
+              }
+              ''
+                cd ${hazeFmtSrc}
+                bash scripts/clang-format.sh --check
+                touch "$out"
+              '';
+
           haze-clang-tidy = mkLintDerivation {
             name = "haze-clang-tidy";
             # `--warnings-as-errors='*'` overrides .clang-tidy's
@@ -279,6 +312,7 @@
             openfhe
             niobium-fhetch
             haze
+            haze-clang-format
             haze-clang-tidy
             haze-clangd-check
             ;
@@ -369,6 +403,8 @@
               '';
 
           haze-build = p.haze;
+
+          clang-format = p.haze-clang-format;
 
           clang-tidy = p.haze-clang-tidy;
 
