@@ -1,6 +1,6 @@
 {
   "nodes": {
-    "niobium-fhetch": {
+    "niobium-fhetch-src": {
       "flake": false,
       "locked": {
         "lastModified": 1778092404,
@@ -36,7 +36,7 @@
     },
     "root": {
       "inputs": {
-        "niobium-fhetch": "niobium-fhetch",
+        "niobium-fhetch-src": "niobium-fhetch-src",
         "nixpkgs": "nixpkgs"
       }
     }

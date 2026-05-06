@@ -64,7 +64,7 @@ jobs:
         # to realign flake.lock with the new submodule rev.
         run: |
           submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
-          lock_rev=$(jq -r '.nodes."niobium-fhetch".locked.rev' flake.lock)
+          lock_rev=$(jq -r '.nodes."niobium-fhetch-src".locked.rev' flake.lock)
           if [ "$submodule_rev" != "$lock_rev" ]; then
             echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
             echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
@@ -164,7 +164,7 @@ jobs:
         # rev equals the submodule rev recorded in haze's index.
         run: |
           submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
-          lock_rev=$(jq -r '.nodes."niobium-fhetch".locked.rev' flake.lock)
+          lock_rev=$(jq -r '.nodes."niobium-fhetch-src".locked.rev' flake.lock)
           if [ "$submodule_rev" != "$lock_rev" ]; then
             echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
             echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
