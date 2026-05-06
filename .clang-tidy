@@ -16,6 +16,12 @@
 #   the public C header, which is not C++. Lifetime is enforced by the
 #   shape of the API, and the call-side resource sites are reviewed as
 #   such.
+#
+# - performance-avoid-endl:
+#   std::endl flushes the stream, which is intended behaviour for
+#   diagnostic output. Replacing it with '\n' silently drops the
+#   flush-on-write semantics that matter for crash-time visibility
+#   and pre-fork output.
 
 Checks: >
   -*,
@@ -44,6 +50,7 @@ Checks: >
   -performance-noexcept-destructor,
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
+  -performance-avoid-endl,
   -bugprone-exception-escape,
   -bugprone-easily-swappable-parameters,
   -readability-braces-around-statements,
