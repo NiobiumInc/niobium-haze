@@ -1,5 +1,23 @@
 {
   "nodes": {
+    "haze-vendor": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778092808,
+        "narHash": "sha256-V1PlqMJg0yErZcl9XmQzNVjYmOb+oPGWNTjQYqTch9o=",
+        "ref": "refs/heads/robust-editor",
+        "rev": "4826eed2a88b5869db6eb375f5a640b4b049c8fc",
+        "revCount": 72,
+        "submodules": true,
+        "type": "git",
+        "url": "file:."
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "file:."
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1777268161,
@@ -18,6 +36,7 @@
     },
     "root": {
       "inputs": {
+        "haze-vendor": "haze-vendor",
         "nixpkgs": "nixpkgs"
       }
     }
