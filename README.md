@@ -339,14 +339,19 @@ hermetically — no live worktree required, suitable for CI.
 
 #### Notes
 
-- The flake declares a dedicated `haze-vendor` input (`git+file:.?submodules=1`)
-  that only the hermetic `mkPackages` derivations consume; the dev shell never
-  references it. Lazy fetching means `nix develop` evaluates without touching
-  the submodule remote, so a clean haze worktree drops straight into the dev
-  shell without SSH auth. `nix build .#haze` / `nix flake check` /
+- The flake declares a dedicated `niobium-fhetch` input (external pin of
+  `git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?submodules=1`)
+  that only the hermetic `mkPackages` derivations consume; the dev shell
+  never references it. Lazy fetching means `nix develop` evaluates without
+  touching the fhetch remote, so a clean haze worktree drops straight into
+  the dev shell without SSH auth. `nix build .#haze` / `nix flake check` /
   `nix flake update` still touch the input and need SSH on a clean worktree
-  (nix issue #13324) — refresh the lock from a host that has SSH (typically
-  the Mac side) and commit `flake.lock` so VM / CI consumers reuse it.
+  (nix issue #13324). The submodule under `vendor/niobium-fhetch` remains
+  the source of truth for `make build` (non-nix users); CI gates that the
+  submodule rev recorded in haze's index matches the rev pinned in
+  `flake.lock`. After bumping the submodule, run
+  `scripts/sync-fhetch-rev.sh` to realign `flake.lock` and commit both
+  in the same change.
 - The hermetic packages live entirely in `/nix/store`. The macOS SDK / ABI
   mismatch trap (see [`CLAUDE.md`](CLAUDE.md)) only triggers when **mixing**
   nix and non-nix builds in the same closure — pure-flake or pure-Makefile

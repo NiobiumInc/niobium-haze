@@ -1,21 +1,21 @@
 {
   "nodes": {
-    "haze-vendor": {
+    "niobium-fhetch": {
       "flake": false,
       "locked": {
-        "lastModified": 1778092808,
-        "narHash": "sha256-V1PlqMJg0yErZcl9XmQzNVjYmOb+oPGWNTjQYqTch9o=",
-        "ref": "refs/heads/robust-editor",
-        "rev": "4826eed2a88b5869db6eb375f5a640b4b049c8fc",
-        "revCount": 72,
+        "lastModified": 1778092404,
+        "narHash": "sha256-6EtOl01nBFp7TjxHcbfkb38Jr57u3drUJLJ4aq0bAtU=",
+        "ref": "refs/heads/main",
+        "rev": "1c5f4a1fe8fe83cfbd715d115009e1b2109ac4d7",
+        "revCount": 79,
         "submodules": true,
         "type": "git",
-        "url": "file:."
+        "url": "ssh://git@github.com/NiobiumInc/niobium-fhetch.git"
       },
       "original": {
         "submodules": true,
         "type": "git",
-        "url": "file:."
+        "url": "ssh://git@github.com/NiobiumInc/niobium-fhetch.git"
       }
     },
     "nixpkgs": {
@@ -36,7 +36,7 @@
     },
     "root": {
       "inputs": {
-        "haze-vendor": "haze-vendor",
+        "niobium-fhetch": "niobium-fhetch",
         "nixpkgs": "nixpkgs"
       }
     }

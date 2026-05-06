@@ -4,18 +4,24 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Submodule-aware view of this flake, consumed only by the
-    # hermetic mkPackages derivations (openfhe, niobium-fhetch, haze
-    # and the lint checks). Routing the submodule recursion through a
-    # dedicated input — instead of `self.submodules = true` on the
-    # whole flake — keeps the devShell evaluation free of submodule
-    # resolution and the SSH-auth dependency it carries on a clean
-    # parent worktree (nix issue #13324). Lazy fetching means
-    # `nix develop` never accesses this input and never fetches it;
-    # only `nix build .#haze` / `nix flake check` / `nix flake update`
-    # touch it.
-    haze-vendor = {
-      url = "git+file:.?submodules=1";
+    # External pin of niobium-fhetch (with its own openfhe / json
+    # sub-submodules). Consumed only by the hermetic mkPackages
+    # derivations (openfhe, niobium-fhetch, haze and the lint
+    # checks). `flake = false` keeps the input lazy: `nix develop`
+    # never resolves it, so the dev shell stays free of the
+    # SSH-auth dependency that `self.submodules = true` would
+    # impose (nix issue #13324). Pointing at the upstream repo
+    # rather than a `git+file:.` self-reference makes the lock
+    # entry meaningful — the rev pins an external commit instead
+    # of trying to embed haze's own HEAD inside itself.
+    #
+    # The submodule under vendor/niobium-fhetch remains the source
+    # of truth for non-nix `make build` users; CI gates that the
+    # submodule rev recorded in haze's index matches the rev pinned
+    # in flake.lock here. `scripts/sync-fhetch-rev.sh` keeps them
+    # aligned after a fhetch bump.
+    niobium-fhetch = {
+      url = "git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?submodules=1";
       flake = false;
     };
   };
@@ -24,7 +30,7 @@
     {
       self,
       nixpkgs,
-      haze-vendor,
+      niobium-fhetch,
     }:
     let
       # x86_64-darwin omitted: niobium ships Apple Silicon only.
@@ -69,10 +75,11 @@
           stdenv = pkgs.clangStdenv;
           fs = pkgs.lib.fileset;
 
-          # Submodule-aware tree comes from the haze-vendor input
-          # rather than `./vendor/...` so nothing in the devShell
-          # evaluation path depends on submodule resolution.
-          fhetchRoot = haze-vendor + "/vendor/niobium-fhetch";
+          # niobium-fhetch input is the fhetch repo root (with its
+          # vendor/openfhe and vendor/json sub-submodules embedded
+          # via `?submodules=1`). Resolving via the input keeps the
+          # devShell evaluation path free of submodule fetching.
+          fhetchRoot = niobium-fhetch;
 
           openfheSrc = fhetchRoot + "/vendor/openfhe";
 
