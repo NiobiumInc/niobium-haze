@@ -190,11 +190,19 @@ equivalent — run them before pushing rather than after CI fails:
    over first-party `src/`, `replay_bridge/`, `test/` `.cpp` files,
    plus `clangd --check` with a grep-for-warnings post-pass (clangd
    exits zero on warnings without it). Both ride the configured
-   `compile_commands.json` and must report zero warnings.
+   `compile_commands.json` and must report zero warnings. Both share
+   their lint definitions with the flake check via scripts in
+   `scripts/`. Reproduce locally (after `make build`):
 
-3. `nix flake check` — superset that re-runs the two lint derivations
-   plus `unit-tests`, `sim-tests`, `fmt` (nixfmt), and the devshell
-   build. Slowest, but is the strongest pre-push signal.
+   ```sh
+   scripts/clang-tidy.sh
+   scripts/clangd-check.sh
+   ```
+
+3. `nix flake check` — superset that re-runs the three lint derivations
+   (`clang-format`, `clang-tidy`, `clangd-check`) plus `unit-tests`,
+   `sim-tests`, `fmt` (nixfmt), and the devshell build. Slowest, but is
+   the strongest pre-push signal.
 
 Reproduce 2 and 3 with the same flake derivations CI uses. Substitute
 your host system (`aarch64-darwin`, `x86_64-linux`, or `aarch64-linux`)
@@ -203,6 +211,7 @@ for `<sys>`:
 ```sh
 # Just the lint gates (matches CI's "clang-tidy + clangd-check" job).
 nix build -L --keep-going \
+  .#checks.<sys>.clang-format \
   .#checks.<sys>.clang-tidy \
   .#checks.<sys>.clangd-check
 
@@ -218,6 +227,11 @@ matches what CI promotes to errors:
 clang-tidy -p build --warnings-as-errors='*' src/api/compute.cpp
 clangd --check=src/api/compute.cpp
 ```
+
+The `scripts/clang-tidy.sh` and `scripts/clangd-check.sh` wrappers honor
+`BUILD_DIR=<dir>` (default `build`) and `PARALLEL_JOBS=<n>` (clang-tidy
+only; defaults to `NIX_BUILD_CORES` or the host CPU count) for cases
+where the build dir isn't `build/` or you want to throttle parallelism.
 
 A bare `clang-tidy -p build <file>` (no `--warnings-as-errors`) prints
 the same diagnostics as warnings; CI will still fail. Always pass
