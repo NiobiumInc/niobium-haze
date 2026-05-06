@@ -82,16 +82,25 @@
           # below — let-bindings in nix are mutually recursive, so a
           # collision would cause infinite recursion.
           #
-          # The input value is a /nix/store-path-typed string, not a
-          # nix `path`, so it cannot feed into fs.toSource directly
-          # (nix forbids appending such strings to paths to preserve
-          # store purity). Used straight as a derivation `src`, the
-          # fresh git fetch already lacks the build dirs (build/,
-          # dbuild/, vendor/lib/) that fs.toSource was filtering out
-          # of a worktree-rooted source. The vendor/openfhe submodule
-          # is included but harmless: cmake is pointed at the prebuilt
-          # openfhe derivation via -DOPENFHE_INSTALL_DIR.
-          fhetchSrc = niobium-fhetch-src;
+          # builtins.path with a filter produces a content-addressed
+          # store path: the output hash is derived from the surviving
+          # file contents, not from the input store path. So an
+          # openfhe submodule bump inside fhetch leaves fhetchSrc
+          # bit-identical (openfhe is filtered out), keeping the
+          # niobium-fhetch derivation's input hash stable and
+          # avoiding spurious rebuilds. fs.toSource cannot do this
+          # because it requires a `path`-typed root, and the input
+          # arrives as an attrset wrapping a /nix/store path string.
+          fhetchSrc = builtins.path {
+            name = "niobium-fhetch-src-filtered";
+            path = niobium-fhetch-src;
+            filter =
+              path: _type:
+              let
+                rel = pkgs.lib.removePrefix "${niobium-fhetch-src}/" path;
+              in
+              !(pkgs.lib.hasPrefix "vendor/openfhe" rel);
+          };
           openfheSrc = niobium-fhetch-src + "/vendor/openfhe";
 
           hazeBuildSrc = fs.toSource {
@@ -283,14 +292,18 @@
           # — they wrap each script in a hermetic toolchain (pinned
           # clang-tools, configured cmake build dir for
           # compile_commands.json) without duplicating lint logic.
+          # BUILD_DIR=build matches what cmake's setup hook in nixpkgs
+          # configures (the source-tree default `dbuild/` only exists
+          # under `make`-driven builds). Without this, the scripts
+          # bail with "no compile_commands.json under dbuild/".
           haze-clang-tidy = mkLintDerivation {
             name = "haze-clang-tidy";
-            lintScript = "bash scripts/clang-tidy.sh";
+            lintScript = "BUILD_DIR=build bash scripts/clang-tidy.sh";
           };
 
           haze-clangd-check = mkLintDerivation {
             name = "haze-clangd-check";
-            lintScript = "bash scripts/clangd-check.sh";
+            lintScript = "BUILD_DIR=build bash scripts/clangd-check.sh";
           };
         in
         {
