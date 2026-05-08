@@ -154,13 +154,6 @@ that constant.
 A change is considered green when both `make test-sim` (in-process FHETCH
 simulator) and `make test-transport NIOBIUM_COMPILER_ROOT=...` (HTTP transport
 to `nbcc_fhetch_replay`) exit 0 with Catch2 reporting no unexpected failures.
-9 multi-residue cases in `test/test_basis_convert.cpp` are tagged
-`[!mayfail]` because the replay bridge does not yet synthesise an OpenFHE
-CryptoContext for multi-modulus traces; they will continue to print failed
-assertions but Catch2 will report them as `failed as expected` and the suite
-exit code stays 0. When the bridge gains MRP support, search
-`test/test_basis_convert.cpp` for `[!mayfail]` and strip the tag — at that
-point every assertion in the suite must pass.
 
 Sanitizers are mutually exclusive `cmake` cache options:
 `-DHAZE_SANITIZERS=ON` (ASAN+UBSAN) or `-DHAZE_TSAN=ON`. UBSAN's enum check
