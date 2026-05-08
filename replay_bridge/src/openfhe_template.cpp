@@ -149,11 +149,20 @@ std::expected<void, BridgeError> rebuild_context_locked(uint64_t ring_dim,
     CCParams<CryptoContextCKKSRNS> p;
     p.SetSecurityLevel(HEStd_NotSet); // toy: ring_dim is user-chosen
     p.SetRingDim(ring_dim);
-    // TODO(haze:multi-residue): SetMultiplicativeDepth(0) produces a
-    // single-tower DCRTPoly chain. Multi-residue paths (hazeModUp,
-    // hazeModDown) require depth > 0 and a fan of NativePolys per
-    // ciphertext element — see the failing integration tests in
-    // test/test_basis_convert.cpp at lines 117/245/291/331/381/443/757.
+    // SetMultiplicativeDepth(0) produces a single-tower DCRTPoly chain.
+    // Every haze output address holds one residue under one modulus, so
+    // single-tower templates are sufficient: the simulator pulls the
+    // per-output prime from the trace's modulus_table (built from the
+    // recorded sr_* ops), not from the template. Multi-modulus traces
+    // (e.g. test_basis_convert.cpp's 12-limb cases) work today via this
+    // single-residue-per-output addressing.
+    //
+    // A genuine multi-tower template — a single output address whose
+    // template carries a fan of NativePolys for `result(name, MRP&)` to
+    // deserialize as a true multi-residue polynomial — would require
+    // depth > 0 and explicit per-tower fill in synthesize_haze_ciphertext.
+    // Not currently needed by any client; flagged here so the constraint
+    // is visible if the requirement appears.
     p.SetMultiplicativeDepth(0);
     const uint32_t bits = bit_width_for_modulus(desired_modulus);
     p.SetScalingModSize(bits - 1);
