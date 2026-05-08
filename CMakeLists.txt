@@ -242,6 +242,7 @@ add_executable(haze_tests
   test/test_config.cpp
   test/test_compute.cpp
   test/test_basis_convert.cpp
+  test/test_mul_rotation.cpp
   test/test_ring_dim_consistency.cpp
   test/test_integration_helpers.cpp
 )
