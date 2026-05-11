@@ -11,22 +11,10 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// CompilerBackend is the link-time-selected control surface for the
-// niobium::compiler() singleton (libnbfhetch). Recording happens
-// locally; replay is dispatched according to the configured target.
-//
-// libnbfhetch knows two tiers: "local" runs the in-process FHETCH
-// simulator, anything else is forwarded to nbcc_fhetch_replay over the
-// HTTP transport. Haze exposes the same two tiers and forwards the
-// configured target string verbatim:
-//
-//   - kLocalTarget — runs the in-process FHETCH simulator end-to-end.
-//   - other (e.g. "FUNC_SIM", "FPGA_TRI", "fhetch_sim") — HTTP dispatch;
-//                    the string selects a backend on the compiler side.
-//
-// Haze itself never compares against the libnbfhetch literal "local";
-// the kLocalTarget constant in core/config.hpp keeps target comparisons
-// symbolic.
+// Control surface for the niobium::compiler() singleton; recording is
+// local, replay is dispatched per the configured target. libnbfhetch treats
+// "local" as the in-process simulator and any other string as an HTTP target
+// for nbcc_fhetch_replay (haze keeps comparisons symbolic via kLocalTarget).
 
 #include "core/backend.hpp"
 
@@ -57,42 +45,26 @@ bool CompilerBackend::ensure_initialized() noexcept {
     if (initialized_.load(std::memory_order_relaxed))
         return true;
 
-    // niobium::compiler() can throw (e.g. std::bad_alloc from internal
-    // string handling, or compiler-side configuration errors). Catch
-    // here so the C ABI boundary stays exception-clean: a thrown init
-    // becomes a recorded BackendError, not a process termination.
+    // niobium::compiler() can throw (bad_alloc, config errors); catch here
+    // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
         const std::string program_name = config().program_name();
         const std::string program_version = config().program_version();
         const std::string program_description = config().program_description();
         const std::string target = config().target();
 
-        // niobium::compiler().init() takes (int& argc, char** argv) — we
-        // synthesise minimal argv so the compiler's arg parser sees a
-        // well-formed invocation. niobium-fhetch's compiler.h does not
-        // expose a set_target() setter; the only way to configure the
-        // replay target is through init()'s --target= flag.
-        //
-        // The configured target is forwarded verbatim. libnbfhetch
-        // interprets "local" as the in-process simulator and treats
-        // anything else as an HTTP target string handed to
-        // nbcc_fhetch_replay.
-        //
-        // argv lifetime: fhetch's Compiler::init copies parsed values
-        // into impl_ (the target string lands as a std::string field) and
-        // does not retain argv past the call. Function-local storage is
-        // therefore safe and avoids the ownership ambiguity of holding
-        // these strings on the singleton.
+        // Synthesize a minimal argv to pass --target= to compiler().init()
+        // (no setter is exposed). init copies argv during the call, so
+        // function-local storage is safe.
         std::string prog_storage = program_name;
         std::string target_arg_storage = "--target=" + target;
         char *argv[3] = {prog_storage.data(), target_arg_storage.data(), nullptr};
-        // argc is 2 — the trailing nullptr is the C-standard argv
-        // terminator, not a counted argument.
+        // argc is 2; the trailing nullptr is the standard argv terminator.
         int argc = 2;
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
     } catch (...) {
-        record_internal_error(HazeInternalError::BackendError,
+        record_internal_error(HazeInternalError::BackendInitFailed,
                               "CompilerBackend::ensure_initialized");
         return false;
     }
@@ -114,28 +86,20 @@ void CompilerBackend::start_epoch() noexcept {
 }
 
 bool CompilerBackend::stop_epoch() noexcept {
-    // Use the canonical stop() rather than stop_epoch(). stop() writes
-    // both the .fhetch trace and fhetch_replay.json (via write_replay_json
-    // in compiler.cpp:209), which the compiler-side nbcc_fhetch_replay
-    // requires to dispatch. stop_epoch() only writes the per-epoch trace
-    // and does not produce replay.json — fine for libnbcc's intra-process
-    // multi-epoch flow (its stop_epoch does record+replay+reset internally),
-    // but breaks the transport hand-off used by libnbfhetch.
-    //
-    // Haze's recording lifecycle is single-epoch per haze::epoch().reset(),
-    // so the canonical stop() is the right semantic match.
+    // Use stop() (not stop_epoch()): stop() writes both the .fhetch trace
+    // and fhetch_replay.json that nbcc_fhetch_replay needs for HTTP dispatch.
+    // Haze is single-epoch per epoch().reset(), so stop() also matches
+    // semantically.
     return niobium::compiler().stop();
 }
 
 bool CompilerBackend::replay() noexcept {
-    // niobium::compiler().replay() can throw on resource-exhaustion paths
-    // inside the niobium-fhetch dispatch (e.g. std::system_error from a
-    // failed subprocess fork on the transport route). Catching here keeps
-    // the haze C ABI exception-clean and surfaces a coherent BackendError.
+    // replay() can throw on transport-route resource exhaustion (e.g. fork
+    // failure); catch so the C ABI surfaces BackendReplayFailed cleanly.
     try {
         return niobium::compiler().replay();
     } catch (...) {
-        record_internal_error(HazeInternalError::BackendError, "CompilerBackend::replay");
+        record_internal_error(HazeInternalError::BackendReplayFailed, "CompilerBackend::replay");
         return false;
     }
 }

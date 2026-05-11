@@ -31,9 +31,8 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// Validation helpers. Each returns InvalidArgument on the first failure
-// and records a debug-log breadcrumb. Pre-flight checks live here so
-// the C ABI shim stays a thin wrapper.
+// Validation helpers; each returns InvalidArgument with a debug-log
+// breadcrumb on the first failure, keeping the C ABI shim thin.
 
 std::expected<void, HazeInternalError> validate(const hazeBasisConvertParams &p) noexcept {
     if (p.src_base == nullptr || p.src_base_len == 0 || p.dst_base == nullptr ||
@@ -112,8 +111,7 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
 
     const fhetch::ModuliBase target_base(p.dst_base, p.dst_base + p.dst_base_len);
     fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base);
-    store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
-    return {};
+    return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
 }
 
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
@@ -135,8 +133,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     // (FhetchApi.cpp:1606-1617). Use it directly so HAZE-side and
     // backend-side never disagree on the dst layout.
     const auto &dst_base = result.base();
-    store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
-    return {};
+    return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
 }
 
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
@@ -164,9 +161,9 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
     fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base);
     if (result.length() != p.digit_count) {
-        record_internal_error(HazeInternalError::BackendError,
+        record_internal_error(HazeInternalError::BackendShapeMismatch,
                               "hazeModUp: dig_decomp returned wrong length");
-        return std::unexpected(HazeInternalError::BackendError);
+        return std::unexpected(HazeInternalError::BackendShapeMismatch);
     }
 
     // Each result[d].base() == src_base + p_base (FhetchApi.cpp:1704-1705)
@@ -174,7 +171,10 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     // dst writes.
     for (size_t d = 0; d < p.digit_count; ++d) {
         const auto &d_base = result[d].base();
-        store_mrp_locked(dst + (d * d_base.size()), result[d], d_base.data(), d_base.size());
+        auto stored =
+            store_mrp_locked(dst + (d * d_base.size()), result[d], d_base.data(), d_base.size());
+        if (!stored)
+            return stored;
     }
     return {};
 }

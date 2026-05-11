@@ -26,11 +26,14 @@
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <haze/replay_bridge.h>
 #include <niobium/compiler.h>
 
 namespace haze {
 
 void reset_all() noexcept {
+    // Clear all internal state first, since we may depend on external object state when clearing
+    // otherwise.
     epoch().reset();
     backend().reset();
     allocator().reset();
@@ -38,12 +41,9 @@ void reset_all() noexcept {
     streams_reset();
     events_reset();
     device_reset();
-    // Wipe niobium::compiler()'s singleton state too — captured_inputs,
-    // captured_outputs, the trace writer's modulus table, and any hooks
-    // registered by the replay bridge would otherwise leak across tests
-    // (or across distinct programs running in the same process). reset()
-    // is generic to libnbfhetch; haze just calls it as part of "start
-    // fresh".
+    hazeReplayBridgeReset();
+
+    // Clear any external state next
     niobium::compiler().reset();
 }
 

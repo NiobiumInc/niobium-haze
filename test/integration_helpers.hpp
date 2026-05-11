@@ -1,54 +1,30 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// Helpers for [integration]-tagged Catch2 cases. Integration tests:
-//   1. Record FHETCH instructions through haze.
-//   2. Bridge auto-synthesizes a CryptoContext + per-input cereal-binary
-//      .bin files + per-output ciphertext templates at recording-finalize
-//      time (see haze_replay_bridge's post_recording_hook).
-//   3. The first hazeMemcpy(D2H) finalises the recording, dispatches the
-//      project to a niobium-compiler-built nbcc_fhetch_replay over the
-//      FHETCH HTTP transport, and reads the materialized values back.
-//   4. The simulator-computed values flow back as serialized_probes/*.ct,
-//      which fhetch::result reads and replay_and_populate writes into the
-//      haze shadow buffers; D2H then returns those values.
-//
-// Orchestration of the server + client-side forwarder lives in
-// scripts/test_haze_integration.sh.
+// Helpers for [integration]-tagged Catch2 cases: record through haze, the
+// bridge auto-synthesizes CC + .bin + templates, and D2H drives replay
+// back into the shadow buffers (see scripts/test_haze_integration.sh for
+// transport orchestration).
 
 #pragma once
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <niobium/compiler.h>
+#include <niobium/fhetch_api.h>
+#include <string>
 #include <vector>
 
 namespace haze::test {
 
-// Combined integration setup: reset, ring dim, bridge CryptoContext init
-// (which writes <program_dir>/cryptocontext.dat), align haze's ciphertext
-// modulus with OpenFHE's picked tower prime, then configure the device.
-// Returns the picked modulus so callers can keep using it consistently
-// with what haze recorded.
-//
-// Target selection: the test Makefile (test-sim / test-transport) sets
-// HAZE_TARGET to whichever string the surrounding suite needs. The
-// helper honours that env var; if unset, falls back to haze's own
-// default ("local" — in-process FHETCH simulator, per hazeSetTarget docs).
-//
-// Modulus alignment: OpenFHE's CKKS GenCryptoContext picks a prime near
-// 2^bits(desired). The picked value rarely matches `desired_modulus`
-// exactly. To keep haze's recording-side modulus arithmetic in lockstep
-// with the .ct round-trip, we feed the picked value back into
-// hazeSetCiphertextModulus before any compute.
-//
-// After this call returns, tests do compute + hazeMemcpy(D2H); the D2H
-// triggers replay before reading the shadow buffer. The bridge's
-// post_recording_hook auto-writes the .bin / .ids / .template artifacts
-// during stop(); tests do not need to call WriteTemplate or
-// WriteInputBin explicitly.
+// Combined integration setup: reset, ring dim, bridge CC init, align haze's
+// ciphertext modulus with OpenFHE's picked prime, configure device. Returns
+// the picked modulus so callers stay in lockstep with the .ct round-trip.
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t desired_modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
@@ -75,10 +51,8 @@ inline std::vector<uint64_t> make_residue(uint64_t prime, uint64_t seed, std::si
     return r;
 }
 
-// Allocate one HAZE poly slot per residue and H2D each row of `residues`
-// into it. Returned vector is parallel to `residues`; ownership stays with
-// the caller (free with free_all_residues). Aborts the test on any HAZE
-// error to keep the body of the test linear.
+// Allocate one slot per residue and H2D each row; ownership stays with the
+// caller (free with free_all_residues, REQUIRE-aborts on any haze error).
 inline std::vector<void *>
 allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
     std::vector<void *> ptrs(residues.size(), nullptr);
@@ -106,24 +80,15 @@ inline void free_all_residues(const std::vector<void *> &ptrs) {
     }
 }
 
-// Convenience: produce a parallel vector<const void *> view over a
-// vector<void *>. Useful when passing dst slots as src in a chained
-// recording.
+// Parallel const view over a vector<void *>; useful for chaining dst slots
+// as src in a recording.
 inline std::vector<const void *> to_const(const std::vector<void *> &ptrs) {
     return {ptrs.begin(), ptrs.end()};
 }
 
-// Negacyclic convolution mod q: c(X) = a(X) * b(X) mod (X^N + 1, q).
-// O(N^2). Uses __uint128_t per-term so ~60-bit primes don't overflow the
-// product. X^N = -1 in this quotient ring, so a contribution at index
-// (i + j) wraps with a sign flip when i + j >= N. Intended as a host
-// oracle for NTT->hazeMul->INTT integration tests, not a hot path.
-//
-// Preconditions: a.size() == b.size(), all coefficients in [0, q).
-// Loop invariant: every c[k] stays in [0, q) after each update — the
-// branches below depend on this. If a future edit reorders or extends
-// the update logic, preserve this invariant or the modular arithmetic
-// will silently corrupt.
+// Negacyclic convolution mod q (host oracle for NTT/hazeMul/INTT tests, not
+// a hot path); X^N = -1 wraps with a sign flip when i+j ≥ N. Loop invariant:
+// each c[k] stays in [0, q) — the branches below rely on it.
 inline std::vector<uint64_t> negacyclic_conv_ref(const std::vector<uint64_t> &a,
                                                  const std::vector<uint64_t> &b, uint64_t q) {
     REQUIRE(a.size() == b.size());
@@ -154,6 +119,53 @@ inline std::vector<uint64_t> negacyclic_conv_ref(const std::vector<uint64_t> &a,
         }
     }
     return c;
+}
+
+// Cross-check an MRP output by content (not auto-generated name) so op-order
+// shifts don't break the test. SRP is the ground truth; this asserts the
+// MRP read path returns the same per-residue values.
+inline void check_mrp_against_per_residue(const std::vector<uint64_t> &base,
+                                          const std::vector<std::vector<uint64_t>> &expected) {
+    REQUIRE(expected.size() == base.size());
+    namespace fs = std::filesystem;
+    const auto probes_dir = niobium::compiler().get_program_directory() / "serialized_probes";
+    INFO("scanning " << probes_dir);
+    REQUIRE(fs::exists(probes_dir));
+
+    auto residue_matches = [&](const niobium::fhetch::MRP &mrp) -> bool {
+        if (mrp.num_residues() != base.size())
+            return false;
+        const auto &got_base = mrp.base();
+        for (std::size_t i = 0; i < base.size(); ++i) {
+            if (std::ranges::find(got_base, base[i]) == got_base.end())
+                return false;
+            if (mrp[base[i]].int_data() != expected[i])
+                return false;
+        }
+        return true;
+    };
+
+    // At least one captured group should match; multiple is fine since
+    // disk cleanup at hazeReplayBridgeReset prevents stale-file leaks.
+    bool found = false;
+    std::string matched_name;
+    for (const auto &entry : fs::directory_iterator(probes_dir)) {
+        if (!entry.is_regular_file())
+            continue;
+        const auto stem = entry.path().stem().string();
+        if (!stem.starts_with("haze_mrp_out_"))
+            continue;
+        niobium::fhetch::MRP mrp;
+        if (!niobium::fhetch::result(stem, mrp))
+            continue;
+        if (residue_matches(mrp)) {
+            found = true;
+            matched_name = stem;
+            break;
+        }
+    }
+    INFO("matched MRP group: " << (found ? matched_name : std::string{"<none>"}));
+    REQUIRE(found);
 }
 
 } // namespace haze::test

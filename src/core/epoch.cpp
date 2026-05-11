@@ -29,6 +29,7 @@
 #include <ios>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -44,21 +45,13 @@ EpochState &EpochState::instance() noexcept {
 }
 
 void EpochState::ensure_recording_locked() {
-    // The session constructor calls backend().ensure_initialized() *before*
-    // taking the epoch lock, so by the time we get here the backend is
-    // already up. Defensively check is_initialized() — if the caller
-    // somehow reached us without that prelude (e.g. a future code path
-    // that bypasses EpochSession), staying out of the recording state
-    // makes the failure visible at the next lookup_or_create rather than
-    // crashing inside niobium::compiler().
+    // EpochSession initializes the backend before locking; this defensive
+    // check guards future code paths that might bypass EpochSession.
     if (!backend().is_initialized())
         return;
     if (!recording_) {
-        // start_epoch() before start(): first call memorizes the
-        // polynomial-ID base; later calls (after stop_epoch in
-        // do_materialize) reset the counter to that base. Without it,
-        // poly IDs drift forward across materializations and each epoch's
-        // compaction sees a different layout.
+        // start_epoch() before start() memorizes the polynomial-ID base so
+        // post-materialize resets snap back to it; without it, IDs drift.
         CompilerBackend::start_epoch();
         CompilerBackend::start_recording();
         recording_ = true;
@@ -72,9 +65,8 @@ bool EpochState::is_recording() noexcept {
 
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
-    // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1)
-    // (hash hit + immediate not-found return). Tagging addresses with
-    // their owning map would add complexity for no measurable benefit.
+    // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1), so
+    // unconditional double-erase is simpler than tagging addrs by owner.
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
 }
@@ -92,11 +84,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     if (components) {
         poly = fhetch::Polynomial::from_data(*components, ring_dim, fhetch::Format::Evaluation);
     } else if (components.error() == HazeInternalError::NoData) {
-        // Address allocated but no bytes ever written. Construct a fresh
-        // zero polynomial via fhetch — its shared_ptr<MRPImpl> storage
-        // owns the data, so HAZE never fabricates zero bytes itself.
-        // Matches the FIDESlib pattern of using SPECIAL limb buffers
-        // before their explicit zero_out memset (per task-5 design).
+        // Address allocated but never written: build a fhetch zero polynomial
+        // so HAZE doesn't fabricate the bytes (matches FIDESlib's SPECIAL pattern).
         poly = fhetch::Polynomial::zeros(ring_dim);
     } else {
         return std::unexpected(components.error());
@@ -112,16 +101,41 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 void EpochState::store_compute_result_locked(DevAddr addr,
                                              niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // Authoritative output registration: every compute store gets a
-    // pending output name on first store. Re-stores at the same addr
-    // keep their original name (insert-no-overwrite); an intervening
-    // invalidate() wipes pending_outputs_, so a fresh store after H2D
-    // / memset gets a new name. Input polys created via
-    // lookup_or_create_locked never reach this path, so they are
-    // never tagged as fhetch outputs.
+    // First store at `addr` reserves a pending output name; re-stores keep
+    // it, and invalidate() wipes it so post-H2D/memset stores get a new one.
     if (!pending_outputs_.contains(addr)) {
         pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
     }
+}
+
+void EpochState::tag_mrp_input_if_new_locked(const std::string &name, const fhetch::MRP &mrp) {
+    // Dedup so each name reaches fhetch exactly once.
+    auto [it, inserted] = mrp_input_tagged_names_.insert(name);
+    if (!inserted)
+        return;
+    fhetch::tag_input(*it, mrp);
+}
+
+std::expected<void, HazeInternalError>
+EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
+                                             std::span<const uint64_t> moduli, std::string &&name) {
+    // One device address per modulus; a mismatch is a programming bug in
+    // the fan-out helper, surfaced rather than dropped silently.
+    if (addrs.size() != moduli.size()) {
+        std::ostringstream body;
+        body << "register_mrp_output_group_locked('" << name << "'): addrs.size()=" << addrs.size()
+             << " != moduli.size()=" << moduli.size();
+        record_internal_error(HazeInternalError::MrpGroupAddrModuliMismatch, body.str().c_str());
+        return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
+    }
+    // try_emplace dedups re-registrations for the same op (e.g. in-place
+    // hazeMulMrp called twice) since the leading-addr name is stable.
+    auto [it, inserted] = pending_mrp_groups_.try_emplace(std::move(name));
+    if (!inserted)
+        return {};
+    it->second.addrs.assign(addrs.begin(), addrs.end());
+    it->second.moduli.assign(moduli.begin(), moduli.end());
+    return {};
 }
 
 std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
@@ -130,14 +144,39 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
         return {}; // nothing to replay
     }
 
-    // Tag every authoritative output for fhetch. Inputs already carry
-    // tag_input from lookup_or_create_locked; pending_outputs_ contains
-    // exactly the addresses that store_compute_result_locked emitted.
+    // pending_outputs_ and poly_map_ stay in lockstep via store + invalidate,
+    // so a missing binding here is a state-management bug, not recoverable.
     for (auto &[addr, name] : pending_outputs_) {
         auto it = poly_map_.find(addr);
-        if (it == poly_map_.end())
-            continue;
+        if (it == poly_map_.end()) {
+            std::ostringstream body;
+            body << "replay_and_populate: pending output '" << name << "' addr 0x" << std::hex
+                 << to_uintptr(addr) << std::dec << " missing from poly_map_";
+            record_internal_error(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            return std::unexpected(HazeInternalError::MissingPolyMapBinding);
+        }
         fhetch::tag_output(name, it->second);
+    }
+
+    // Also tag each MRP group as a fhetch MRP output so external callers
+    // can pull the multi-residue view via fhetch::result(name, MRP&).
+    for (const auto &[name, g] : pending_mrp_groups_) {
+        std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+        pairs.reserve(g.addrs.size());
+        for (size_t i = 0; i < g.addrs.size(); ++i) {
+            auto it = poly_map_.find(g.addrs[i]);
+            if (it == poly_map_.end()) {
+                // Group registered but its poly_map_ binding was invalidated before replay.
+                std::ostringstream body;
+                body << "replay_and_populate: MRP group '" << name << "' addr 0x" << std::hex
+                     << to_uintptr(g.addrs[i]) << std::dec << " missing from poly_map_";
+                record_internal_error(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+                return std::unexpected(HazeInternalError::MissingPolyMapBinding);
+            }
+            // Polynomial copy is a shared_ptr refcount bump, not a deep clone.
+            pairs.emplace_back(it->second, g.moduli[i]);
+        }
+        fhetch::tag_output(name, fhetch::MRP::from_pairs(pairs));
     }
 
     return do_materialize_locked();
@@ -153,21 +192,20 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
     const bool stop_ok = CompilerBackend::stop_epoch();
     if (!stop_ok) {
         clear_state_locked();
-        record_internal_error(HazeInternalError::BackendError,
+        record_internal_error(HazeInternalError::BackendReplayFailed,
                               "EpochState::replay_and_populate (stop_epoch)");
-        return std::unexpected(HazeInternalError::BackendError);
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 
-    // Step 2: dispatch replay. kLocalTarget runs the in-process FHETCH
-    // simulator end-to-end inside libnbfhetch; other targets spawn
-    // nbcc_fhetch_replay over the HTTP transport. Both paths produce
-    // serialized_probes/<name>.ct for fhetch::result to read in step 3.
+    // Step 2: dispatch replay. kLocalTarget runs the in-process simulator;
+    // other targets spawn nbcc_fhetch_replay over HTTP — both produce
+    // serialized_probes/<name>.ct for step 3 to read.
     const bool replay_ok = CompilerBackend::replay();
     if (!replay_ok) {
         clear_state_locked();
-        record_internal_error(HazeInternalError::BackendError,
+        record_internal_error(HazeInternalError::BackendReplayFailed,
                               "EpochState::replay_and_populate (replay)");
-        return std::unexpected(HazeInternalError::BackendError);
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 
     // Step 3: populate host shadow buffers from
@@ -201,14 +239,13 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
 void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
+    pending_mrp_groups_.clear();
+    mrp_input_tagged_names_.clear();
     recording_ = false;
     input_counter_ = 0;
     output_counter_ = 0;
-    // Mirror to compiler-captured state so a failed materialise can't
-    // leak inputs/outputs into the next recording cycle. Pairs with
-    // EpochSession's start-of-cycle ensure_recording_locked() — both
-    // ends of the recording window are now responsible for keeping the
-    // libnbfhetch-side state in lockstep with haze-side epoch state.
+    // Mirror clears to libnbfhetch so a failed materialise can't leak
+    // captures into the next epoch; pairs with EpochSession's setup.
     niobium::compiler().clear_captured();
 }
 
@@ -218,26 +255,16 @@ void EpochState::reset() noexcept {
 }
 
 HazeMutex &EpochSession::init_then_get_mutex() noexcept {
-    // ensure_initialized() has its own atomic + init mutex; safe (and
-    // important) to call before acquiring the epoch lock so first-call
-    // compiler init doesn't block other epoch-lock acquirers. The
-    // bool return is intentionally not propagated here — failure is
-    // caught at ensure_recording_locked() via is_initialized(), which
-    // refuses to start recording if init didn't take. Subsequent
-    // compute calls then fail with a coherent error from
-    // lookup_or_create_locked rather than crashing inside niobium.
+    // Run ensure_initialized() before grabbing the epoch lock so first-call
+    // init doesn't serialize; failure surfaces later via is_initialized().
     [[maybe_unused]] const bool _ = backend().ensure_initialized();
     return epoch().mutex_;
 }
 
 hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    // D2H is the sole flush trigger: finalise any active recording,
-    // dispatch replay (potentially an HTTP round-trip to nbcc_fhetch_replay
-    // for non-local targets), and populate shadow buffers before reading.
-    // replay_and_populate() is a no-op when no recording is in flight, so
-    // plain H2D-then-D2H round-trips elide the cost, and subsequent D2H
-    // calls within the same epoch are free (the first D2H clears
-    // recording_).
+    // D2H is the sole flush trigger: finalize, replay, and populate shadows
+    // before reading. No-op when not recording, so H2D-then-D2H round-trips
+    // and follow-up D2H reads in the same epoch are free.
     auto replay_result = epoch().replay_and_populate();
     if (!replay_result)
         return to_public_error(replay_result.error());

@@ -1,24 +1,9 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// Compute API integration tests, parameterised over a per-shape "driver":
-//
-//   SrpDriver — single-residue (kNumResidues == 1). Wraps the SRP entry
-//               points (hazeAdd, hazeSub, hazeMul, hazeAddScalar,
-//               hazeSubScalar, hazeMulScalar, hazeNTT, hazeINTT).
-//
-//   MrpDriver — multi-residue (kNumResidues == 3). Wraps the MRP entry
-//               points (hazeAddMrp, hazeSubMrp, ..., hazeNTTMrp,
-//               hazeINTTMrp). Three NTT-friendly primes (kQ0/kQ1/kQ2)
-//               make every residue distinct, and assertions check every
-//               coefficient of every residue so single-residue regressions
-//               cannot hide.
-//
-// Each scenario lives in a Catch2 TEMPLATE_TEST_CASE that fans out across
-// both drivers, so the body is identical and the test names show up
-// per-driver in the runner output.
-//
-// Cases without an MRP counterpart (the modulus-index error path,
-// hazeAutomorph, the synchronization no-op) stay as plain TEST_CASE.
+// Compute API integration tests, parameterised over a per-shape Driver
+// (SrpDriver = 1 residue, MrpDriver = 3 distinct primes for every-coefficient
+// per-residue assertions). TEMPLATE_TEST_CASE fans out across both;
+// SRP-only cases (modulus-error, hazeAutomorph, sync no-op) stay TEST_CASE.
 
 #include "integration_helpers.hpp"
 
@@ -38,29 +23,26 @@ namespace {
 constexpr uint64_t kRingDim = 4096;
 constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 
-// Three NTT-friendly primes (q ≡ 1 mod 2N) for N=4096. Same values used
-// by test_basis_convert.cpp's configure_three_moduli — keeps multi-residue
-// fixtures consistent across the suite.
+// Three NTT-friendly primes (q ≡ 1 mod 2N) for N=4096; matches
+// test_basis_convert.cpp::configure_three_moduli for suite consistency.
 constexpr uint64_t kQ0 = 576460752303415297ULL;
 constexpr uint64_t kQ1 = 576460752303439873ULL;
 constexpr uint64_t kQ2 = 576460752303702017ULL;
 
 // ---------------------------------------------------------------------------
-// SrpDriver: single-residue path. kNumResidues == 1 collapses every
-// vector<>-shaped argument to a single element and dispatches the SRP
-// entry points directly.
+// SrpDriver: single-residue path; vector args collapse to one element and
+// dispatch the SRP entry points directly.
 // ---------------------------------------------------------------------------
 
 struct SrpDriver {
     static constexpr std::size_t kNumResidues = 1;
     static constexpr const char *kShape = "SRP";
 
-    // Populated by setup(); the test body uses `base[i]` as the per-residue
-    // modulus when constructing inputs and per-residue oracles.
+    // Populated by setup(); test body uses base[i] as the per-residue modulus.
     std::vector<uint64_t> base;
 
-    // Returns the picked prime so callers that want q (e.g. for
-    // negacyclic_conv_ref) can grab it without re-deriving from `base`.
+    // Returns the picked prime so callers (e.g. negacyclic_conv_ref) get q
+    // without re-deriving from `base`.
     uint64_t setup() {
         const uint64_t q =
             haze::test::setup_integration_compute_config(kRingDim, kQ0, /*mod_idx=*/0);
@@ -68,10 +50,8 @@ struct SrpDriver {
         return q;
     }
 
-    // Op methods don't read `base` (the SRP entry points take a single
-    // mod_idx and pull the modulus from haze's config table), so they are
-    // static. The MrpDriver counterparts read `base` and stay instance
-    // methods. Catch2's `d.method(...)` call site syntax works for both.
+    // SRP ops are static (read modulus from config via mod_idx); the MRP
+    // counterparts read `base` and stay instance methods.
     static void add(const std::vector<void *> &dst, const std::vector<const void *> &s1,
                     const std::vector<const void *> &s2) {
         REQUIRE(hazeAdd(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
@@ -109,12 +89,9 @@ struct SrpDriver {
 };
 
 // ---------------------------------------------------------------------------
-// MrpDriver: multi-residue path. Three explicit primes; each call goes
-// through the hazeXxxMrp entry points with the full (base, base_len)
-// pair. Mirrors test_basis_convert.cpp's pattern of feeding explicit
-// kQ0/kQ1/kQ2 into hazeSetCiphertextModulus rather than the OpenFHE-
-// picked single prime — the simulator reads moduli out of the trace's
-// modulus_table, so the picked prime is for bridge plumbing only.
+// MrpDriver: multi-residue path; three explicit primes feed the hazeXxxMrp
+// entry points (the OpenFHE-picked prime is bridge plumbing — the simulator
+// reads moduli from the trace's modulus_table).
 // ---------------------------------------------------------------------------
 
 struct MrpDriver {
@@ -223,9 +200,19 @@ void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
     }
 }
 
-// Build a parallel pair of per-residue inputs differentiated by both `seed`
-// and the residue index, then pre-compute the per-residue oracle for an
-// op that maps (a, b) → r mod q. Caller supplies the reducing function.
+// SRP-vs-MRP cross-check; locates the matching group by content, skips for
+// SRP drivers (degenerate 1-residue groups aren't registered).
+template <typename Driver>
+void check_against_per_residue_with_mrp(const Driver &d, const std::vector<void *> &dst,
+                                        const std::vector<std::vector<uint64_t>> &expected) {
+    check_against_per_residue(d, dst, expected);
+    if constexpr (Driver::kNumResidues > 1) {
+        haze::test::check_mrp_against_per_residue(d.base, expected);
+    }
+}
+
+// Build a parallel pair of per-residue inputs (seed differs per residue)
+// and the per-residue oracle for an op (a, b) → r mod q.
 template <typename Op>
 void make_two_residue_inputs(const std::vector<uint64_t> &base,
                              std::vector<std::vector<uint64_t>> &a_out,
@@ -271,7 +258,7 @@ TEMPLATE_TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]"
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.add(dst, haze::test::to_const(da), haze::test::to_const(db));
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(db);
@@ -294,7 +281,7 @@ TEMPLATE_TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integr
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.sub(dst, haze::test::to_const(da), haze::test::to_const(db));
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(db);
@@ -317,7 +304,7 @@ TEMPLATE_TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integrati
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.mul(dst, haze::test::to_const(da), haze::test::to_const(db));
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(db);
@@ -332,9 +319,8 @@ TEMPLATE_TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integrati
 // ===========================================================================
 
 namespace {
-// Derive a non-trivial per-residue scalar that fits in the prime, exercising
-// reduction-on-input rather than a tiny constant that lives in [0, q) for
-// every prime.
+// Per-residue scalar that fits in each prime; exercises reduction-on-input
+// rather than a tiny constant that lives in [0, q) for every prime.
 inline std::vector<uint64_t> derive_scalars(const std::vector<uint64_t> &base, uint64_t k_base) {
     std::vector<uint64_t> s(base.size());
     for (std::size_t i = 0; i < base.size(); ++i) {
@@ -364,7 +350,7 @@ TEMPLATE_TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.add_scalar(dst, haze::test::to_const(da), scalars);
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(dst);
@@ -390,7 +376,7 @@ TEMPLATE_TEST_CASE("hazeSubScalar: pointwise scalar subtraction retrieved after 
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.sub_scalar(dst, haze::test::to_const(da), scalars);
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(dst);
@@ -416,18 +402,16 @@ TEMPLATE_TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H"
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.mul_scalar(dst, haze::test::to_const(da), scalars);
-    check_against_per_residue(d, dst, expected);
+    check_against_per_residue_with_mrp(d, dst, expected);
 
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(dst);
 }
 
 // ===========================================================================
-// NTT round-trip per residue. INTT(NTT(x)) must recover the original
-// coefficients exactly for every residue.
-//
-// Constants are eigenvectors of NTT and survive even pathological twiddle /
-// scaling bugs, so each residue uses a deterministic non-constant input.
+// NTT round-trip per residue: INTT(NTT(x)) must recover the input exactly.
+// Each residue uses a deterministic non-constant input — constants are NTT
+// eigenvectors and would mask twiddle/scaling bugs.
 // ===========================================================================
 
 TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriver, MrpDriver) {
@@ -451,6 +435,11 @@ TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriv
     d.intt(d_intt, haze::test::to_const(d_ntt));
 
     check_against_per_residue(d, d_intt, src);
+    if constexpr (TestType::kNumResidues > 1) {
+        // Bulk-MRP read agrees with the SRP D2H above; content match means
+        // a second MRP group in the same recording doesn't confuse it.
+        haze::test::check_mrp_against_per_residue(d.base, src);
+    }
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_ntt);
@@ -458,35 +447,18 @@ TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriv
 }
 
 // ===========================================================================
-// Galois automorphism (eval form) round-trip.
-//
-// The op X -> X^k is a permutation of the 2N-th-root-of-unity evaluation
-// slots, so applying automorph(k) followed by automorph(k_inv) where
-// k * k_inv ≡ 1 (mod 2N) recovers the input exactly. This tests the Galois
-// action — NOT a coefficient-form negacyclic rotation (which is the
-// separate IR op sr_rot_automorph_coeff and has no MRP variant).
-//
-// The round-trip is bracketed by NTT / INTT so the trace's modulus_table
-// carries a real prime (sr_automorph_eval itself uses COPY_MODULUS as a
-// sentinel; without an accompanying real-modulus op, the replay bridge has
-// no prime to bind the H2D input bytes to). This also matches how
-// rotation is used in real CKKS workloads: ciphertexts are produced in
-// evaluation form, automorph is applied there, and the result stays in
-// evaluation form — INTT here is just to compare against the original
-// coefficient-form input.
+// Galois automorphism (eval form) round-trip: automorph(k) ∘ automorph(k_inv)
+// with k*k_inv ≡ 1 (mod 2N) is identity. Bracketed with NTT/INTT so the
+// trace's modulus_table carries a real prime (sr_automorph_eval uses
+// COPY_MODULUS).
 // ===========================================================================
 
 TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[integration]",
                    SrpDriver, MrpDriver) {
-    // Direction-sensitive check for the eval-form Galois automorphism.
-    // Spec: output_slot[i] = +src_slot[((k*(2i+1) - 1) mod 2N) / 2]
-    // (signs[i] = 1; pure permutation, no sign flip in the op itself).
-    // Acting on a coefficient-form impulse f(X) = X^1, the round-trip
-    // ntt → automorph(_, k) → intt produces the polynomial X^(j*k mod 2N)
-    // reduced mod X^N+1 (i.e. with a sign flip if j*k mod 2N >= N).
-    // Choose k=5, j=1 so j*k = 5 < N → no wrap, expected coefficient is
-    // +1 at position 5. The round-trip test below is direction-symmetric
-    // and would not catch a substitution-direction bug here.
+    // Direction-sensitive check: ntt → automorph(_, k) → intt on impulse X^j
+    // lands at X^(j*k mod 2N) (sign-flipped if ≥ N). With k=5, j=1, j*k=5<N,
+    // expected is +1 at position 5; the round-trip test alone is symmetric
+    // and wouldn't catch a substitution-direction bug.
     TestType d;
     d.setup();
 
@@ -518,6 +490,9 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
     d.intt(d_back, haze::test::to_const(d_aut));
 
     check_against_per_residue(d, d_back, expected);
+    if constexpr (TestType::kNumResidues > 1) {
+        haze::test::check_mrp_against_per_residue(d.base, expected);
+    }
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_eval);
@@ -556,6 +531,9 @@ TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == 
     d.intt(d_back, haze::test::to_const(d_aut2));
 
     check_against_per_residue(d, d_back, src);
+    if constexpr (TestType::kNumResidues > 1) {
+        haze::test::check_mrp_against_per_residue(d.base, src);
+    }
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_eval);
@@ -565,37 +543,16 @@ TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == 
 }
 
 // ===========================================================================
-// Negacyclic-coefficient rotation: rot(_, k) is multiplication by X^k in
-// R_q = Z_q[X]/(X^N+1). Composing rot(_, k) ∘ rot(_, N-k) is multiplication
-// by X^N, which equals -1 in R_q — so the result is -x per coefficient
-// per residue. This single property exercises both the coefficient shift
-// itself and the sign flip on wraparound (without it, the test would
-// produce +x instead of -x).
-//
-// As with the automorph_eval round-trip, the test brackets the rotations
-// with an ntt/intt round-trip so the bridge captures the input addresses
-// (sr_rot_automorph_coeff alone does not register inputs into the bridge's
-// haze.inputs.json manifest, so the simulator sees uninitialized data;
-// the ntt acts as the "approved" op that pulls the input through). The
-// ntt+intt pair is identity per the NTT round-trip test, so the rotation
-// property is preserved.
-//
-// MrpDriver-only (haze does not expose a coefficient-form rotation in
-// the SRP API, so there is no SrpDriver::rot_automorph_coeff to dispatch
-// against from a TEMPLATE_TEST_CASE).
+// Negacyclic-coefficient rotation: rot(_, k) ∘ rot(_, N-k) = X^N = -1, so
+// the result is -x per coefficient. Bracketed with NTT/INTT so the bridge
+// captures the input addresses (rot alone doesn't register inputs);
+// MRP-only (no SRP rot_automorph_coeff entry point exists).
 // ===========================================================================
 
 TEST_CASE("hazeRotAutomorphCoeffMrp: impulse lands at the spec-defined position", "[integration]") {
-    // Direction-sensitive check. The round-trip property below
-    // (rot(_, k) ∘ rot(_, N-k) == -x) is symmetric under inversion of
-    // the rotation direction, so it cannot catch a left-vs-right swap
-    // in the simulator's exec_rot_automorph_coeff. Pin the direction by
-    // feeding a sparse input and asserting the spec's exact landing
-    // position per FHETCH spec:
-    //   output[i] = signs[i] * src[(i + offset) mod N],
-    //   signs[i] = (-1)^((i + offset) // N).
-    // For src = [1, 2, 0, 0, ..., 0] and offset = 1, the only nonzero
-    // outputs are output[0] = +src[1] = 2 and output[N-1] = -src[0] = q-1.
+    // Direction-sensitive: feed a sparse input so the spec's landing
+    // (output[i] = signs[i] * src[(i+offset) mod N]) is asymmetric. With
+    // src=[1,2,0,...] and offset=1, output[0]=+src[1]=2 and output[N-1]=q-1.
     MrpDriver d;
     d.setup();
 
@@ -683,25 +640,15 @@ TEST_CASE("hazeRotAutomorphCoeffMrp: rot(_, k) ∘ rot(_, N-k) == -x", "[integra
 }
 
 // ===========================================================================
-// Polynomial product via NTT.Mul.INTT, per residue.
-//
-// Each residue independently does negacyclic convolution: the host oracle
-// negacyclic_conv_ref runs once per (residue, base[i]) pair, and every
-// coefficient must agree with what hazeMul-on-evaluation-form-then-INTT
-// produces in coefficient form.
-//
-// The four sub-cases cover: monomial * monomial across the X^N=-1 boundary,
-// linear * constant, deterministic small coefficients, and full-range
-// random coefficients.
+// Polynomial product via NTT.Mul.INTT per residue: every coefficient must
+// agree with negacyclic_conv_ref. Sub-cases cover monomial*monomial across
+// the X^N=-1 boundary, linear*constant, small coefficients, and full-range.
 // ===========================================================================
 
 namespace {
 
-// Per-driver helper: H2D each residue of `a` and `b`, run NTT on each,
-// MUL on each (per-residue or via mr_mulp), then INTT on each. Returns
-// the per-residue coefficient-form result. Mirrors the original SRP-only
-// run_ntt_mul_intt but folds into the driver dispatch so SRP and MRP
-// share the same orchestration.
+// H2D, NTT, MUL, INTT each residue of (a, b); returns per-residue
+// coefficient-form result via the driver dispatch.
 template <typename Driver>
 std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
                                                     const std::vector<std::vector<uint64_t>> &a,
@@ -822,9 +769,8 @@ TEMPLATE_TEST_CASE("polynomial product: random small coefficients via NTT.Mul.IN
     TestType d;
     d.setup();
 
-    // Deterministic small coefficients (< 1024). The pattern differs per
-    // residue (via base index) so each residue genuinely runs a different
-    // convolution.
+    // Deterministic small coefficients (< 1024) with a per-residue pattern
+    // so each residue runs a distinct convolution.
     std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
     std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
     for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
@@ -852,9 +798,8 @@ TEMPLATE_TEST_CASE("polynomial product: random full-range coefficients via NTT.M
     TestType d;
     d.setup();
 
-    // Full-range coefficients uniform over [0, q). Exercises modular
-    // reduction in the convolution. Pattern mirrors test_basis_convert.cpp's
-    // make_residue but uses different seeds per residue.
+    // Full-range coefficients in [0, q) to exercise modular reduction;
+    // per-residue seeds mirror test_basis_convert.cpp's make_residue.
     std::vector<std::vector<uint64_t>> a(TestType::kNumResidues);
     std::vector<std::vector<uint64_t>> b(TestType::kNumResidues);
     for (std::size_t r = 0; r < TestType::kNumResidues; ++r) {
@@ -885,10 +830,8 @@ TEMPLATE_TEST_CASE("polynomial product: random full-range coefficients via NTT.M
 }
 
 // ===========================================================================
-// In-place operations. dst[i] aliasing src1[i] / src2[i] / both must
-// produce the right answer per residue. The lookup_or_create_locked copy
-// semantics on each residue make this safe whether the IR op is sr_* or
-// mr_*; the templated coverage proves it.
+// In-place ops: dst aliasing src1/src2/both must still produce the right
+// answer per residue (lookup_or_create_locked's copy semantics make it safe).
 // ===========================================================================
 
 TEMPLATE_TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[integration]",
@@ -1017,10 +960,9 @@ TEMPLATE_TEST_CASE("hazeMul in-place squaring-style (dst == src1 == src2)", "[in
 }
 
 // ===========================================================================
-// Multi-operation chains and lazy-recording semantics. These verify that
-// the EpochSession bundles multiple compute calls into one recording and
-// that polymap invalidation paths (H2D / memset) work in the MRP fan-out
-// just as they do for SRP.
+// Multi-op chains and lazy-recording semantics: EpochSession bundles
+// multiple calls into one recording, and polymap invalidation (H2D / memset)
+// works in the MRP fan-out as it does for SRP.
 // ===========================================================================
 
 TEMPLATE_TEST_CASE("multi-operation chain: add then mulscalar in one recording", "[integration]",
@@ -1421,4 +1363,44 @@ TEST_CASE("hazeAutomorphMrp rejects null arrays / zero base length", "[unit]") {
     REQUIRE(hazeAutomorphMrp(dst_polys, src_polys, 5, base, 0, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
+}
+
+// ============================================================================
+// MRP-shape output round-trip: dedicated coverage for the bulk MRP read path
+// across an explicit 3-tower hazeMulMrp. The single-op cross-checks above
+// (check_against_per_residue_with_mrp) already exercise the SRP-vs-MRP
+// agreement path; this test is a focused regression locking in num_residues,
+// base, and per-residue values for a known input pair.
+// ============================================================================
+
+TEST_CASE("MRP output round-trip: hazeMulMrp result via fhetch::result(name, MRP&)",
+          "[integration]") {
+    MrpDriver d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xFACEFEEDULL,
+                            /*seed_b=*/0xDEADC0DEULL, mul_mod);
+
+    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+
+    d.mul(dst, haze::test::to_const(da), haze::test::to_const(db));
+
+    // Trigger replay via the SRP path so the bridge writes the multi-tower
+    // template and the simulator emits the corresponding
+    // serialized_probes/haze_mrp_out_<addr-derived>.ct.
+    check_against_per_residue(d, dst, expected);
+
+    // Pull the MRP-shape view directly. Asserts num_residues, base, and
+    // per-residue values; cross-checks that SRP ground truth and MRP view
+    // agree exactly. Helper locates the group by content, no name needed.
+    haze::test::check_mrp_against_per_residue(d.base, expected);
+
+    haze::test::free_all_residues(da);
+    haze::test::free_all_residues(db);
+    haze::test::free_all_residues(dst);
 }
