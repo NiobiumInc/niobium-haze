@@ -28,7 +28,11 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::NoData:
     case HazeInternalError::AllocTooSmall:
         return HAZE_ERROR_INVALID_VALUE;
-    case HazeInternalError::BackendError:
+    case HazeInternalError::BackendInitFailed:
+    case HazeInternalError::BackendReplayFailed:
+    case HazeInternalError::BackendShapeMismatch:
+    case HazeInternalError::MrpGroupAddrModuliMismatch:
+    case HazeInternalError::MissingPolyMapBinding:
         return HAZE_ERROR_LAUNCH_FAILURE;
     }
     return HAZE_ERROR_INVALID_VALUE;
@@ -48,8 +52,16 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "no data";
     case HazeInternalError::AllocTooSmall:
         return "allocation too small";
-    case HazeInternalError::BackendError:
-        return "backend error";
+    case HazeInternalError::BackendInitFailed:
+        return "backend init failed";
+    case HazeInternalError::BackendReplayFailed:
+        return "backend replay failed";
+    case HazeInternalError::BackendShapeMismatch:
+        return "backend returned unexpected shape";
+    case HazeInternalError::MrpGroupAddrModuliMismatch:
+        return "MRP group addrs/moduli span size mismatch";
+    case HazeInternalError::MissingPolyMapBinding:
+        return "addr missing from poly_map_";
     }
     return "unknown";
 }

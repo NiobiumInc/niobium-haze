@@ -104,13 +104,9 @@ inline uint64_t bit_rev(uint64_t x, unsigned bits) {
     return r;
 }
 
-// hazeAutomorph's docstring describes σ_k in slot space (output slot i
-// reads from input slot j where 2j+1 ≡ k*(2i+1) mod 2N), but the
-// FHETCH simulator stores eval-form values in bit-reversed positions
-// (NTL's ForwardTransformToBitReverse, simulator.cpp:266-296). Both
-// the output and source indices therefore need bit_rev to translate
-// between slot space and storage space — reversing only one direction
-// is the trap a naive read of the docstring falls into.
+// hazeAutomorph spec is in slot space, but the FHETCH simulator stores
+// eval-form values bit-reversed; bit_rev both indices to translate (one-way
+// translation is the docstring trap).
 inline std::vector<uint64_t> sigma(const std::vector<uint64_t> &in_storage, uint64_t k) {
     const uint64_t two_n = 2ULL * kRingDim;
     std::vector<uint64_t> out_storage(kRingDim);
@@ -177,6 +173,13 @@ TEMPLATE_TEST_CASE("mul→automorph→automorph: two rotations sharing one produ
 
     check_against_per_residue(d, d_r1, r1_expected);
     check_against_per_residue(d, d_r2, r2_expected);
+
+    // Cross-check MRP path against SRP ground truth (both end up reading
+    // the same simulator output); helper matches by content, not name.
+    if constexpr (TestType::kNumResidues > 1) {
+        haze::test::check_mrp_against_per_residue(d.base, r1_expected);
+        haze::test::check_mrp_against_per_residue(d.base, r2_expected);
+    }
 
     haze::test::free_all_residues(d_a);
     haze::test::free_all_residues(d_b);
