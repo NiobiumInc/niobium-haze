@@ -26,71 +26,66 @@ The bridge solves two problems:
 ## How it sits in the haze stack
 
 The diagram below reads top to bottom in usage order. Three arrow
-conventions:
+conventions: solid (`-->`) is a direct symbol call, thick (`==>`) is a
+filesystem **write** (label names the file), and dashed (`-.->`) is a
+filesystem **read** (label names the file).
 
-- **Solid (`-->`)** is a direct symbol call between libraries. Labels name
-  the function. Callbacks (libnbfhetch firing back into the bridge) are
-  solid too, labeled "fires X".
-- **Thick (`==>`)** is a filesystem write. Labels name the file being
-  written, so producer ownership is unambiguous.
-- **Dashed (`-.->`)** is a filesystem read. Labels name the file being
-  read.
-
-`program_dir/` is broken into one node per artifact so each `==>` and
-`-.->` can point at exactly the file it touches.
+`program_dir/` holds two kinds of artifact: **ciphertext data** (every
+OpenFHE-serialized file — CC, per-input ciphertexts, output templates,
+output probes) and the **`.fhetch` trace** (libnbfhetch's polynomial-op
+schedule). Splitting them this way makes the bridge's job obvious: it
+owns every byte on the ciphertext-data side, both writing it before
+replay and reading it after.
 
 ```mermaid
 flowchart TB
   app["Customer C / C++ application"]:::user
   haze["libhaze<br/>record-and-replay engine"]:::haze
-  bridge["haze_replay_bridge<br/>OpenFHE artifact producer + reader"]:::bridge
+  bridge["haze_replay_bridge<br/>post-recording adapter:<br/>libnbfhetch captured records ⇄ OpenFHE Ciphertext bytes"]:::bridge
   fhetch["libnbfhetch<br/>FHETCH IR recorder + replay dispatcher"]:::fhetch
   openfhe["OpenFHE"]:::ofh
 
   subgraph fs ["program_dir/"]
     direction TB
-    fs_cc["cryptocontext.dat"]:::fs_file
-    fs_trace[".fhetch trace"]:::fs_file
-    fs_inputs["prog.input_NAME.bin/.ids"]:::fs_file
-    fs_tmpl["ciphertext_templates/NAME.template"]:::fs_file
-    fs_probes["serialized_probes/NAME.ct"]:::fs_file
+    ct_data["Ciphertext data (OpenFHE-serialized)<br/>cryptocontext.dat<br/>prog.input_NAME.bin / .ids<br/>ciphertext_templates/NAME.template<br/>serialized_probes/NAME.ct"]:::fs_file
+    trace[".fhetch trace<br/>(polynomial-op schedule)"]:::fs_file
   end
 
   replay["Replay target (HAZE_TARGET):<br/>local → in-process simulator<br/>FUNC_SIM / FHE_SIM / FPGA_TRI → nbcc_fhetch_replay over HTTP"]:::backend
 
-  %% (1) Init: bridge primes the directory with the CC and registers its
-  %% post-recording callback.
-  app -->|"1. hazeReplayBridgeInitCryptoContext"| bridge
-  bridge -->|"GenCryptoContext, KeyGen,<br/>Encrypt, DeserializeFromFile"| openfhe
-  bridge -->|"capture_crypto_context,<br/>set_post_recording_hook"| fhetch
-  bridge ==>|"writes cryptocontext.dat"| fs_cc
+  bridge ---|"all OpenFHE work:<br/>GenCryptoContext, KeyGen,<br/>build Ciphertext shells,<br/>DeserializeFromFile"| openfhe
 
-  %% (2) Record: libhaze appends to libnbfhetch's in-memory IR.
+  %% (1) Init: bridge primes the CC, registers its callback.
+  app -->|"1. hazeReplayBridgeInitCryptoContext"| bridge
+  bridge -->|"capture_crypto_context,<br/>set_post_recording_hook"| fhetch
+  bridge ==>|"1. writes cryptocontext.dat"| ct_data
+
+  %% (2) Record: libhaze streams IR nodes into libnbfhetch.
   app -->|"2. hazeMalloc, hazeMemcpy(H2D),<br/>hazeAdd, hazeMul, ..."| haze
-  haze -->|"sr_*, tag_input"| fhetch
+  haze -->|"sr_*, tag_input, tag_output"| fhetch
 
   %% (3, 4) D2H -> stop_epoch -> post-recording callback.
   app -->|"3. hazeMemcpy(D2H)"| haze
-  haze -->|"tag_output, stop_epoch"| fhetch
-  fhetch ==>|"writes .fhetch trace"| fs_trace
+  haze -->|"stop_epoch"| fhetch
+  fhetch ==>|"3. writes .fhetch trace"| trace
   fhetch -->|"4. fires on_post_recording"| bridge
 
-  %% (5) Inside the callback, the bridge writes the OpenFHE-side inputs.
-  bridge ==>|"5. writes prog.input_NAME.bin/.ids"| fs_inputs
-  bridge ==>|"5. writes ciphertext_templates/NAME.template"| fs_tmpl
+  %% (5) THE ADAPTER STEP. The hook reads libnbfhetch's captured-input /
+  %% captured-output records (per-residue values, shape, addr_ids), builds
+  %% matching OpenFHE Ciphertext<DCRTPoly> objects, and serializes them.
+  bridge -->|"5a. reads captured records:<br/>per-residue values, shape, addr_ids"| fhetch
+  bridge ==>|"5b. writes input ciphertexts +<br/>output templates"| ct_data
 
-  %% (6) Replay reads every input artifact and writes per-output probes.
+  %% (6) Replay reads both artifact kinds and produces probes.
   haze -->|"6. replay()"| fhetch
   fhetch -->|"dispatch"| replay
-  fs_cc -.->|"reads cryptocontext.dat"| replay
-  fs_trace -.->|"reads .fhetch trace"| replay
-  fs_inputs -.->|"reads prog.input_NAME.bin/.ids"| replay
-  fs_tmpl -.->|"reads ciphertext_templates/NAME.template"| replay
-  replay ==>|"writes serialized_probes/NAME.ct"| fs_probes
+  trace -.->|"reads .fhetch trace"| replay
+  ct_data -.->|"reads CC + inputs + templates"| replay
+  replay ==>|"6. writes serialized_probes/NAME.ct"| ct_data
 
   %% (7) Bridge reads probes back via fhetch::result.
   haze -->|"7. fhetch::result(name, ...)"| bridge
-  fs_probes -.->|"reads serialized_probes/NAME.ct"| bridge
+  ct_data -.->|"reads serialized_probes/NAME.ct"| bridge
   bridge -->|"fhetch::Polynomial / MRP / MRPArray"| haze
 
   classDef user fill:#fef3c7,stroke:#b45309,color:#000
@@ -102,13 +97,25 @@ flowchart TB
   classDef backend fill:#f1f5f9,stroke:#334155,color:#000
 ```
 
-A small implementation note: the byte-level filesystem writes for the
-three bridge-owned files actually happen inside libnbfhetch's translation
-unit (the `niobium::detail::write_*` helpers in [Private libnbfhetch
-hooks](#private-libnbfhetch-hooks) below). That is a cereal-registration
-trick — the polymorphic-type registry has to resolve in the same dylib —
-but the **content**, **timing**, and **decision to write at all** are
-the bridge's, so the diagram attributes those three files to the bridge.
+**Step 5 is the bridge's reason to exist.** The `on_post_recording` hook
+fires _after_ libnbfhetch has finished recording the `.fhetch` trace but
+_before_ replay starts. It pulls libnbfhetch's in-memory captured records
+(per-residue `uint64_t` values, a `CapturedKind` shape tag, and the
+FHETCH `addr_ids` that name each tower), builds a corresponding
+`Ciphertext<DCRTPoly>` via OpenFHE — filled for inputs, empty for
+outputs — and serializes it into the ciphertext-data side of
+`program_dir/`. Without step 5 the replay target has nothing to feed
+into the trace and no output shells to stamp; with it, the replay
+target's IO boundary is pure OpenFHE-serialized ciphertexts. Step 7 is
+the reverse half of the same adapter: deserialize a probe `.ct` and
+hand the values back as an `fhetch::` type.
+
+(Implementation note: the byte-level writes in steps 1, 5b, and the
+trace dump go through libnbfhetch's translation unit — the
+`niobium::detail::write_*` helpers in
+[Private libnbfhetch hooks](#private-libnbfhetch-hooks) — so cereal's
+polymorphic-type registry resolves in the right dylib. The decision to
+write, the content, and the timing are still the bridge's.)
 
 ### How the bridge gets invoked
 
