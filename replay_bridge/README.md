@@ -41,11 +41,11 @@ flowchart TB
   bridge -->|capture_crypto_context<br/>set_post_recording_hook| fhetch
   bridge -->|GenCryptoContext, KeyGen,<br/>Encrypt, SerializeToFile| openfhe
   fhetch -.->|stop_epoch calls<br/>on_post_recording| bridge
-  fhetch -->|.fhetch trace +<br/>cryptocontext.dat +<br/>inputs/*.bin +<br/>ciphertext_templates/*.template| sim
+  fhetch -->|.fhetch trace +<br/>cryptocontext.dat +<br/>&lt;prog&gt;.input_*.bin/.ids +<br/>ciphertext_templates/*.template| sim
   fhetch -->|same artifacts over HTTP| transport
   sim -.->|serialized_probes/&lt;name&gt;.ct| bridge
   transport -.->|serialized_probes/&lt;name&gt;.ct| bridge
-  bridge -->|fhetch::result(name, Polynomial / MRP / MRPArray)| haze
+  bridge -->|"fhetch::result(name, Polynomial / MRP / MRPArray)"| haze
 
   classDef user fill:#fef3c7,stroke:#b45309,color:#000
   classDef haze fill:#dbeafe,stroke:#1e40af,color:#000
@@ -86,7 +86,7 @@ sequenceDiagram
   loop for each captured input
     B->>O: Encrypt zeros, trim to shape, fill_native_poly
     B->>F: write_ciphertext_input_bin(name, ct, addr_ids)
-    F->>FS: inputs/&lt;name&gt;.bin + &lt;name&gt;.ids
+    F->>FS: &lt;prog&gt;.input_&lt;name&gt;.bin + &lt;prog&gt;.input_&lt;name&gt;.ids
   end
   loop for each captured output
     B->>O: build empty CT shell of matching shape
@@ -241,7 +241,7 @@ libnbfhetch's `src/` tree):
 | Symbol                                  | Purpose                                                                            |
 | --------------------------------------- | ---------------------------------------------------------------------------------- |
 | `niobium::detail::write_ciphertext_template`   | Serialize a CT shell to `ciphertext_templates/<name>.template`.            |
-| `niobium::detail::write_ciphertext_input_bin`  | Serialize a populated CT to `inputs/<name>.{bin,ids}`.                      |
+| `niobium::detail::write_ciphertext_input_bin`  | Serialize a populated CT to `<prog>.input_<name>.bin` + `.ids` at the program-dir root. |
 | `niobium::detail::for_each_captured_input`     | Iterate every distinct `fhetch::tag_input` with shape + values + addr_ids.  |
 | `niobium::detail::for_each_captured_output`    | Iterate every `fhetch::tag_output` with shape information.                  |
 
@@ -266,9 +266,9 @@ Three reasons, in decreasing order of importance:
    `-Werror -Wpedantic -Wshadow -Wconversion` clean.
 3. **Two-way handoff.** The bridge implements both halves of the
    OpenFHE round trip: it writes the artifacts the replay path needs
-   (`cryptocontext.dat`, `inputs/*.bin`, `ciphertext_templates/*`) and
-   it reads the artifacts the replay path produces
-   (`serialized_probes/*.ct`). Co-locating them keeps the
+   (`cryptocontext.dat`, `<prog>.input_*.bin/.ids`,
+   `ciphertext_templates/*.template`) and it reads the artifacts the
+   replay path produces (`serialized_probes/*.ct`). Co-locating them keeps the
    shape-to-CT-geometry logic in one place — change the SRPArray /
    MRPArray rules in `synthesize_haze_array_ciphertext` and the
    `MRPArray` overload of `result(...)` together.
