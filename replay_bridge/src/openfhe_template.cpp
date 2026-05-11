@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -27,7 +26,6 @@
 #include <functional>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
-#include <limits>
 #include <map>
 #include <memory>
 #include <niobium/compiler.h>
@@ -77,7 +75,6 @@ using DCRTPoly = lbcrypto::DCRTPoly;
 // BridgeError surfaces specific failure modes from the C-ABI entry; lives
 // in this TU because there's exactly one caller and one implementation.
 enum class BridgeError : uint8_t {
-    InvalidRingDim,
     InvalidModulus,
     KeygenFailed,
     OpenFheUnavailable,
@@ -96,31 +93,16 @@ struct CachedContext {
     lbcrypto::KeyPair<DCRTPoly> keys;
 };
 
-// Cache key: ring_dim plus the user-requested moduli vector (lex-compared).
-struct ContextKey {
-    uint64_t ring_dim;
-    std::vector<uint64_t> moduli;
-    bool operator<(const ContextKey &o) const {
-        if (ring_dim != o.ring_dim)
-            return ring_dim < o.ring_dim;
-        return moduli < o.moduli;
-    }
-};
-
-std::map<ContextKey, CachedContext> g_ctx_cache;
-// Primary CC key: the entry that init seeded and that captured
+// Cache keyed by user-requested moduli; ring_dim is pinned per process via
+// hazeSetRingDimension, and reset_bridge_caches wipes the cache on every
+// hazeDeviceReset, so the moduli vector alone disambiguates entries.
+std::map<std::vector<uint64_t>, CachedContext> g_ctx_cache;
+// Primary CC moduli: the entry that init seeded and that captured
 // cryptocontext.dat; nullopt before init / after reset_bridge_caches.
-std::optional<ContextKey> g_primary_key;
+std::optional<std::vector<uint64_t>> g_primary_key;
 // Program directory snapshotted at init so reset_bridge_caches's disk
 // cleanup is independent of niobium::compiler().reset() ordering.
 fs::path g_program_dir;
-
-// Bit width of a CKKS prime modulus; assert ≥2 since GenCryptoContext
-// rejects smaller upstream and the caller path has already validated.
-uint32_t bit_width_for_modulus(uint64_t modulus) {
-    assert(modulus >= 2);
-    return static_cast<uint32_t>(std::bit_width(modulus));
-}
 
 // Build or look up a CryptoContext + keypair: moduli.size() == 1 → depth-0
 // single-tower CC; >1 → depth-(N-1) chain with one tower per residue. On
@@ -128,20 +110,10 @@ uint32_t bit_width_for_modulus(uint64_t modulus) {
 std::expected<const CachedContext *, BridgeError>
 get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &moduli) {
     using namespace lbcrypto;
-    // ring_dim must be ≥2 (CKKS packs N/2 slots) and within uint32_t (SetRingDim
-    // takes usint, so anything bigger silently truncates at the cast below).
-    if (ring_dim < 2 || ring_dim > std::numeric_limits<uint32_t>::max())
-        return std::unexpected(BridgeError::InvalidRingDim);
     if (moduli.empty())
         return std::unexpected(BridgeError::InvalidModulus);
-    // q<4 underflows SetScalingModSize(min_bits - 1) and is too small for CKKS.
-    for (auto q : moduli) {
-        if (q < 4)
-            return std::unexpected(BridgeError::InvalidModulus);
-    }
 
-    ContextKey key{.ring_dim = ring_dim, .moduli = moduli};
-    auto it = g_ctx_cache.find(key);
+    auto it = g_ctx_cache.find(moduli);
     if (it != g_ctx_cache.end())
         return &it->second;
 
@@ -153,18 +125,19 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
     p.SetMultiplicativeDepth(static_cast<uint32_t>(moduli.size() - 1));
     // First-mod bit-width tracks the primary modulus; scaling-mod tracks the
     // smallest remaining modulus, minus 1 per OpenFHE's scalingModSize+1 rule.
-    const uint32_t first_bits = bit_width_for_modulus(moduli.front());
+    const auto first_bits = static_cast<uint32_t>(std::bit_width(moduli.front()));
     p.SetFirstModSize(first_bits);
     if (moduli.size() == 1) {
         p.SetScalingModSize(first_bits - 1);
     } else {
-        uint32_t min_bits = bit_width_for_modulus(moduli[1]);
+        auto min_bits = static_cast<uint32_t>(std::bit_width(moduli[1]));
         for (size_t i = 2; i < moduli.size(); ++i)
-            min_bits = std::min(min_bits, bit_width_for_modulus(moduli[i]));
+            min_bits = std::min(min_bits, static_cast<uint32_t>(std::bit_width(moduli[i])));
         p.SetScalingModSize(min_bits - 1);
     }
-    // FIXEDMANUAL: these CTs are structural shells, never EvalMult'd, so
-    // auto-rescale would only churn the chain.
+    // FIXEDMANUAL: these CTs are structural shells, never EvalMult'd; default
+    // (FLEXIBLEAUTO) reshapes the chain during GenCryptoContext and breaks
+    // the bridge's depth-(N-1)→N-tower assumption for MRP templates.
     p.SetScalingTechnique(FIXEDMANUAL);
 
     auto cc = GenCryptoContext(p);
@@ -194,7 +167,7 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
     entry.picked_moduli = std::move(picked);
     entry.cc = cc;
     entry.keys = keys;
-    auto [ins, _] = g_ctx_cache.emplace(std::move(key), std::move(entry));
+    auto [ins, _] = g_ctx_cache.emplace(moduli, std::move(entry));
     return &ins->second;
 }
 
@@ -239,7 +212,6 @@ void reset_bridge_caches() {
 // diagnostics, but the public surface is intentionally coarser.
 hazeError_t to_haze_error(BridgeError e) {
     switch (e) {
-    case BridgeError::InvalidRingDim:
     case BridgeError::InvalidModulus:
         return HAZE_ERROR_INVALID_VALUE;
     case BridgeError::KeygenFailed:
@@ -603,7 +575,7 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         if (!built)
             return to_haze_error(built.error());
 
-        g_primary_key = ContextKey{.ring_dim = ring_dim, .moduli = primary_moduli};
+        g_primary_key = std::move(primary_moduli);
 
         // capture_crypto_context populates ring/chain and serializes
         // cryptocontext.dat inside libnbfhetch's TU; push_crypto_to_compiler
