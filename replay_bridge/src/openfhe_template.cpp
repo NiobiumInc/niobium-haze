@@ -26,6 +26,7 @@
 #include <functional>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <haze/replay_bridge_cc.hpp>
 #include <map>
 #include <memory>
 #include <niobium/compiler.h>
@@ -101,6 +102,10 @@ std::map<std::vector<uint64_t>, CachedContext> g_ctx_cache;
 // Primary CC moduli: the entry that init seeded and that captured
 // cryptocontext.dat; nullopt before init / after reset_bridge_caches.
 std::optional<std::vector<uint64_t>> g_primary_key;
+// User-registered CC (via hazeReplayBridgeRegisterCryptoContext). When set,
+// all template synthesis uses this one CC and trims towers per output shape;
+// the per-shape g_ctx_cache build path is skipped.
+std::optional<CachedContext> g_user_ctx;
 // Program directory snapshotted at init so reset_bridge_caches's disk
 // cleanup is independent of niobium::compiler().reset() ordering.
 fs::path g_program_dir;
@@ -173,7 +178,10 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
 }
 
 // Convenience accessor for the primary CC; returns nullptr before init.
+// A user-registered CC takes precedence over the per-shape cache.
 const CachedContext *primary_ctx() {
+    if (g_user_ctx)
+        return &*g_user_ctx;
     if (!g_primary_key)
         return nullptr;
     auto it = g_ctx_cache.find(*g_primary_key);
@@ -186,6 +194,7 @@ const CachedContext *primary_ctx() {
 void reset_bridge_caches() {
     g_ctx_cache.clear();
     g_primary_key.reset();
+    g_user_ctx.reset();
     if (g_program_dir.empty())
         return; // bridge never initialized; nothing on disk
     try {
@@ -253,11 +262,26 @@ void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &val
     np.SetValues(nv, np.GetFormat());
 }
 
+// Trim the leading DCRTPoly's tower count down to `target`. Used to shape
+// a freshly-encrypted CT (which always has the CC's full chain length) into
+// an N-tower template for an N-residue output.
+void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
+    auto current = dcrt.GetAllElements().size();
+    if (current < target) {
+        std::ostringstream body;
+        body << "trim_towers_to: CC chain has " << current << " towers, need " << target;
+        throw std::runtime_error(body.str());
+    }
+    if (current > target)
+        dcrt.DropLastElements(current - target);
+}
+
 // SRP entrypoint: build a 1-element / 1-tower CT and fill its NativePoly
 // with `values` (empty `values` produces a template).
 lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const CachedContext &ctx,
                                                           const std::vector<uint64_t> &values) {
     auto ct = empty_one_element_ct(ctx);
+    trim_towers_to(ct->GetElements()[0], 1);
     if (values.empty())
         return ct; // template
     fill_native_poly(ct->GetElements()[0].GetAllElements()[0], values,
@@ -274,14 +298,7 @@ synthesize_haze_mrp_ciphertext(const CachedContext &ctx, const std::vector<uint6
                                const std::vector<std::vector<uint64_t>> &per_residue_values) {
     auto ct = empty_one_element_ct(ctx);
     auto &dcrt = ct->GetElements()[0];
-    if (dcrt.GetAllElements().size() != moduli.size()) {
-        // Throw rather than emit a wrong-shape template; on_post_recording
-        // catches and skips this output instead of corrupting the trace.
-        std::ostringstream body;
-        body << "synthesize_haze_mrp_ciphertext: tower count " << dcrt.GetAllElements().size()
-             << " != moduli.size() " << moduli.size() << " — CC was built with the wrong depth";
-        throw std::runtime_error(body.str());
-    }
+    trim_towers_to(dcrt, moduli.size());
     if (per_residue_values.empty())
         return ct; // template — reconstruct_probes installs trace moduli.
     if (per_residue_values.size() != moduli.size()) {
@@ -324,7 +341,9 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     elements.reserve(k_count);
     for (size_t k = 0; k < k_count; ++k) {
         auto ct_k = empty_one_element_ct(ctx);
-        elements.push_back(std::move(ct_k->GetElements()[0]));
+        auto &dcrt_k = ct_k->GetElements()[0];
+        trim_towers_to(dcrt_k, shared_moduli.size());
+        elements.push_back(std::move(dcrt_k));
     }
     auto ct = empty_one_element_ct(ctx);
     ct->SetElements(elements);
@@ -362,6 +381,10 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
 // (TODO(niobium-fhetch:mod-map-tracking): fhetch's address_modulus_map
 // doesn't register every output before sync_fhetch_state_to_compiler).
 const CachedContext *context_for_shape(uint64_t ring_dim, const niobium::CapturedShape &shape) {
+    // User-registered CC mode: one CC for every shape, towers trimmed per
+    // output. Skip the per-shape build path entirely.
+    if (g_user_ctx)
+        return &*g_user_ctx;
     if (shape.per_element_moduli.empty())
         return primary_ctx();
     const auto &moduli = shape.per_element_moduli.front();
@@ -570,6 +593,38 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // hooks are cleared separately via niobium::compiler().reset().
     reset_bridge_caches();
 }
+
+namespace haze {
+
+HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
+    const lbcrypto::CryptoContext<DCRTPoly> &cc, const lbcrypto::KeyPair<DCRTPoly> &keys) noexcept {
+    if (!cc || !keys.publicKey || !keys.secretKey)
+        return HAZE_ERROR_INVALID_VALUE;
+    try {
+        auto element_params = cc->GetCryptoParameters()->GetElementParams();
+        if (!element_params || element_params->GetParams().empty())
+            return HAZE_ERROR_INVALID_VALUE;
+
+        CachedContext entry;
+        entry.ring_dim = element_params->GetRingDimension();
+        entry.cc = cc;
+        entry.keys = keys;
+        entry.picked_moduli.reserve(element_params->GetParams().size());
+        for (const auto &ep : element_params->GetParams())
+            entry.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
+
+        g_user_ctx = std::move(entry);
+        push_crypto_to_compiler(*g_user_ctx);
+        return HAZE_SUCCESS;
+    } catch (const std::exception &e) {
+        log_error("replay_bridge", std::string{"register_crypto_context threw: "} + e.what());
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    } catch (...) {
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    }
+}
+
+} // namespace haze
 
 // ============================================================================
 // fhetch::result() overloads — read serialized_probes/<name>.ct as

@@ -245,6 +245,7 @@ add_executable(haze_tests
   test/test_mul_rotation.cpp
   test/test_ring_dim_consistency.cpp
   test/test_integration_helpers.cpp
+  test/test_user_crypto_context.cpp
 )
 
 target_include_directories(haze_tests PRIVATE
@@ -256,6 +257,8 @@ target_include_directories(haze_tests PRIVATE
 target_include_directories(haze_tests SYSTEM PRIVATE
   ${_openfhe_include}
   ${_openfhe_include}/core
+  ${_openfhe_include}/pke
+  ${_openfhe_include}/binfhe
 )
 
 target_link_libraries(haze_tests PRIVATE
