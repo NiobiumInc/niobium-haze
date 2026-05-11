@@ -83,11 +83,12 @@ enum class BridgeError : uint8_t {
 // Per-process CC cache: SRP outputs use a depth-0 single-tower CC, MRP
 // outputs use depth-(N-1) chains, all sharing OpenFHE's static
 // CC<->Ciphertext registry. picked_moduli records OpenFHE's chosen primes
-// (it picks by bit-width); rewrite_tower_moduli swaps them back to the
-// user-requested values at synthesis time.
+// (it picks by bit-width); only used by hazeReplayBridgeInitCryptoContext's
+// return value — reconstruct_probes overwrites per-tower moduli from the
+// trace before serializing .ct, so OpenFHE's picks aren't observable to readers.
 struct CachedContext {
     uint64_t ring_dim = 0;
-    std::vector<uint64_t> moduli;        // user-requested base
+    std::vector<uint64_t> moduli;        // user-requested base (cache key)
     std::vector<uint64_t> picked_moduli; // OpenFHE-picked primes per tower
     lbcrypto::CryptoContext<DCRTPoly> cc;
     lbcrypto::KeyPair<DCRTPoly> keys;
@@ -264,34 +265,10 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const CachedContext &c
     return ct;
 }
 
-// Replace each tower's modulus with the user-requested value; OpenFHE picks
-// bits-near primes that are invisible to SRP readers but visible to MRP
-// (mrp.base() from GetModulus()), and the simulator preserves the
-// template's modulus when emitting probes, so the override has to happen here.
-void rewrite_tower_moduli(lbcrypto::DCRTPoly &dcrt, const std::vector<uint64_t> &user_moduli,
-                          uint32_t ring_dim) {
-    auto &towers = dcrt.GetAllElements();
-    if (towers.size() != user_moduli.size()) {
-        // CC was built for these moduli, so a mismatch means OpenFHE produced
-        // an unexpected chain; log it before the loop silently truncates.
-        std::ostringstream body;
-        body << "rewrite_tower_moduli: tower count " << towers.size() << " != user_moduli.size() "
-             << user_moduli.size();
-        haze::log_error("replay_bridge", body.str());
-    }
-    for (size_t i = 0; i < towers.size() && i < user_moduli.size(); ++i) {
-        const auto fmt = towers[i].GetFormat();
-        auto params = std::make_shared<lbcrypto::ILNativeParams>(
-            2 * ring_dim, lbcrypto::NativeInteger(user_moduli[i]));
-        // initializeElementToZero=true populates a length-ring_dim NativeVector;
-        // a later fill_native_poly overwrites with simulator-fed values.
-        towers[i] = lbcrypto::NativePoly(params, fmt, /*initializeElementToZero=*/true);
-    }
-}
-
 // Build a 1-element / N-tower CT for an MRP output (empty
-// per_residue_values → template shell). Tower moduli are rewritten to the
-// user base so result(name, MRP&) returns mrp.base() == moduli.
+// per_residue_values → template shell). The template's tower moduli are
+// OpenFHE's picks; reconstruct_probes overwrites them with the trace's
+// per-residue moduli before serializing the on-disk .ct.
 lbcrypto::Ciphertext<DCRTPoly>
 synthesize_haze_mrp_ciphertext(const CachedContext &ctx, const std::vector<uint64_t> &moduli,
                                const std::vector<std::vector<uint64_t>> &per_residue_values) {
@@ -305,9 +282,8 @@ synthesize_haze_mrp_ciphertext(const CachedContext &ctx, const std::vector<uint6
              << " != moduli.size() " << moduli.size() << " — CC was built with the wrong depth";
         throw std::runtime_error(body.str());
     }
-    rewrite_tower_moduli(dcrt, moduli, static_cast<uint32_t>(ctx.ring_dim));
     if (per_residue_values.empty())
-        return ct; // template — moduli were just installed; values stay zero.
+        return ct; // template — reconstruct_probes installs trace moduli.
     if (per_residue_values.size() != moduli.size()) {
         std::ostringstream body;
         body << "synthesize_haze_mrp_ciphertext: per_residue_values.size()="
@@ -348,10 +324,6 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     elements.reserve(k_count);
     for (size_t k = 0; k < k_count; ++k) {
         auto ct_k = empty_one_element_ct(ctx);
-        if (shared_moduli.size() > 1) {
-            rewrite_tower_moduli(ct_k->GetElements()[0], shared_moduli,
-                                 static_cast<uint32_t>(ctx.ring_dim));
-        }
         elements.push_back(std::move(ct_k->GetElements()[0]));
     }
     auto ct = empty_one_element_ct(ctx);
