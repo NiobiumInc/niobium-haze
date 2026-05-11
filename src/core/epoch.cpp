@@ -23,7 +23,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
 #include <ios>
@@ -82,7 +81,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 
     fhetch::Polynomial poly;
     if (components) {
-        poly = fhetch::Polynomial::from_data(*components, ring_dim, fhetch::Format::Evaluation);
+        poly = fhetch::Polynomial::from_data(std::move(*components), ring_dim,
+                                             fhetch::Format::Evaluation);
     } else if (components.error() == HazeInternalError::NoData) {
         // Address allocated but never written: build a fhetch zero polynomial
         // so HAZE doesn't fabricate the bytes (matches FIDESlib's SPECIAL pattern).
@@ -227,9 +227,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
             log_error("epoch", body.str());
             continue;
         }
-        std::vector<uint8_t> bytes(values.size() * sizeof(uint64_t));
-        std::memcpy(bytes.data(), values.data(), bytes.size());
-        allocator().update_shadow(addr, bytes);
+        allocator().update_shadow(addr, std::move(values));
     }
 
     clear_state_locked(); // also clears captured inputs/outputs (E7).

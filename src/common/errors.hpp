@@ -39,7 +39,8 @@ enum class HazeInternalError : std::uint8_t {
     BackendReplayFailed,        // niobium::compiler() stop_epoch / replay returned false or threw
     BackendShapeMismatch,       // backend returned a result with unexpected shape / length
     MrpGroupAddrModuliMismatch, // MRP group registration: addrs / moduli span lengths differ
-    MissingPolyMapBinding       // pending output / MRP group addr is not in poly_map_
+    MissingPolyMapBinding,      // pending output / MRP group addr is not in poly_map_
+    ShadowSizeMismatch          // shadow buffer length disagrees with ring_dim invariant
 };
 
 // Map an internal error to the public hazeError_t the C ABI returns.

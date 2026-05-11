@@ -26,12 +26,19 @@
 
 namespace haze {
 
-// Per-DevAddr metadata. Pure liveness + pool-recycling info — no byte
-// payload. Byte storage lives in DeviceAllocator::shadow_data_, which
-// is sparse (an entry exists only for addresses that currently hold
-// user-written or materialized bytes). Most addresses in a typical
-// FHE program are intermediate compute results that flow entirely
-// inside fhetch::Polynomial storage and never need a HAZE shadow.
+namespace test {
+// Forward declaration for the test peer (Attorney pattern); definition
+// lives under test/ and is never linked into production.
+class AllocatorTestAccess;
+} // namespace test
+
+// Per-DevAddr metadata. Pure liveness + pool-recycling info — no
+// payload. Component storage lives in DeviceAllocator::shadow_data_,
+// which is sparse (an entry exists only for addresses that currently
+// hold user-written or materialized uint64_t components). Most
+// addresses in a typical FHE program are intermediate compute results
+// that flow entirely inside fhetch::Polynomial storage and never need
+// a HAZE shadow.
 struct Allocation {
     DevAddr addr{};      ///< Virtual device address handed to the user.
     size_t size = 0;     ///< Allocation size in bytes (== poly_bytes_ under strict contract).
@@ -48,13 +55,17 @@ struct Allocation {
 // is needed).
 //
 // Storage model. Each DevAddr has metadata in `map_` (size, pool flag).
-// Byte payloads live in a separate sparse map `shadow_data_` keyed by
-// DevAddr. An entry exists only when the address currently carries
-// user-written or materialized bytes; addresses without an entry hold
-// zero shadow memory. Reads of an entry-less address return zero
+// Component payloads live in a separate sparse map `shadow_data_`
+// keyed by DevAddr, with each entry a `vector<uint64_t>` sized to the
+// allocation. An entry exists only when the address currently carries
+// user-written or materialized components; addresses without an entry
+// hold zero shadow memory. Reads of an entry-less address return zero
 // (D2H) or NoData (compute extract). Writes (H2D / memset / D2D /
 // update_shadow) create or overwrite the entry; consumption by
-// compute (extract_polynomial_components) evicts it.
+// compute (extract_polynomial_components) evicts it. Byte-granular
+// reads/writes from the C ABI go through `reinterpret_cast<uint8_t*>`
+// over the vector's storage — well-defined; `vector<uint64_t>::data()`
+// is over-aligned for `uint8_t*`.
 //
 // Contract:
 //  - `Config::set_ring_dimension` must be called before the first
@@ -76,7 +87,11 @@ struct Allocation {
 // order and would deadlock.
 class DeviceAllocator {
   public:
-    static DeviceAllocator &instance() noexcept;
+    // HAZE_API on this and `extract_polynomial_components` exports the
+    // symbols from libhaze's hidden-visibility .so so the test binary
+    // can resolve them; encapsulation rests on allocator.hpp living in
+    // src/ (private include path), not on the visibility attribute.
+    HAZE_API static DeviceAllocator &instance() noexcept;
 
     // Configure the pool's polynomial size. Calling with a size different
     // from the current configuration drains the pool. Calling with size 0
@@ -101,7 +116,7 @@ class DeviceAllocator {
     // shadow entry on success** — the caller now owns the bytes via
     // fhetch's Polynomial storage; the HAZE-side shadow is freed
     // mid-program. Non-const for that reason.
-    std::expected<std::vector<uint64_t>, HazeInternalError>
+    HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
     extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept HAZE_EXCLUDES(mutex_);
 
     // Read shadow bytes into a host buffer. Caller is responsible for
@@ -109,10 +124,11 @@ class DeviceAllocator {
     hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept
         HAZE_EXCLUDES(mutex_);
 
-    // Write bytes into the shadow buffer from a host vector. Used by
-    // the materialization engine to publish replayed compute outputs.
-    // Truncates to allocation size; sets has_data on success.
-    hazeError_t update_shadow(DevAddr addr, const std::vector<uint8_t> &bytes) noexcept
+    // Full-replace write of the shadow buffer; the existing entry is
+    // replaced by `values` after truncation/zero-padding to
+    // `elems_for_allocation`. Rvalue-only so ownership transfer is
+    // explicit at the (single) call site in `do_materialize_locked`.
+    hazeError_t update_shadow(DevAddr addr, std::vector<uint64_t> &&values) noexcept
         HAZE_EXCLUDES(mutex_);
 
     // Pointer-attribute query. Reports DEVICE for hazeMalloc-allocated
@@ -138,6 +154,15 @@ class DeviceAllocator {
   private:
     DeviceAllocator() = default;
 
+    friend class test::AllocatorTestAccess;
+
+    // Byte→element conversion shared by every shadow write path
+    // (copy_h2d, copy_d2d, memset, update_shadow). One place so a new
+    // write path can't drift from the formula.
+    static constexpr size_t elems_for_allocation(const Allocation &a) noexcept {
+        return a.size / sizeof(uint64_t);
+    }
+
     // Helper (caller holds mutex_).
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
 
@@ -149,11 +174,10 @@ class DeviceAllocator {
     // Per-address metadata. Entry exists for the lifetime of the
     // hazeMalloc/hazeFree contract.
     std::unordered_map<DevAddr, Allocation> map_ HAZE_GUARDED_BY(mutex_);
-    // Sparse byte storage. An entry exists only when the address
-    // currently holds a user-written or materialized payload.
-    // H2D/memset/D2D/update_shadow create it; extract / hazeFree /
-    // set_polynomial_size / reset evict it.
-    std::unordered_map<DevAddr, std::vector<uint8_t>> shadow_data_ HAZE_GUARDED_BY(mutex_);
+    // Sparse uint64_t component storage, vector sized to
+    // `elems_for_allocation`. Created by H2D/memset/D2D/update_shadow,
+    // evicted by extract / hazeFree / set_polynomial_size / reset.
+    std::unordered_map<DevAddr, std::vector<uint64_t>> shadow_data_ HAZE_GUARDED_BY(mutex_);
     std::vector<DevAddr>
         pool_free_ HAZE_GUARDED_BY(mutex_); // free list for poly_bytes_-sized allocations
     std::unordered_set<const void *>
