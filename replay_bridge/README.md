@@ -27,36 +27,52 @@ The bridge solves two problems:
 
 ```mermaid
 flowchart TB
-  app[Customer C / C++ application]:::user
-  haze[libhaze<br/>CUDA-shaped C ABI<br/>record-and-replay engine]:::haze
-  bridge[haze_replay_bridge<br/>OpenFHE boundary]:::bridge
-  fhetch[libnbfhetch<br/>niobium::compiler singleton<br/>fhetch::sr_* recording<br/>fhetch::tag_input / tag_output]:::fhetch
-  openfhe[OpenFHE<br/>CKKSRNS CryptoContext<br/>Ciphertext / DCRTPoly / NativePoly<br/>cereal binary serialization]:::ofh
-  sim[in-process FHETCH simulator<br/>HAZE_TARGET=local]:::backend
-  transport[nbcc_fhetch_replay<br/>HAZE_TARGET=FUNC_SIM /<br/>FHE_SIM / FPGA_TRI / ...]:::backend
+  app["Customer C / C++ application"]:::user
+  haze["libhaze<br/>CUDA-shaped C ABI<br/>record-and-replay engine"]:::haze
+  bridge["haze_replay_bridge<br/>OpenFHE boundary"]:::bridge
+  fhetch["libnbfhetch<br/>niobium::compiler singleton<br/>FHETCH IR recording<br/>cereal serialization"]:::fhetch
+  openfhe["OpenFHE<br/>CKKSRNS CryptoContext<br/>Ciphertext / DCRTPoly / NativePoly"]:::ofh
+  fs[("program_dir/<br/>.fhetch trace<br/>cryptocontext.dat<br/>prog.input_NAME.bin / .ids<br/>ciphertext_templates/NAME.template<br/>serialized_probes/NAME.ct")]:::fs
+  sim["in-process FHETCH simulator<br/>HAZE_TARGET=local"]:::backend
+  transport["nbcc_fhetch_replay over HTTP<br/>HAZE_TARGET=FUNC_SIM / FHE_SIM / FPGA_TRI / ..."]:::backend
 
-  app -->|hazeMalloc / hazeAdd / ...| haze
-  haze -->|sr_*, tag_input / tag_output| fhetch
-  haze -->|hazeReplayBridgeInitCryptoContext| bridge
-  bridge -->|capture_crypto_context<br/>set_post_recording_hook| fhetch
-  bridge -->|GenCryptoContext, KeyGen,<br/>Encrypt, SerializeToFile| openfhe
-  fhetch -.->|stop_epoch calls<br/>on_post_recording| bridge
-  fhetch -->|.fhetch trace +<br/>cryptocontext.dat +<br/>&lt;prog&gt;.input_*.bin/.ids +<br/>ciphertext_templates/*.template| sim
-  fhetch -->|same artifacts over HTTP| transport
-  sim -.->|serialized_probes/&lt;name&gt;.ct| bridge
-  transport -.->|serialized_probes/&lt;name&gt;.ct| bridge
-  bridge -->|"fhetch::result(name, Polynomial / MRP / MRPArray)"| haze
+  app -->|"haze API calls"| haze
+  app -->|"hazeReplayBridgeInitCryptoContext"| bridge
+  haze -->|"sr_*, tag_input / tag_output,<br/>stop_epoch, replay"| fhetch
+  bridge -->|"capture_crypto_context,<br/>set_post_recording_hook,<br/>for_each_captured_*"| fhetch
+  bridge -->|"GenCryptoContext, KeyGen, Encrypt,<br/>DeserializeFromFile"| openfhe
+  fhetch -.->|"stop_epoch fires on_post_recording"| bridge
+
+  bridge -.->|"writes via libnbfhetch's cereal TU:<br/>cryptocontext.dat,<br/>prog.input_NAME.bin/.ids,<br/>ciphertext_templates/NAME.template"| fs
+  fhetch -.->|"writes .fhetch trace"| fs
+
+  fs -->|"read locally"| sim
+  fs -->|"HTTP-shipped"| transport
+  sim -.->|"writes serialized_probes/NAME.ct"| fs
+  transport -.->|"writes serialized_probes/NAME.ct"| fs
+
+  fs -.->|"fhetch::result reads .ct"| bridge
+  bridge -->|"fhetch::Polynomial / MRP / MRPArray"| haze
 
   classDef user fill:#fef3c7,stroke:#b45309,color:#000
   classDef haze fill:#dbeafe,stroke:#1e40af,color:#000
   classDef bridge fill:#fce7f3,stroke:#9d174d,color:#000
   classDef fhetch fill:#dcfce7,stroke:#166534,color:#000
   classDef ofh fill:#ede9fe,stroke:#5b21b6,color:#000
+  classDef fs fill:#fee2e2,stroke:#991b1b,color:#000
   classDef backend fill:#f1f5f9,stroke:#334155,color:#000
 ```
 
-Dashed edges are file-system handoffs (the trace, the synthesized inputs,
-the per-output `.ct` files); solid edges are direct symbol calls.
+Dashed edges are filesystem reads / writes; solid edges are direct symbol
+calls. The `program_dir/` cylinder is the rendezvous: the bridge synthesizes
+`cryptocontext.dat`, the per-input `.bin`/`.ids` pairs, and per-output
+`.template` shells (going through libnbfhetch's cereal TU so polymorphic
+registrations resolve in the right dylib); libnbfhetch separately writes
+the `.fhetch` trace. Only after **all** of those exist on disk does the
+replay target — in-process simulator or `nbcc_fhetch_replay` over HTTP —
+consume them and write `serialized_probes/NAME.ct` back to the same
+directory. The bridge then closes the loop by deserializing those `.ct`
+files via OpenFHE in response to libhaze's `fhetch::result(...)` calls.
 
 ## Lifecycle of one epoch
 
