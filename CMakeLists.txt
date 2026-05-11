@@ -246,10 +246,12 @@ add_executable(haze_tests
   test/test_ring_dim_consistency.cpp
   test/test_integration_helpers.cpp
   test/test_user_crypto_context.cpp
+  test/test_zero_copy_promotion.cpp
 )
 
 target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/test
 )
 # OpenFHE BigInteger headers — used by test_basis_convert.cpp's reference

@@ -33,6 +33,7 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::BackendShapeMismatch:
     case HazeInternalError::MrpGroupAddrModuliMismatch:
     case HazeInternalError::MissingPolyMapBinding:
+    case HazeInternalError::ShadowSizeMismatch:
         return HAZE_ERROR_LAUNCH_FAILURE;
     }
     return HAZE_ERROR_INVALID_VALUE;
@@ -62,6 +63,8 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "MRP group addrs/moduli span size mismatch";
     case HazeInternalError::MissingPolyMapBinding:
         return "addr missing from poly_map_";
+    case HazeInternalError::ShadowSizeMismatch:
+        return "shadow buffer length != ring_dim";
     }
     return "unknown";
 }
