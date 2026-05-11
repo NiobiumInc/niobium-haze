@@ -63,16 +63,16 @@ the per-output `.ct` files); solid edges are direct symbol calls.
 ```mermaid
 sequenceDiagram
   autonumber
-  participant T as Test / app
-  participant H as libhaze (epoch.cpp)
-  participant B as haze_replay_bridge
+  participant T as Test
+  participant H as libhaze
+  participant B as bridge
   participant F as libnbfhetch
   participant O as OpenFHE
-  participant R as Replay (sim or transport)
-  participant FS as &lt;program_dir&gt;/
+  participant R as Replay
+  participant FS as program_dir
 
-  T->>B: hazeReplayBridgeInitCryptoContext(N, q, &picked)
-  B->>O: GenCryptoContext(CKKSRNS, N, depth=0, FIXEDMANUAL)
+  T->>B: hazeReplayBridgeInitCryptoContext(N, q, picked)
+  B->>O: GenCryptoContext CKKSRNS, depth=0, FIXEDMANUAL
   B->>O: KeyGen, capture picked moduli
   B->>F: capture_crypto_context(cc)
   F->>FS: cryptocontext.dat
@@ -86,24 +86,29 @@ sequenceDiagram
   loop for each captured input
     B->>O: Encrypt zeros, trim to shape, fill_native_poly
     B->>F: write_ciphertext_input_bin(name, ct, addr_ids)
-    F->>FS: &lt;prog&gt;.input_&lt;name&gt;.bin + &lt;prog&gt;.input_&lt;name&gt;.ids
+    F->>FS: prog.input_name.bin + prog.input_name.ids
   end
   loop for each captured output
     B->>O: build empty CT shell of matching shape
     B->>F: write_ciphertext_template(name, ct)
-    F->>FS: ciphertext_templates/&lt;name&gt;.template
+    F->>FS: ciphertext_templates/name.template
   end
-  H->>R: replay() (in-process sim, or HTTP to nbcc_fhetch_replay)
-  R->>FS: read .fhetch + cryptocontext.dat + inputs/* + templates/*
-  R->>FS: serialized_probes/&lt;name&gt;.ct
+  H->>R: replay (in-process sim, or HTTP to nbcc_fhetch_replay)
+  R->>FS: read .fhetch + cryptocontext.dat + inputs + templates
+  R->>FS: serialized_probes/name.ct
   loop for each output binding
-    H->>B: fhetch::result(name, Polynomial& / MRP& / MRPArray&)
-    B->>FS: read serialized_probes/&lt;name&gt;.ct
-    B->>O: DeserializeFromFile(BINARY)
+    H->>B: fhetch::result(name, Polynomial / MRP / MRPArray)
+    B->>FS: read serialized_probes/name.ct
+    B->>O: DeserializeFromFile BINARY
     B-->>H: fhetch::Polynomial / MRP / MRPArray
   end
   H->>T: D2H bytes (from shadow buffer)
 ```
+
+Participants: `T` = test or customer app, `H` = `libhaze` (`epoch.cpp`),
+`B` = `haze_replay_bridge`, `F` = `libnbfhetch`, `O` = OpenFHE,
+`R` = the replay target (in-process simulator or `nbcc_fhetch_replay`),
+`FS` = the on-disk `<program_dir>`.
 
 The post-recording hook (step 11) is what keeps OpenFHE out of `libhaze`:
 recording emits FHETCH IR with no knowledge of ciphertext shells, and the
