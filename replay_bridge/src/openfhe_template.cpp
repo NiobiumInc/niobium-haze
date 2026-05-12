@@ -546,6 +546,11 @@ void on_post_recording() {
 // hook (haze has no bootstrap precompute) and install on_post_recording
 // as the post_recording_hook.
 void push_crypto_to_compiler(const CachedContext &ctx) {
+    // Plant program_name="haze" before capture writes cryptocontext.dat so
+    // it lands in the eventual haze/ program directory rather than the
+    // "niobium_trace" default fallback (libhaze's backend init runs later,
+    // on the first EpochSession, and sets the same value idempotently).
+    niobium::compiler().set_program_info("haze", "", "");
     niobium::compiler().capture_crypto_context(ctx.cc);
     niobium::compiler().set_auto_capture_at_stop(nullptr);
     niobium::compiler().set_post_recording_hook(&on_post_recording);
