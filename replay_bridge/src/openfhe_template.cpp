@@ -6,8 +6,10 @@
 //
 // haze_replay_bridge implementation: synthesize the CryptoContext, per-input
 // .bin files, and per-output templates the simulator / nbcc_fhetch_replay
-// consume to emit serialized_probes/<name>.ct. Called only from the epoch
-// path under EpochState::mutex_, so no internal lock is needed.
+// consume to emit serialized_probes/<name>.ct. Setup entries (Init/Register)
+// are called from test setup outside any lock; on_post_recording runs under
+// EpochState::mutex_. Bridge globals are race-free by the convention that
+// setup completes before any compute begins.
 
 #include "ciphertext-ser.h"
 #include "common/log.hpp"
@@ -81,18 +83,12 @@ enum class BridgeError : uint8_t {
     OpenFheUnavailable,
 };
 
-// Per-process CC cache: SRP outputs use a depth-0 single-tower CC, MRP
-// outputs use depth-(N-1) chains, all sharing OpenFHE's static
-// CC<->Ciphertext registry. picked_moduli records OpenFHE's chosen primes
-// (it picks by bit-width); only used by hazeReplayBridgeInitCryptoContext's
-// return value — reconstruct_probes overwrites per-tower moduli from the
-// trace before serializing .ct, so OpenFHE's picks aren't observable to readers.
+// Thin bundle used by both the per-shape cache and the user-CC slot.
+// ring_dim is cached for hot-path access; everything else lives in `cc`.
 struct CachedContext {
-    uint64_t ring_dim = 0;
-    std::vector<uint64_t> moduli;        // user-requested base (cache key)
-    std::vector<uint64_t> picked_moduli; // OpenFHE-picked primes per tower
     lbcrypto::CryptoContext<DCRTPoly> cc;
     lbcrypto::KeyPair<DCRTPoly> keys;
+    uint64_t ring_dim = 0;
 };
 
 // Cache keyed by user-requested moduli; ring_dim is pinned per process via
@@ -162,19 +158,20 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
     auto element_params = cc->GetCryptoParameters()->GetElementParams();
     if (!element_params || element_params->GetParams().empty())
         return std::unexpected(BridgeError::OpenFheUnavailable);
-    std::vector<uint64_t> picked;
-    picked.reserve(element_params->GetParams().size());
-    for (const auto &ep : element_params->GetParams())
-        picked.push_back(ep->GetModulus().ConvertToInt());
 
-    CachedContext entry;
-    entry.ring_dim = ring_dim;
-    entry.moduli = moduli;
-    entry.picked_moduli = std::move(picked);
-    entry.cc = cc;
-    entry.keys = keys;
+    CachedContext entry{cc, keys, ring_dim};
     auto [ins, _] = g_ctx_cache.emplace(moduli, std::move(entry));
     return &ins->second;
+}
+
+// First-tower modulus of `cc`'s chain. Throws if the chain is empty;
+// get_or_build_context_locked has already validated, so the throw is just
+// defensive for the caller-built path.
+uint64_t first_tower_modulus(const lbcrypto::CryptoContext<DCRTPoly> &cc) {
+    const auto &params = cc->GetCryptoParameters()->GetElementParams()->GetParams();
+    if (params.empty())
+        throw std::runtime_error("first_tower_modulus: empty element params");
+    return params.front()->GetModulus().ConvertToInt();
 }
 
 // Convenience accessor for the primary CC; returns nullptr before init.
@@ -582,7 +579,7 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // also installs our post_recording_hook for stop()-time synthesis.
         push_crypto_to_compiler(**built);
 
-        *picked_modulus = (*built)->picked_moduli.front();
+        *picked_modulus = first_tower_modulus((*built)->cc);
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
@@ -610,15 +607,7 @@ HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
         if (!element_params || element_params->GetParams().empty())
             return HAZE_ERROR_INVALID_VALUE;
 
-        CachedContext entry;
-        entry.ring_dim = element_params->GetRingDimension();
-        entry.cc = cc;
-        entry.keys = keys;
-        entry.picked_moduli.reserve(element_params->GetParams().size());
-        for (const auto &ep : element_params->GetParams())
-            entry.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
-
-        g_user_ctx = std::move(entry);
+        g_user_ctx = CachedContext{cc, keys, element_params->GetRingDimension()};
         push_crypto_to_compiler(*g_user_ctx);
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {

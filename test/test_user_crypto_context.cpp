@@ -95,6 +95,10 @@ TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[inte
         }
     }
 
+    // MRP read path: fhetch::result(name, MRP&) should report the same
+    // per-residue values as the SRP D2H above, under the user CC's moduli.
+    haze::test::check_mrp_against_per_residue(base, expected);
+
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(db);
     haze::test::free_all_residues(dst);
