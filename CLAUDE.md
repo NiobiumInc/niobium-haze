@@ -166,15 +166,45 @@ and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.).
 Three CI gates must pass before a PR merges. Each one has a local
 equivalent — run them before pushing rather than after CI fails.
 
-**Run all three before claiming lint clean.** `cmake --build` enforces
-only compiler-level `-Werror`, a much smaller set than these gates. The
-local build will happily pass while clang-tidy fails on
-`misc-include-cleaner`, `modernize-use-designated-initializers`,
-`readability-isolate-declaration`, and other tidy-only categories. Same
-for `clangd --check`, which uses a grep post-pass for warnings.
-clang-format alone is not a substitute. New files you author need this
-most: existing files have history that filters out these patterns, fresh
-ones don't.
+**Primary pre-push check: the flake.** Run all three lint derivations
+through `nix build` so local output matches CI byte-for-byte:
+
+```sh
+nix build -L --keep-going \
+  .#checks.<sys>.clang-format \
+  .#checks.<sys>.clang-tidy \
+  .#checks.<sys>.clangd-check
+```
+
+Substitute `<sys>` for your host (`aarch64-darwin`, `x86_64-linux`,
+`aarch64-linux`). If the sandbox can't fetch the `niobium-fhetch-src`
+input over SSH (Lima VMs, isolated runners), point it at the local
+checkout:
+
+```sh
+nix build -L --keep-going \
+  .#checks.<sys>.clang-format \
+  .#checks.<sys>.clang-tidy \
+  .#checks.<sys>.clangd-check \
+  --override-input niobium-fhetch-src \
+    "git+file://$PWD/vendor/niobium-fhetch?submodules=1"
+```
+
+The local checkout must be at the lockfile's rev (or pass
+`--no-write-lock-file` to bypass the lock check). `nix flake check -L
+--keep-going` runs the same three plus `unit-tests`, `sim-tests`, `fmt`,
+and the devshell build — slowest, but the strongest pre-push signal.
+
+**`cmake --build` is not a substitute** for any of the lint gates. It
+enforces only compiler-level `-Werror`, which doesn't fire on tidy-only
+categories (`misc-include-cleaner`, `modernize-use-designated-initializers`,
+`readability-isolate-declaration`, etc.). clang-format alone isn't
+either. New files need the full check most: existing files have history
+that filtered out these patterns, fresh ones don't.
+
+**Faster iteration: call the scripts directly.** Each gate has a script
+under `scripts/` that the flake check dispatches through, so behavior
+matches:
 
 1. `Check clang-format` — runs `clang-format --dry-run -Werror` over
    every first-party `.cpp` / `.hpp` / `.h` / `.c` under `src/`,
@@ -211,26 +241,6 @@ ones don't.
    BUILD_DIR=build scripts/clang-tidy.sh
    BUILD_DIR=build scripts/clangd-check.sh
    ```
-
-3. `nix flake check` — superset that re-runs the three lint derivations
-   (`clang-format`, `clang-tidy`, `clangd-check`) plus `unit-tests`,
-   `sim-tests`, `fmt` (nixfmt), and the devshell build. Slowest, but is
-   the strongest pre-push signal.
-
-Reproduce 2 and 3 with the same flake derivations CI uses. Substitute
-your host system (`aarch64-darwin`, `x86_64-linux`, or `aarch64-linux`)
-for `<sys>`:
-
-```sh
-# Just the lint gates (matches CI's "clang-tidy + clangd-check" job).
-nix build -L --keep-going \
-  .#checks.<sys>.clang-format \
-  .#checks.<sys>.clang-tidy \
-  .#checks.<sys>.clangd-check
-
-# Everything (matches CI's "nix flake check" job; runs lint + tests).
-nix flake check -L --keep-going
-```
 
 When iterating on a single file, skip the flake build and call the
 linters directly — but keep `--warnings-as-errors='*'` so local output
