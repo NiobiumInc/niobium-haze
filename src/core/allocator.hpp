@@ -124,11 +124,10 @@ class DeviceAllocator {
     hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept
         HAZE_EXCLUDES(mutex_);
 
-    // Full-replace write of the shadow buffer; the existing entry is
-    // replaced by `values` after truncation/zero-padding to
-    // `elems_for_allocation`. Rvalue-only so ownership transfer is
-    // explicit at the (single) call site in `do_materialize_locked`.
-    hazeError_t update_shadow(DevAddr addr, std::vector<uint64_t> &&values) noexcept
+    // Full-replace write of the shadow buffer; `values` is truncated
+    // or zero-padded to `elems_for_allocation` then moved in.
+    std::expected<void, HazeInternalError> update_shadow(DevAddr addr,
+                                                         std::vector<uint64_t> &&values) noexcept
         HAZE_EXCLUDES(mutex_);
 
     // Pointer-attribute query. Reports DEVICE for hazeMalloc-allocated

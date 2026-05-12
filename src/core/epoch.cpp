@@ -14,7 +14,6 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-#include "common/log.hpp"
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
@@ -25,6 +24,7 @@
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
+#include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
@@ -187,14 +187,21 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return {};
     }
 
-    // Step 1: write the per-epoch .fhetch trace and reset the recording
-    // bookkeeping in libnbfhetch.
+    // Step 1: write the trace. The replay_bridge post-recording hook
+    // runs inside stop_epoch; we drain its failure flag right after.
     const bool stop_ok = CompilerBackend::stop_epoch();
     if (!stop_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "EpochState::replay_and_populate (stop_epoch)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+    if (hazeReplayBridgeTakeHookHadError() != 0) {
+        clear_state_locked();
+        record_internal_error(
+            HazeInternalError::BridgeHookFailed,
+            "post_recording_hook reported per-input/output failures (see prior log entries)");
+        return std::unexpected(HazeInternalError::BridgeHookFailed);
     }
 
     // Step 2: dispatch replay. kLocalTarget runs the in-process simulator;
@@ -208,26 +215,31 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 
-    // Step 3: populate host shadow buffers from
-    // <program_dir>/serialized_probes/<name>.ct.
+    // Step 3: per-output shadow population. Any failure aborts the
+    // epoch so a stale shadow can't surface as a silent wrong-value D2H.
     for (auto &[addr, name] : pending_outputs_) {
         fhetch::Polynomial result_poly;
         if (!fhetch::result(name, result_poly)) {
             std::ostringstream body;
-            body << "result('" << name << "') unavailable; shadow at addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec << " is stale";
-            log_error("epoch", body.str());
-            continue;
+            body << "result('" << name << "') unavailable for addr 0x" << std::hex
+                 << to_uintptr(addr) << std::dec;
+            clear_state_locked();
+            record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputMissing);
         }
         std::vector<uint64_t> values;
         if (!extract_polynomial_values(result_poly, name, values)) {
             std::ostringstream body;
             body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
-            log_error("epoch", body.str());
-            continue;
+            clear_state_locked();
+            record_internal_error(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
         }
-        allocator().update_shadow(addr, std::move(values));
+        if (auto r = allocator().update_shadow(addr, std::move(values)); !r) {
+            clear_state_locked();
+            return std::unexpected(r.error());
+        }
     }
 
     clear_state_locked(); // also clears captured inputs/outputs (E7).

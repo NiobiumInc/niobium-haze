@@ -40,7 +40,11 @@ enum class HazeInternalError : std::uint8_t {
     BackendShapeMismatch,       // backend returned a result with unexpected shape / length
     MrpGroupAddrModuliMismatch, // MRP group registration: addrs / moduli span lengths differ
     MissingPolyMapBinding,      // pending output / MRP group addr is not in poly_map_
-    ShadowSizeMismatch          // shadow buffer length disagrees with ring_dim invariant
+    ShadowSizeMismatch,         // shadow buffer length disagrees with ring_dim invariant
+    BackendOutputMissing,       // fhetch::result(name, ...) returned false
+    BackendOutputDecodeFailed,  // extract_polynomial_values returned false
+    BridgeHookFailed,           // replay_bridge post-recording hook reported failures
+    PoolMapDesync               // pool_free_ entry has no map_ peer
 };
 
 // Map an internal error to the public hazeError_t the C ABI returns.

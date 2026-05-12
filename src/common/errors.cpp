@@ -34,6 +34,10 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::MrpGroupAddrModuliMismatch:
     case HazeInternalError::MissingPolyMapBinding:
     case HazeInternalError::ShadowSizeMismatch:
+    case HazeInternalError::BackendOutputMissing:
+    case HazeInternalError::BackendOutputDecodeFailed:
+    case HazeInternalError::BridgeHookFailed:
+    case HazeInternalError::PoolMapDesync:
         return HAZE_ERROR_LAUNCH_FAILURE;
     }
     return HAZE_ERROR_INVALID_VALUE;
@@ -65,6 +69,14 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "addr missing from poly_map_";
     case HazeInternalError::ShadowSizeMismatch:
         return "shadow buffer length != ring_dim";
+    case HazeInternalError::BackendOutputMissing:
+        return "backend output missing";
+    case HazeInternalError::BackendOutputDecodeFailed:
+        return "backend output decode failed";
+    case HazeInternalError::BridgeHookFailed:
+        return "post-recording hook reported failures";
+    case HazeInternalError::PoolMapDesync:
+        return "pool/map desync";
     }
     return "unknown";
 }
