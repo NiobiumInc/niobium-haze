@@ -8,12 +8,12 @@
 #include "integration_helpers.hpp"
 #include "openfhe.h"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
 #include <haze/replay_bridge_cc.hpp>
 #include <vector>
 
@@ -68,7 +68,9 @@ TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[inte
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     // Build per-residue inputs + expected output for hazeAddMrp.
-    std::vector<std::vector<uint64_t>> a(3), b(3), expected(3);
+    std::vector<std::vector<uint64_t>> a(3);
+    std::vector<std::vector<uint64_t>> b(3);
+    std::vector<std::vector<uint64_t>> expected(3);
     for (std::size_t i = 0; i < 3; ++i) {
         a[i] = haze::test::make_residue(base[i], 0xAAAAULL + i, kRingDim);
         b[i] = haze::test::make_residue(base[i], 0xBBBBULL + i, kRingDim);
