@@ -6,10 +6,14 @@
 //
 // haze_replay_bridge implementation: synthesize the CryptoContext, per-input
 // .bin files, and per-output templates the simulator / nbcc_fhetch_replay
-// consume to emit serialized_probes/<name>.ct. Setup entries (Init/Register)
-// are called from test setup outside any lock; on_post_recording runs under
-// EpochState::mutex_. Bridge globals are race-free by the convention that
-// setup completes before any compute begins.
+// consume to emit serialized_probes/<name>.ct. The bridge holds NO
+// file-scope state — everything the post-recording hook needs is captured
+// into its lambda at install time.
+//
+// Setup entries (Init/Register) are called from test setup outside any
+// lock; on_post_recording runs under EpochState::mutex_. No internal lock
+// is needed because setup completes before any compute begins and the
+// hook's state is owned lexically by libnbfhetch's post_recording_hook slot.
 
 #include "ciphertext-ser.h"
 #include "common/log.hpp"
@@ -33,7 +37,6 @@
 #include <memory>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -79,50 +82,37 @@ using DCRTPoly = lbcrypto::DCRTPoly;
 // in this TU because there's exactly one caller and one implementation.
 enum class BridgeError : uint8_t {
     InvalidModulus,
-    KeygenFailed,
     OpenFheUnavailable,
 };
 
-// Thin bundle used by both the per-shape cache and the user-CC slot.
-// ring_dim is cached for hot-path access; everything else lives in `cc`.
-struct CachedContext {
-    lbcrypto::CryptoContext<DCRTPoly> cc;
-    lbcrypto::KeyPair<DCRTPoly> keys;
+// A built CryptoContext plus the moduli used to build it. Carries no keys —
+// the bridge does not call Encrypt anywhere; CT shells are built directly
+// via CiphertextImpl + DCRTPoly + SetElements.
+struct Context {
     uint64_t ring_dim = 0;
+    // User-requested base. Populated when the bridge built the CC itself
+    // (Init / context_for_shape per-shape build); left empty on the
+    // Register* path where the caller hands in a finished CC and we never
+    // consult the original moduli list.
+    std::vector<uint64_t> moduli;
+    std::vector<uint64_t> picked_moduli; // OpenFHE-picked primes per tower
+    lbcrypto::CryptoContext<DCRTPoly> cc;
 };
 
-// Cache keyed by user-requested moduli; ring_dim is pinned per process via
-// hazeSetRingDimension, and reset_bridge_caches wipes the cache on every
-// hazeDeviceReset, so the moduli vector alone disambiguates entries.
-std::map<std::vector<uint64_t>, CachedContext> g_ctx_cache;
-// Primary CC moduli: the entry that init seeded and that captured
-// cryptocontext.dat; nullopt before init / after reset_bridge_caches.
-std::optional<std::vector<uint64_t>> g_primary_key;
-// User-registered CC (via hazeReplayBridgeRegisterCryptoContext). When set,
-// all template synthesis uses this one CC and trims towers per output shape;
-// the per-shape g_ctx_cache build path is skipped.
-std::optional<CachedContext> g_user_ctx;
-// Program directory snapshotted at init so reset_bridge_caches's disk
-// cleanup is independent of niobium::compiler().reset() ordering.
-fs::path g_program_dir;
-
-// Build or look up a CryptoContext + keypair: moduli.size() == 1 → depth-0
-// single-tower CC; >1 → depth-(N-1) chain with one tower per residue. On
-// success returns a stable g_ctx_cache pointer; on failure, a BridgeError.
-std::expected<const CachedContext *, BridgeError>
-get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &moduli) {
+// Build a CryptoContext from (ring_dim, moduli). Pure function: no cache,
+// no globals. moduli.size() == 1 → depth-0 single-tower CC; >1 →
+// depth-(N-1) chain with one tower per residue. The caller decides whether
+// to reuse the result.
+std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
+                                                  const std::vector<uint64_t> &moduli) {
     using namespace lbcrypto;
     if (moduli.empty())
         return std::unexpected(BridgeError::InvalidModulus);
 
-    auto it = g_ctx_cache.find(moduli);
-    if (it != g_ctx_cache.end())
-        return &it->second;
-
     CCParams<CryptoContextCKKSRNS> p;
     p.SetSecurityLevel(HEStd_NotSet); // toy: ring_dim is user-chosen
     p.SetRingDim(static_cast<uint32_t>(ring_dim));
-    // Chain depth d → d+1 towers in a freshly encrypted CT, so SRP wants 0
+    // Chain depth d → d+1 towers in a freshly built CT, so SRP wants 0
     // and MRP with N residues wants N-1; array shapes compose per-element.
     p.SetMultiplicativeDepth(static_cast<uint32_t>(moduli.size() - 1));
     // First-mod bit-width tracks the primary modulus; scaling-mod tracks the
@@ -149,70 +139,18 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
 
-    // TODO(haze:no-keygen): keygen+Encrypt+trim is structural ballast since
-    // OpenFHE has no public no-key Ciphertext<DCRTPoly> constructor.
-    auto keys = cc->KeyGen();
-    if (!keys.publicKey || !keys.secretKey)
-        return std::unexpected(BridgeError::KeygenFailed);
-
     auto element_params = cc->GetCryptoParameters()->GetElementParams();
     if (!element_params || element_params->GetParams().empty())
         return std::unexpected(BridgeError::OpenFheUnavailable);
 
-    CachedContext entry{.cc = cc, .keys = keys, .ring_dim = ring_dim};
-    auto [ins, _] = g_ctx_cache.emplace(moduli, std::move(entry));
-    return &ins->second;
-}
-
-// First-tower modulus of `cc`'s chain. Throws if the chain is empty;
-// get_or_build_context_locked has already validated, so the throw is just
-// defensive for the caller-built path.
-uint64_t first_tower_modulus(const lbcrypto::CryptoContext<DCRTPoly> &cc) {
-    const auto &params = cc->GetCryptoParameters()->GetElementParams()->GetParams();
-    if (params.empty())
-        throw std::runtime_error("first_tower_modulus: empty element params");
-    return params.front()->GetModulus().ConvertToInt();
-}
-
-// Convenience accessor for the primary CC; returns nullptr before init.
-// A user-registered CC takes precedence over the per-shape cache.
-const CachedContext *primary_ctx() {
-    if (g_user_ctx)
-        return &*g_user_ctx;
-    if (!g_primary_key)
-        return nullptr;
-    auto it = g_ctx_cache.find(*g_primary_key);
-    return (it == g_ctx_cache.end()) ? nullptr : &it->second;
-}
-
-// Drop the CC cache, primary key, and on-disk artifacts so each test starts
-// clean; without the disk half, addr-derived names from prior tests pollute
-// content-based MRP lookups. Best-effort: fs errors are logged, not raised.
-void reset_bridge_caches() {
-    g_ctx_cache.clear();
-    g_primary_key.reset();
-    g_user_ctx.reset();
-    if (g_program_dir.empty())
-        return; // bridge never initialized; nothing on disk
-    try {
-        const auto cleanup = [&](const fs::path &sub) {
-            std::error_code ec;
-            fs::remove_all(g_program_dir / sub, ec);
-            if (ec) {
-                std::ostringstream body;
-                body << "reset_bridge_caches: remove_all('" << (g_program_dir / sub).string()
-                     << "') failed: " << ec.message();
-                haze::log_error("replay_bridge", body.str());
-            }
-        };
-        cleanup("serialized_probes");
-        cleanup("ciphertext_templates");
-    } catch (const std::exception &e) {
-        haze::log_error("replay_bridge",
-                        std::string{"reset_bridge_caches: disk cleanup threw: "} + e.what());
-    } catch (...) {
-        haze::log_error("replay_bridge", "reset_bridge_caches: disk cleanup threw (unknown)");
-    }
+    Context entry;
+    entry.ring_dim = ring_dim;
+    entry.moduli = moduli;
+    entry.picked_moduli.reserve(element_params->GetParams().size());
+    for (const auto &ep : element_params->GetParams())
+        entry.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
+    entry.cc = std::move(cc);
+    return entry;
 }
 
 // Map BridgeError → hazeError_t at the C ABI; granular variants exist for
@@ -221,24 +159,44 @@ hazeError_t to_haze_error(BridgeError e) {
     switch (e) {
     case BridgeError::InvalidModulus:
         return HAZE_ERROR_INVALID_VALUE;
-    case BridgeError::KeygenFailed:
     case BridgeError::OpenFheUnavailable:
         return HAZE_ERROR_LAUNCH_FAILURE;
     }
     return HAZE_ERROR_LAUNCH_FAILURE;
 }
 
-// Encrypt zeros and trim the RLWE pair to a 1-element shell; element[1]
-// would otherwise land in the .bin as Encrypt-noise with a colliding
-// auto-addr_id. TODO(haze:no-keygen): replace once OpenFHE exposes a
-// no-key shell constructor.
-lbcrypto::Ciphertext<DCRTPoly> empty_one_element_ct(const CachedContext &ctx) {
-    std::vector<double> zeros(ctx.ring_dim / 2, 0.0);
-    auto pt = ctx.cc->MakeCKKSPackedPlaintext(zeros);
-    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
-    auto &els = ct->GetElements();
-    if (els.size() > 1)
-        els.resize(1);
+// Drop trailing towers from `dcrt` so it carries exactly `target` towers.
+// `current < target` is a hard error: the CC was built too shallow for
+// this output and silently shrinking the shape would corrupt the trace.
+// `current > target` is the load-bearing path for the Register* user-CC
+// flow, where the caller's CC has a deep chain (depth N) and a smaller-
+// residue output (M < N+1 towers) needs its template trimmed.
+void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
+    auto current = dcrt.GetAllElements().size();
+    if (current < target) {
+        std::ostringstream body;
+        body << "trim_towers_to: CC chain has " << current << " towers, need " << target;
+        throw std::runtime_error(body.str());
+    }
+    if (current > target)
+        dcrt.DropLastElements(current - target);
+}
+
+// Build a CT shell with K zero-initialized DCRTPoly elements. K==1 covers
+// SRP/MRP; K>=2 covers SRPArray/MRPArray. No Encrypt, no keys — the public
+// CiphertextImpl(cc, ...) constructor + SetElements is all we need, and
+// reconstruct_probes overwrites every NativePoly before re-serializing.
+// Each DCRTPoly is sized by the CC's full chain; per-output tower trim
+// happens in the synthesize_* dispatch via trim_towers_to.
+lbcrypto::Ciphertext<DCRTPoly> empty_ct_shell(const Context &ctx, size_t k_count = 1) {
+    auto element_params = ctx.cc->GetCryptoParameters()->GetElementParams();
+    std::vector<DCRTPoly> elements;
+    elements.reserve(k_count);
+    for (size_t i = 0; i < k_count; ++i)
+        elements.emplace_back(element_params, Format::EVALUATION, /*initializeElementToZero=*/true);
+    auto ct = std::make_shared<lbcrypto::CiphertextImpl<DCRTPoly>>(ctx.cc, /*id=*/std::string{},
+                                                                   lbcrypto::CKKS_PACKED_ENCODING);
+    ct->SetElements(std::move(elements));
     return ct;
 }
 
@@ -259,25 +217,11 @@ void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &val
     np.SetValues(nv, np.GetFormat());
 }
 
-// Trim the leading DCRTPoly's tower count down to `target`. Used to shape
-// a freshly-encrypted CT (which always has the CC's full chain length) into
-// an N-tower template for an N-residue output.
-void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
-    auto current = dcrt.GetAllElements().size();
-    if (current < target) {
-        std::ostringstream body;
-        body << "trim_towers_to: CC chain has " << current << " towers, need " << target;
-        throw std::runtime_error(body.str());
-    }
-    if (current > target)
-        dcrt.DropLastElements(current - target);
-}
-
 // SRP entrypoint: build a 1-element / 1-tower CT and fill its NativePoly
 // with `values` (empty `values` produces a template).
-lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const CachedContext &ctx,
+lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx,
                                                           const std::vector<uint64_t> &values) {
-    auto ct = empty_one_element_ct(ctx);
+    auto ct = empty_ct_shell(ctx, /*k_count=*/1);
     trim_towers_to(ct->GetElements()[0], 1);
     if (values.empty())
         return ct; // template
@@ -291,10 +235,12 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const CachedContext &c
 // OpenFHE's picks; reconstruct_probes overwrites them with the trace's
 // per-residue moduli before serializing the on-disk .ct.
 lbcrypto::Ciphertext<DCRTPoly>
-synthesize_haze_mrp_ciphertext(const CachedContext &ctx, const std::vector<uint64_t> &moduli,
+synthesize_haze_mrp_ciphertext(const Context &ctx, const std::vector<uint64_t> &moduli,
                                const std::vector<std::vector<uint64_t>> &per_residue_values) {
-    auto ct = empty_one_element_ct(ctx);
+    auto ct = empty_ct_shell(ctx, /*k_count=*/1);
     auto &dcrt = ct->GetElements()[0];
+    // Trim trailing towers when the CC was built deeper than this output
+    // needs (Register* path with a deep user CC). Throws on under-sized.
     trim_towers_to(dcrt, moduli.size());
     if (per_residue_values.empty())
         return ct; // template — reconstruct_probes installs trace moduli.
@@ -314,10 +260,9 @@ synthesize_haze_mrp_ciphertext(const CachedContext &ctx, const std::vector<uint6
 
 // Build a K-element CT for SRPArray/MRPArray; heterogeneous per-element
 // bases are rejected since they'd need multi-CC stitching OpenFHE doesn't
-// support. K independent Encrypts (typically K=2) avoid shallow-aliasing
-// during fill and bypass the missing public no-key K-shell constructor.
+// support.
 lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
-    const CachedContext &ctx, const std::vector<std::vector<uint64_t>> &per_element_moduli,
+    const Context &ctx, const std::vector<std::vector<uint64_t>> &per_element_moduli,
     const std::vector<std::vector<std::vector<uint64_t>>> &per_element_values) {
     if (per_element_moduli.empty())
         throw std::runtime_error("synthesize_haze_array_ciphertext: empty per_element_moduli");
@@ -334,17 +279,11 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     const auto &shared_moduli = per_element_moduli[0];
     const size_t k_count = per_element_moduli.size();
 
-    std::vector<DCRTPoly> elements;
-    elements.reserve(k_count);
-    for (size_t k = 0; k < k_count; ++k) {
-        auto ct_k = empty_one_element_ct(ctx);
-        auto &dcrt_k = ct_k->GetElements()[0];
-        trim_towers_to(dcrt_k, shared_moduli.size());
-        elements.push_back(std::move(dcrt_k));
-    }
-    auto ct = empty_one_element_ct(ctx);
-    ct->SetElements(elements);
-
+    auto ct = empty_ct_shell(ctx, k_count);
+    // Trim each element's tower count to match the per-element residue
+    // count (Register* path with a deep user CC).
+    for (auto &dcrt : ct->GetElements())
+        trim_towers_to(dcrt, shared_moduli.size());
     if (per_element_values.empty())
         return ct; // template path: K-element shell, zeros in each tower
     if (per_element_values.size() != k_count) {
@@ -370,56 +309,6 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
         }
     }
     return ct;
-}
-
-// Pick the CC for a shape; arrays require homogeneous per-element moduli,
-// rejected with a logged nullptr so callers needn't distinguish "TODO" from
-// "synthesis failure". Modulus-0 falls back to the primary single-tower CC
-// (TODO(niobium-fhetch:mod-map-tracking): fhetch's address_modulus_map
-// doesn't register every output before sync_fhetch_state_to_compiler).
-const CachedContext *context_for_shape(uint64_t ring_dim, const niobium::CapturedShape &shape) {
-    // User-registered CC mode: one CC for every shape, towers trimmed per
-    // output. Skip the per-shape build path entirely.
-    if (g_user_ctx)
-        return &*g_user_ctx;
-    if (shape.per_element_moduli.empty())
-        return primary_ctx();
-    const auto &moduli = shape.per_element_moduli.front();
-    if (moduli.empty())
-        return primary_ctx();
-    for (auto q : moduli) {
-        if (q == 0)
-            return primary_ctx();
-    }
-    // Reject heterogeneous arrays here so the caller gets a structured
-    // nullptr (mirrors the check in synthesize_haze_array_ciphertext —
-    // change both together).
-    if (shape.kind == niobium::CapturedKind::SRPArray ||
-        shape.kind == niobium::CapturedKind::MRPArray) {
-        for (size_t k = 1; k < shape.per_element_moduli.size(); ++k) {
-            if (shape.per_element_moduli[k] != moduli) {
-                std::ostringstream body;
-                body << "context_for_shape: heterogeneous per_element_moduli "
-                        "(element[0].size()="
-                     << moduli.size() << ", element[" << k
-                     << "].size()=" << shape.per_element_moduli[k].size()
-                     << ") — array synthesis with non-uniform bases is not yet implemented";
-                haze::log_error("replay_bridge", body.str());
-                return nullptr;
-            }
-        }
-    }
-    auto built = get_or_build_context_locked(ring_dim, moduli);
-    if (!built) {
-        std::ostringstream body;
-        body << "context_for_shape: failed to build CC for ring_dim=" << ring_dim
-             << " (BridgeError=" << static_cast<int>(built.error()) << ")";
-        haze::log_error("replay_bridge", body.str());
-        // primary_ctx() here would silently emit a 1-tower template for an
-        // N-tower output; nullptr lets the caller skip this output instead.
-        return nullptr;
-    }
-    return *built;
 }
 
 // Reshape flat per-residue values into per-element rows using
@@ -459,7 +348,7 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
 // Build the CT shell for `shape`; empty per_residue_values yields a
 // template, non-empty fills with values flattened in encounter order.
 lbcrypto::Ciphertext<DCRTPoly>
-synthesize_for_shape(const CachedContext &ctx, const niobium::CapturedShape &shape,
+synthesize_for_shape(const Context &ctx, const niobium::CapturedShape &shape,
                      const std::vector<std::vector<uint64_t>> &per_residue_values) {
     switch (shape.kind) {
     case niobium::CapturedKind::SRP:
@@ -479,16 +368,83 @@ synthesize_for_shape(const CachedContext &ctx, const niobium::CapturedShape &sha
     std::unreachable();
 }
 
+// State the post-recording hook needs, captured into its lambda by Init or
+// Register. Lives lexically inside the std::function set on niobium::compiler()
+// and is freed when the next hook replaces it or niobium::compiler().reset()
+// is called.
+struct HookCtx {
+    uint64_t ring_dim;
+    Context primary;
+    // When true (Register* path), use `primary` for every captured shape and
+    // skip per-shape CC builds. When false (Init path), `primary` is only
+    // the fallback for shapes whose moduli we can't resolve; per-shape CCs
+    // get built lazily into the per-call local cache.
+    bool primary_covers_all_shapes;
+};
+
+// Pick the CC for a shape. `local_cache` lives in `on_post_recording`'s
+// frame so successive inputs/outputs with the same moduli share one build;
+// the cache evaporates at hook exit. Heterogeneous arrays are rejected with
+// a logged nullptr so callers needn't distinguish "TODO" from "synthesis
+// failure". Modulus-0 falls back to `primary` (TODO(niobium-fhetch:
+// mod-map-tracking): fhetch's address_modulus_map doesn't register every
+// output before sync_fhetch_state_to_compiler).
+const Context *context_for_shape(const HookCtx &hctx,
+                                 std::map<std::vector<uint64_t>, Context> &local_cache,
+                                 const niobium::CapturedShape &shape) {
+    if (hctx.primary_covers_all_shapes)
+        return &hctx.primary;
+    if (shape.per_element_moduli.empty())
+        return &hctx.primary;
+    const auto &moduli = shape.per_element_moduli.front();
+    if (moduli.empty())
+        return &hctx.primary;
+    for (auto q : moduli) {
+        if (q == 0)
+            return &hctx.primary;
+    }
+    // Reject heterogeneous arrays here so the caller gets a structured
+    // nullptr (mirrors the check in synthesize_haze_array_ciphertext —
+    // change both together).
+    if (shape.kind == niobium::CapturedKind::SRPArray ||
+        shape.kind == niobium::CapturedKind::MRPArray) {
+        for (size_t k = 1; k < shape.per_element_moduli.size(); ++k) {
+            if (shape.per_element_moduli[k] != moduli) {
+                std::ostringstream body;
+                body << "context_for_shape: heterogeneous per_element_moduli "
+                        "(element[0].size()="
+                     << moduli.size() << ", element[" << k
+                     << "].size()=" << shape.per_element_moduli[k].size()
+                     << ") — array synthesis with non-uniform bases is not yet implemented";
+                haze::log_error("replay_bridge", body.str());
+                return nullptr;
+            }
+        }
+    }
+    auto it = local_cache.find(moduli);
+    if (it != local_cache.end())
+        return &it->second;
+    auto built = build_context(hctx.ring_dim, moduli);
+    if (!built) {
+        std::ostringstream body;
+        body << "context_for_shape: failed to build CC for ring_dim=" << hctx.ring_dim
+             << " (BridgeError=" << static_cast<int>(built.error()) << ")";
+        haze::log_error("replay_bridge", body.str());
+        // Returning &hctx.primary here would silently emit a 1-tower template
+        // for an N-tower output; nullptr lets the caller skip this output.
+        return nullptr;
+    }
+    auto [ins, _] = local_cache.emplace(moduli, std::move(*built));
+    return &ins->second;
+}
+
 // LOAD-BEARING. Synthesizes the OpenFHE artifacts the replay path needs;
 // runs after stop_recording (so for_each_captured_* sees the final sets)
-// and before reconstruct (so cereal registrations resolve).
-void on_post_recording() {
-    const auto *primary = primary_ctx();
-    if (primary == nullptr) {
-        // Bridge never called this session; nothing to materialize.
-        return;
-    }
-    const uint64_t ring_dim = primary->ring_dim;
+// and before reconstruct (so cereal registrations resolve). `hctx` is
+// captured by the post_recording_hook lambda; `local_cache` is reborn each
+// call so no state leaks between epochs.
+void on_post_recording(const HookCtx &hctx) {
+    std::map<std::vector<uint64_t>, Context> local_cache;
 
     // ---- Inputs ----
     niobium::detail::for_each_captured_input([&](const niobium::CapturedInputRecord &rec) {
@@ -497,7 +453,7 @@ void on_post_recording() {
         if (rec.name == "evalmult_key" || rec.name == "automorphism_key")
             return;
         try {
-            const auto *ctx = context_for_shape(ring_dim, rec.shape);
+            const auto *ctx = context_for_shape(hctx, local_cache, rec.shape);
             if (ctx == nullptr) {
                 haze::log_error("replay_bridge",
                                 "input '" + rec.name + "': no CC available for shape");
@@ -520,7 +476,7 @@ void on_post_recording() {
     niobium::detail::for_each_captured_output(
         [&](const std::string &name, const niobium::CapturedShape &shape) {
             try {
-                const auto *ctx = context_for_shape(ring_dim, shape);
+                const auto *ctx = context_for_shape(hctx, local_cache, shape);
                 if (ctx == nullptr) {
                     haze::log_error("replay_bridge",
                                     "output '" + name + "': no CC available for shape");
@@ -538,22 +494,21 @@ void on_post_recording() {
         });
 }
 
-// Push the CC through libnbfhetch's capture path so cereal registrations
-// resolve in libnbfhetch's TU. Clear the auto_capture_at_stop bootstrap
-// hook (haze has no bootstrap precompute) and install on_post_recording
-// as the post_recording_hook.
-void push_crypto_to_compiler(const CachedContext &ctx) {
-    // Plant program_name="haze" before capture writes cryptocontext.dat so
-    // it lands in the eventual haze/ program directory rather than the
-    // "niobium_trace" default fallback (libhaze's backend init runs later,
-    // on the first EpochSession, and sets the same value idempotently).
-    niobium::compiler().set_program_info("haze", "", "");
-    niobium::compiler().capture_crypto_context(ctx.cc);
+// Install the post-recording hook on niobium::compiler(), moving `hctx`
+// into the lambda closure. Also clears the auto_capture_at_stop bootstrap
+// hook (haze has no bootstrap precompute). The lambda lives until the next
+// install replaces it or niobium::compiler().reset() drops it.
+void install_post_recording_hook(HookCtx hctx) {
     niobium::compiler().set_auto_capture_at_stop(nullptr);
-    niobium::compiler().set_post_recording_hook(&on_post_recording);
-    // Snapshot the program directory while the compiler still holds it,
-    // so reset_bridge_caches's disk cleanup is ordering-independent.
-    g_program_dir = niobium::compiler().get_program_directory();
+    niobium::compiler().set_post_recording_hook([hctx = std::move(hctx)]() noexcept {
+        try {
+            on_post_recording(hctx);
+        } catch (const std::exception &e) {
+            haze::log_error("replay_bridge", std::string{"post_recording_hook threw: "} + e.what());
+        } catch (...) {
+            haze::log_error("replay_bridge", "post_recording_hook threw (unknown)");
+        }
+    });
 }
 
 } // namespace
@@ -565,21 +520,26 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return HAZE_ERROR_INVALID_VALUE;
 
     try {
-        // Seed the primary depth-0 CC used by SRP outputs and cryptocontext.dat;
-        // MRP / array CCs are added on-demand from on_post_recording.
-        std::vector<uint64_t> primary_moduli = {desired_modulus};
-        auto built = get_or_build_context_locked(ring_dim, primary_moduli);
+        auto built = build_context(ring_dim, {desired_modulus});
         if (!built)
             return to_haze_error(built.error());
 
-        g_primary_key = std::move(primary_moduli);
+        *picked_modulus = built->picked_moduli.front();
 
-        // capture_crypto_context populates ring/chain and serializes
-        // cryptocontext.dat inside libnbfhetch's TU; push_crypto_to_compiler
-        // also installs our post_recording_hook for stop()-time synthesis.
-        push_crypto_to_compiler(**built);
+        // Plant program_name="haze" before capture writes cryptocontext.dat
+        // so it lands in the eventual haze/ program directory rather than
+        // the "niobium_trace" default fallback (libhaze's backend init runs
+        // later, on the first EpochSession, and sets the same value
+        // idempotently). capture_crypto_context serializes cryptocontext.dat
+        // inside libnbfhetch's TU; subsequent Register*/re-init overwrites it.
+        niobium::compiler().set_program_info("haze", "", "");
+        niobium::compiler().capture_crypto_context(built->cc);
 
-        *picked_modulus = first_tower_modulus((*built)->cc);
+        install_post_recording_hook(HookCtx{
+            .ring_dim = ring_dim,
+            .primary = std::move(*built),
+            .primary_covers_all_shapes = false,
+        });
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
@@ -590,26 +550,72 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 }
 
 extern "C" void hazeReplayBridgeReset() noexcept {
-    // Drop the CC cache and primary key so prior (ring_dim, moduli) entries
-    // don't accumulate and stress OpenFHE's static CC<->Ciphertext registry;
-    // hooks are cleared separately via niobium::compiler().reset().
-    reset_bridge_caches();
+    // No in-memory state: the only thing to clean up is the on-disk
+    // remnants from prior epochs so addr-derived template/probe names from
+    // earlier tests don't pollute content-based MRP lookups. The
+    // post-recording-hook lambda is freed by niobium::compiler().reset(),
+    // which lifecycle.cpp::reset_all() invokes immediately after us.
+    //
+    // program_dir is queried live; reset_all() runs us before
+    // niobium::compiler().reset(), so the directory is still valid.
+    fs::path program_dir;
+    try {
+        program_dir = niobium::compiler().get_program_directory();
+    } catch (...) {
+        return;
+    }
+    if (program_dir.empty())
+        return;
+
+    try {
+        for (const auto *sub : {"serialized_probes", "ciphertext_templates"}) {
+            std::error_code ec;
+            fs::remove_all(program_dir / sub, ec);
+            if (ec) {
+                std::ostringstream body;
+                body << "hazeReplayBridgeReset: remove_all('" << (program_dir / sub).string()
+                     << "') failed: " << ec.message();
+                haze::log_error("replay_bridge", body.str());
+            }
+        }
+    } catch (const std::exception &e) {
+        haze::log_error("replay_bridge",
+                        std::string{"hazeReplayBridgeReset: disk cleanup threw: "} + e.what());
+    } catch (...) {
+        haze::log_error("replay_bridge", "hazeReplayBridgeReset: disk cleanup threw (unknown)");
+    }
 }
 
 namespace haze {
 
-HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
-    const lbcrypto::CryptoContext<DCRTPoly> &cc, const lbcrypto::KeyPair<DCRTPoly> &keys) noexcept {
-    if (!cc || !keys.publicKey || !keys.secretKey)
+HAZE_API hazeError_t
+hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &cc) noexcept {
+    if (!cc)
         return HAZE_ERROR_INVALID_VALUE;
     try {
         auto element_params = cc->GetCryptoParameters()->GetElementParams();
         if (!element_params || element_params->GetParams().empty())
             return HAZE_ERROR_INVALID_VALUE;
 
-        g_user_ctx =
-            CachedContext{.cc = cc, .keys = keys, .ring_dim = element_params->GetRingDimension()};
-        push_crypto_to_compiler(*g_user_ctx);
+        Context user_ctx;
+        user_ctx.ring_dim = element_params->GetRingDimension();
+        user_ctx.cc = cc;
+        user_ctx.picked_moduli.reserve(element_params->GetParams().size());
+        for (const auto &ep : element_params->GetParams())
+            user_ctx.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
+        // No user-requested base — the caller built the CC themselves and
+        // we never use Context::moduli when primary_covers_all_shapes is true.
+
+        // Plant program_name="haze" before capture writes cryptocontext.dat;
+        // see hazeReplayBridgeInitCryptoContext for the rationale.
+        niobium::compiler().set_program_info("haze", "", "");
+        niobium::compiler().capture_crypto_context(cc);
+
+        install_post_recording_hook(HookCtx{
+            .ring_dim = user_ctx.ring_dim,
+            .primary = std::move(user_ctx),
+            .primary_covers_all_shapes = true,
+        });
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         log_error("replay_bridge", std::string{"register_crypto_context threw: "} + e.what());
