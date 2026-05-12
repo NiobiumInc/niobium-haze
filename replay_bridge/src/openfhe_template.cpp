@@ -607,8 +607,8 @@ HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
         if (!element_params || element_params->GetParams().empty())
             return HAZE_ERROR_INVALID_VALUE;
 
-        g_user_ctx = CachedContext{
-            .cc = cc, .keys = keys, .ring_dim = element_params->GetRingDimension()};
+        g_user_ctx =
+            CachedContext{.cc = cc, .keys = keys, .ring_dim = element_params->GetRingDimension()};
         push_crypto_to_compiler(*g_user_ctx);
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
