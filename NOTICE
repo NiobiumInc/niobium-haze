@@ -110,6 +110,7 @@ LICENSE SUMMARY
   ICU: 1 component(s)
   ISC: 3 component(s)
   ISC AND BSD-Source-Code AND BSD-3-Clause AND BSD-2-Clause AND Zlib: 1 component(s)
+  Jam: 1 component(s)
   LGPL-2.0-only [COPYLEFT]: 1 component(s)
   LGPL-2.0-or-later AND LGPL-2.1-or-later: 1 component(s)
   LGPL-2.1-only [COPYLEFT]: 2 component(s)
@@ -174,7 +175,7 @@ LICENSE SUMMARY
   ZPL-2.1: 1 component(s)
   Zlib: 2 component(s)
   bzip2-1.0.6: 1 component(s)
-  curl: 3 component(s)
+  curl: 2 component(s)
   libtiff: 1 component(s)
   snprintf: 1 component(s)
 
@@ -372,7 +373,6 @@ COMPONENT ATTRIBUTIONS
     Copyright 2005 Google Inc.
     Copyright 2005 Google Inc. All Rights Reserved.
     Copyright 2005; Google Inc.
-    Copyright 2007; Google Inc.
     Copyright 2008; Google Inc.
     Copyright 2017 Google Inc.
     Copyright 2025; Google Inc.
@@ -745,7 +745,7 @@ COMPONENT ATTRIBUTIONS
     Copyright 2013; Google Inc.
     Copyright 2015; Google Inc.
     Copyright 2018; Google Inc.
-  License: Apache-2.0, curl
+  License: Apache-2.0
 
   json
   Version: v3.11.3
@@ -1057,21 +1057,9 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/seoklab/nurikit
   PURL: pkg:github/seoklab/nurikit
   Copyright:
-    Copyright 1998 -2024
-    Copyright 1999-2024 ; The Biopython Contributors
-    Copyright 2001-2002 Enthought; Inc. 2003-2024; SciPy Developers.
-    Copyright 2003-2012 Egervary Jeno Kombinatorikus Optimalizalasi
-    Copyright 2008 ; Google Inc.
-    Copyright 2009-2016 Pu Liu and Douglas L. Theobald
-    Copyright 2009-present ; Homebrew contributors
-    Copyright 2011 Ciyou Zhu; Richard Byrd; Jorge Nocedal and Jose Luis Morales.
-    Copyright 2016 Wenzel Jakob <wenzel.jakob@epfl.ch>; All rights reserved.
     Copyright 2017 Google Inc
-    Copyright 2023 Lab of Computational Biology and Biomolecular Engineering SNU
-    Copyright 2023 Lab of Computational Biology and Biomolecular Engineering; SNU
     Copyright 2007; Google Inc.
     Copyright 2017 Google Inc.
-    Copyright 2020; Google Inc.
   License: Apache-2.0
 
   objektinis-prog-class
@@ -1173,11 +1161,11 @@ COMPONENT ATTRIBUTIONS
     Copyright 2015 Google Inc. All rights reserved
     Copyright 2015 Google Inc.
     Copyright 2015 Google Inc. All rights reserved.
-  License: Apache-2.0
+  License: Apache-2.0, Jam
 
   platform/external/googletest
-  Version: aml_ads_351121120
-  Source: https://android.googlesource.com/platform/external/googletest/+archive/aml_ads_351121120.tar.gz
+  Version: aml_ads_351017080
+  Source: https://android.googlesource.com/platform/external/googletest/+archive/aml_ads_351017080.tar.gz
   PURL: pkg:googlesource/android/platform/external/googletest
   Copyright:
     Copyright 2008 Google Inc
@@ -10565,4 +10553,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+--- Jam ---
+
+License is hereby granted to use this software and distribute it freely,
+as long as this copyright notice is retained and modifications are
+clearly marked.
+
+ALL WARRANTIES ARE HEREBY DISCLAIMED.
+
 
