@@ -31,6 +31,7 @@ set -euo pipefail
 : "${NIOBIUM_COMPILER_ROOT:?NIOBIUM_COMPILER_ROOT must be set (path to niobium-compiler checkout)}"
 : "${OPENFHE_LIB:?OPENFHE_LIB must be set (OpenFHE shared-library dir)}"
 : "${HAZE_RUNS_DIR:?HAZE_RUNS_DIR must be set (per-test artifact root)}"
+: "${HAZE_TRANSPORT_TARGET:=FUNC_SIM}"
 
 NBCC_FHETCH_REPLAY="$NIOBIUM_COMPILER_ROOT/build/nbcc_fhetch_replay"
 
@@ -73,7 +74,10 @@ echo "    runs:   $HAZE_RUNS_DIR"
 
 # libnbfhetch's Compiler::replay() honors NBCC_FHETCH_REPLAY as an absolute
 # override before falling back to PATH lookup, which is what lets us bypass
-# the HTTP forwarder entirely.
+# the HTTP forwarder entirely. HAZE_TARGET must be a non-"local" value so
+# Compiler::replay actually dispatches to nbcc_fhetch_replay instead of
+# running the in-process simulator.
+HAZE_TARGET="$HAZE_TRANSPORT_TARGET" \
 NBCC_FHETCH_REPLAY="$NBCC_FHETCH_REPLAY" \
 DYLD_LIBRARY_PATH="$OPENFHE_LIB${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
 LD_LIBRARY_PATH="$OPENFHE_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
