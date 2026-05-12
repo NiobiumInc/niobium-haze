@@ -17,14 +17,15 @@
 namespace haze {
 
 // Register a caller-built CryptoContext + KeyPair for template synthesis;
-// the bridge uses these instead of building its own. Replaces
-// hazeReplayBridgeInitCryptoContext when the caller needs control over
-// scaling technique, chain length, or other CC parameters.
+// the bridge uses these instead of building its own. The CC's chain length
+// must be >= the largest residue count any output uses, and the caller is
+// responsible for aligning the CC's ring_dim with hazeSetRingDimension and
+// hazeSetCiphertextModulus(i, q) with the primes the chain carries.
 //
-// The CC's chain length must be >= the largest residue count any output
-// uses; smaller-residue templates are produced by trimming towers from a
-// fresh encryption. Callers are responsible for aligning
-// hazeSetCiphertextModulus(i, q) with the CC's chain.
+// Replaces any previously-registered CC (or one built via the C-entry
+// hazeReplayBridgeInitCryptoContext). Must be re-called after every
+// hazeDeviceReset, which clears the bridge's CC slot and the
+// post-recording hook.
 HAZE_API hazeError_t
 hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc,
                                       const lbcrypto::KeyPair<lbcrypto::DCRTPoly> &keys) noexcept;
