@@ -73,13 +73,10 @@ enum class BridgeError : uint8_t {
     OpenFheUnavailable,
 };
 
-// A built CC plus the moduli used to build it; no keys (the bridge never
-// calls Encrypt — CT shells go through CiphertextImpl + SetElements).
+// Just the CC and its ring_dim; moduli come from the captured shape at
+// hook time, picked primes are read off the CC when needed.
 struct Context {
     uint64_t ring_dim = 0;
-    // Empty on the Register* path where the caller hands in a finished CC.
-    std::vector<uint64_t> moduli;
-    std::vector<uint64_t> picked_moduli; // OpenFHE-picked primes per tower
     lbcrypto::CryptoContext<DCRTPoly> cc;
 };
 
@@ -120,14 +117,16 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     if (!element_params || element_params->GetParams().empty())
         return std::unexpected(BridgeError::OpenFheUnavailable);
 
-    Context entry;
-    entry.ring_dim = ring_dim;
-    entry.moduli = moduli;
-    entry.picked_moduli.reserve(element_params->GetParams().size());
-    for (const auto &ep : element_params->GetParams())
-        entry.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
-    entry.cc = std::move(cc);
-    return entry;
+    return Context{.ring_dim = ring_dim, .cc = std::move(cc)};
+}
+
+// First-tower modulus of `cc`'s chain. Throws on empty chain; build_context
+// already validates non-empty so this is defensive for the Register* path.
+uint64_t first_tower_modulus(const lbcrypto::CryptoContext<DCRTPoly> &cc) {
+    const auto &params = cc->GetCryptoParameters()->GetElementParams()->GetParams();
+    if (params.empty())
+        throw std::runtime_error("first_tower_modulus: empty element params");
+    return params.front()->GetModulus().ConvertToInt();
 }
 
 // Collapse BridgeError to the coarser C-ABI surface.
@@ -464,7 +463,7 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         if (!built)
             return to_haze_error(built.error());
 
-        *picked_modulus = built->picked_moduli.front();
+        *picked_modulus = first_tower_modulus(built->cc);
 
         // Plant program_name so cryptocontext.dat lands under haze/ rather
         // than the "niobium_trace" default; libhaze's later init is idempotent.
@@ -528,21 +527,15 @@ hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &c
         if (!element_params || element_params->GetParams().empty())
             return HAZE_ERROR_INVALID_VALUE;
 
-        Context user_ctx;
-        user_ctx.ring_dim = element_params->GetRingDimension();
-        user_ctx.cc = cc;
-        user_ctx.picked_moduli.reserve(element_params->GetParams().size());
-        for (const auto &ep : element_params->GetParams())
-            user_ctx.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
-        // Context::moduli stays empty — unused when primary_covers_all_shapes.
+        const uint64_t ring_dim = element_params->GetRingDimension();
 
         // Plant program_name; see Init for rationale.
         niobium::compiler().set_program_info("haze", "", "");
         niobium::compiler().capture_crypto_context(cc);
 
         install_post_recording_hook(HookCtx{
-            .ring_dim = user_ctx.ring_dim,
-            .primary = std::move(user_ctx),
+            .ring_dim = ring_dim,
+            .primary = Context{.ring_dim = ring_dim, .cc = cc},
             .primary_covers_all_shapes = true,
         });
         return HAZE_SUCCESS;
