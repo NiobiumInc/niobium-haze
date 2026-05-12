@@ -2,9 +2,9 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ============================================================
 
 Project: niobium-haze
-Generated: 2026-05-01
+Generated: 2026-05-12
 Tool: SCANOSS (snippet detection with License dataset)
-Components: 82
+Components: 81
 
 This file lists all third-party software components detected
 in this repository, along with their licenses and copyright
@@ -19,7 +19,7 @@ LICENSE SUMMARY
   AFL-2.1: 1 component(s)
   AFL-3.0 AND GPL-2.0-only AND AFL-2.1 AND GPL-2.0-or-later AND MIT AND GPL-1.0-or-later: 1 component(s)
   AGPL-3.0-only [COPYLEFT]: 1 component(s)
-  Apache-2.0: 19 component(s)
+  Apache-2.0: 18 component(s)
   Apache-2.0 AND Apache-2.0 AND OpenSSL: 1 component(s)
   Apache-2.0 WITH LLVM-exception: 3 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA: 3 component(s)
@@ -32,7 +32,7 @@ LICENSE SUMMARY
   BSD-2-Clause AND LGPL-2.1-only: 1 component(s)
   BSD-2-Clause-Darwin: 1 component(s)
   BSD-2-Clause-Patent: 1 component(s)
-  BSD-3-Clause: 34 component(s)
+  BSD-3-Clause: 35 component(s)
   BSD-3-Clause AND GPL-2.0-only AND BSD-3-Clause OR GPL-2.0-or-later AND GPL-1.0-or-later: 1 component(s)
   BSD-3-Clause AND ISC AND ISC AND MIT AND MIT: 1 component(s)
   BSD-3-Clause-LBNL: 1 component(s)
@@ -72,7 +72,7 @@ LICENSE SUMMARY
   CC-BY-SA-3.0-AT: 1 component(s)
   CC-BY-SA-4.0: 1 component(s)
   CC-PDDC: 1 component(s)
-  CC0-1.0: 3 component(s)
+  CC0-1.0: 2 component(s)
   CC0-1.0 OR Apache-2.0 AND CC0-1.0 AND Apache-2.0 AND CC0-1.0 AND Apache-2.0: 1 component(s)
   CDDL-1.0 [COPYLEFT]: 1 component(s)
   CDDL-1.1 [COPYLEFT]: 1 component(s)
@@ -132,7 +132,7 @@ LICENSE SUMMARY
   LPPL-1.3c: 1 component(s)
   Libpng: 1 component(s)
   Linux-syscall-note: 1 component(s)
-  MIT: 21 component(s)
+  MIT: 20 component(s)
   MIT AND Apache-2.0: 1 component(s)
   MIT AND GPL-2.0-only AND GPL-1.0-or-later AND MIT AND GPL-1.0-or-later AND MIT AND Boehm-GC AND GPL-1.0-or-later: 1 component(s)
   MIT AND GPL-3.0-only: 1 component(s)
@@ -147,7 +147,7 @@ LICENSE SUMMARY
   MIT-open-group AND X11: 1 component(s)
   MPL-1.0: 1 component(s)
   MPL-1.1 [COPYLEFT]: 1 component(s)
-  MPL-2.0 [COPYLEFT]: 3 component(s)
+  MPL-2.0 [COPYLEFT]: 2 component(s)
   MPL-2.0 AND Apache-2.0: 1 component(s)
   NCSA: 4 component(s)
   OFL-1.1 [COPYLEFT]: 1 component(s)
@@ -496,7 +496,7 @@ COMPONENT ATTRIBUTIONS
   License: GPL-3.0-only
 
   Fall_Semester_programing
-  Version: 72
+  Version: 67
   Source: https://github.com/Kirya23/Fall_Semester_programing
   PURL: pkg:github/kirya23/fall_semester_programing
   Copyright:
@@ -510,7 +510,7 @@ COMPONENT ATTRIBUTIONS
     Copyright 2024 Google Inc
     Copyright 2007; Google Inc.
     Copyright 2024 Google Inc.
-  License: Apache-2.0
+  License: Apache-2.0, BSD-3-Clause
 
   FreeCAD-LibPack
   Version: 3.1.1
@@ -793,10 +793,8 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/ianlancetaylor/libbacktrace
   Copyright:
     Copyright 2012-2016 Free Software Foundation Inc
-    Copyright 2012-2018 Free Software Foundation Inc
     Copyright 2012-2024 Free Software Foundation Inc
     Copyright (C) 2012-2016 Free Software Foundation; Inc.
-    Copyright (C) 2012-2018 Free Software Foundation; Inc.
     Copyright (C) 2012-2024 Free Software Foundation; Inc.
     Copyright (C) 2013-2024 Free Software Foundation; Inc.
     Copyright (C) 2015-2024 Free Software Foundation; Inc.
@@ -804,7 +802,6 @@ COMPONENT ATTRIBUTIONS
     Copyright (C) 2018-2024 Free Software Foundation; Inc.
     Copyright (C) 2020-2024 Free Software Foundation; Inc.
     Copyright (C) 2022-2024 Free Software Foundation; Inc.
-    Copyright (c) 2012-2018 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc. Adapted
     Copyright (c) 2013-2024 Free Software Foundation; Inc.
@@ -1054,14 +1051,6 @@ COMPONENT ATTRIBUTIONS
     Copyright 2013-2022 Niels Lohmann
     Copyright (c) 2013-2022 Niels Lohmann
   License: MIT
-
-  Nuparu
-  Version: v0.7.23.11
-  Source: https://github.com/betajippity/Nuparu
-  PURL: pkg:github/betajippity/nuparu
-  Copyright:
-    Copyright (c) 2014; Randolph Voorhies; Shane Grant
-  License: Apache-2.0, CC0-1.0, MIT, MPL-2.0
 
   nurikit
   Version: v0.1.0a14.post0
