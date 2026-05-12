@@ -17,6 +17,7 @@
 #include "scheme/ckksrns/ckksrns-ser.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -72,6 +73,18 @@ enum class BridgeError : uint8_t {
     InvalidModulus,
     OpenFheUnavailable,
 };
+
+// Flag the post-recording hook sets on any per-record failure; haze
+// drains it via hazeReplayBridgeTakeHookHadError after stop_epoch.
+std::atomic<bool> &hook_had_error_flag() noexcept {
+    static std::atomic<bool> flag{false};
+    return flag;
+}
+
+void log_hook_error(const std::string &body) noexcept {
+    haze::log_error("replay_bridge", body);
+    hook_had_error_flag().store(true, std::memory_order_relaxed);
+}
 
 // Just the CC and its ring_dim; moduli come from the captured shape at
 // hook time, picked primes are read off the CC when needed.
@@ -278,11 +291,10 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
     for (const auto &m : per_element_moduli)
         expected += m.size();
     if (per_residue_values.size() != expected) {
-        // Surfaced here so fill_native_poly's per-row warnings don't drown the cause.
         std::ostringstream body;
         body << "slice_array_values: per_residue_values.size()=" << per_residue_values.size()
              << " != sum of per_element_moduli sizes (" << expected << ")";
-        haze::log_error("replay_bridge", body.str());
+        throw std::runtime_error(body.str());
     }
     std::vector<std::vector<std::vector<uint64_t>>> out;
     out.reserve(per_element_moduli.size());
@@ -291,10 +303,7 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
         std::vector<std::vector<uint64_t>> row;
         row.reserve(elem_moduli.size());
         for (size_t i = 0; i < elem_moduli.size(); ++i) {
-            if (cursor < per_residue_values.size())
-                row.push_back(per_residue_values[cursor]);
-            else
-                row.emplace_back();
+            row.push_back(per_residue_values[cursor]);
             ++cursor;
         }
         out.push_back(std::move(row));
@@ -362,7 +371,7 @@ const Context *context_for_shape(const HookCtx &hctx,
                      << moduli.size() << ", element[" << k
                      << "].size()=" << shape.per_element_moduli[k].size()
                      << ") — array synthesis with non-uniform bases is not yet implemented";
-                haze::log_error("replay_bridge", body.str());
+                log_hook_error(body.str());
                 return nullptr;
             }
         }
@@ -375,9 +384,7 @@ const Context *context_for_shape(const HookCtx &hctx,
         std::ostringstream body;
         body << "context_for_shape: failed to build CC for ring_dim=" << hctx.ring_dim
              << " (BridgeError=" << static_cast<int>(built.error()) << ")";
-        haze::log_error("replay_bridge", body.str());
-        // nullptr lets the caller skip; falling back to primary would emit
-        // a 1-tower template for an N-tower output.
+        log_hook_error(body.str());
         return nullptr;
     }
     auto [ins, _] = local_cache.emplace(moduli, std::move(*built));
@@ -397,40 +404,32 @@ void on_post_recording(const HookCtx &hctx) {
         try {
             const auto *ctx = context_for_shape(hctx, local_cache, rec.shape);
             if (ctx == nullptr) {
-                haze::log_error("replay_bridge",
-                                "input '" + rec.name + "': no CC available for shape");
+                log_hook_error("input '" + rec.name + "': no CC available for shape");
                 return;
             }
             auto ct = synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
-                haze::log_error("replay_bridge",
-                                "write_ciphertext_input_bin failed for '" + rec.name + "'");
+                log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }
         } catch (const std::exception &e) {
-            haze::log_error("replay_bridge",
-                            "input bin synthesis for '" + rec.name + "' threw: " + e.what());
+            log_hook_error("input bin synthesis for '" + rec.name + "' threw: " + e.what());
         }
     });
 
-    // ---- Outputs ----
-    // Write one template per output; the replay path fills values.
     niobium::detail::for_each_captured_output(
         [&](const std::string &name, const niobium::CapturedShape &shape) {
             try {
                 const auto *ctx = context_for_shape(hctx, local_cache, shape);
                 if (ctx == nullptr) {
-                    haze::log_error("replay_bridge",
-                                    "output '" + name + "': no CC available for shape");
+                    log_hook_error("output '" + name + "': no CC available for shape");
                     return;
                 }
                 auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
-                    haze::log_error("replay_bridge",
-                                    "write_ciphertext_template failed for '" + name + "'");
+                    log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }
             } catch (const std::exception &e) {
-                haze::log_error("replay_bridge",
-                                "template synthesis for '" + name + "' threw: " + e.what());
+                log_hook_error("template synthesis for '" + name + "' threw: " + e.what());
             }
         });
 }
@@ -443,9 +442,9 @@ void install_post_recording_hook(HookCtx hctx) {
         try {
             on_post_recording(hctx);
         } catch (const std::exception &e) {
-            haze::log_error("replay_bridge", std::string{"post_recording_hook threw: "} + e.what());
+            log_hook_error(std::string{"post_recording_hook threw: "} + e.what());
         } catch (...) {
-            haze::log_error("replay_bridge", "post_recording_hook threw (unknown)");
+            log_hook_error("post_recording_hook threw (unknown)");
         }
     });
 }
@@ -485,6 +484,10 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 }
 
 extern "C" void hazeReplayBridgeReset() noexcept {
+    // Clear first so any early-return below still honors the "prior
+    // failures don't leak forward" contract.
+    hook_had_error_flag().store(false, std::memory_order_relaxed);
+
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
     // program_dir is queried live — reset_all() runs us before compiler().reset().
@@ -514,6 +517,10 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     } catch (...) {
         haze::log_error("replay_bridge", "hazeReplayBridgeReset: disk cleanup threw (unknown)");
     }
+}
+
+extern "C" int hazeReplayBridgeTakeHookHadError() noexcept {
+    return hook_had_error_flag().exchange(false, std::memory_order_relaxed) ? 1 : 0;
 }
 
 namespace haze {

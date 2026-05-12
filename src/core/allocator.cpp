@@ -83,8 +83,11 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
         if (map_.contains(addr)) {
             return addr;
         }
-        // Pool free list out of sync with the map — fall through to a
-        // fresh allocation. Should not happen in practice.
+        // pool_free_ entry without a map_ peer means internal state is
+        // corrupt; fail rather than mint a fresh DevAddr on top.
+        record_internal_error(HazeInternalError::PoolMapDesync,
+                              "DeviceAllocator::allocate (pool_free_ -> map_)");
+        return std::unexpected(HazeInternalError::PoolMapDesync);
     }
 
     // Fresh allocation: bump the address counter by exactly poly_bytes_.
@@ -251,20 +254,20 @@ hazeError_t DeviceAllocator::copy_to_host(void *dst, DevAddr src, size_t count) 
     return HAZE_SUCCESS;
 }
 
-hazeError_t DeviceAllocator::update_shadow(DevAddr addr, std::vector<uint64_t> &&values) noexcept {
+std::expected<void, HazeInternalError>
+DeviceAllocator::update_shadow(DevAddr addr, std::vector<uint64_t> &&values) noexcept {
     HazeLockGuard lock(mutex_);
     auto it = map_.find(addr);
     if (it == map_.end()) {
         record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::update_shadow");
-        return to_public_error(HazeInternalError::UnknownAddress);
+        return std::unexpected(HazeInternalError::UnknownAddress);
     }
     const size_t want_elems = elems_for_allocation(it->second);
     if (values.size() != want_elems) {
-        // Truncate-or-pad to allocation size, in uint64_t units.
         values.resize(want_elems, uint64_t{0});
     }
     shadow_data_.insert_or_assign(addr, std::move(values));
-    return HAZE_SUCCESS;
+    return {};
 }
 
 bool DeviceAllocator::is_device_pointer(const void *ptr) const noexcept {

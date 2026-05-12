@@ -35,6 +35,10 @@ HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64
 /// hazeDeviceReset; idempotent and safe to call before init.
 HAZE_API void hazeReplayBridgeReset(void) HAZE_NOEXCEPT;
 
+/// Return 1 iff the post-recording hook reported any failure since the
+/// last call, then reset the flag. Per-failure detail is in the log.
+HAZE_API int hazeReplayBridgeTakeHookHadError(void) HAZE_NOEXCEPT;
+
 #ifdef __cplusplus
 }
 #endif
