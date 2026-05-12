@@ -3,7 +3,8 @@
 // Integration test for the bridge's user-provided CryptoContext path.
 // Builds a CC with a non-default scaling technique (FIXEDAUTO) and feeds
 // it to the bridge via hazeReplayBridgeRegisterCryptoContext, then runs an
-// MRP add and verifies the per-residue result via D2H.
+// MRP add and verifies the per-residue result via D2H. No KeyPair is
+// constructed: the bridge synthesizes CT shells via SetElements, no Encrypt.
 
 #include "integration_helpers.hpp"
 #include "openfhe.h"
@@ -36,11 +37,14 @@ TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[inte
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
 
     // Caller-built CC with a scaling technique the bridge's default path
-    // (hazeReplayBridgeInitCryptoContext) would force to FIXEDMANUAL.
+    // (hazeReplayBridgeInitCryptoContext) would force to FIXEDMANUAL. The
+    // chain is deliberately deeper than the 3-residue MRP add below so the
+    // bridge's per-output `trim_towers_to` path is exercised — without that
+    // trim, MRP template synthesis would throw on the tower-count mismatch.
     CCParams<CryptoContextCKKSRNS> params;
     params.SetSecurityLevel(HEStd_NotSet);
     params.SetRingDim(static_cast<uint32_t>(kRingDim));
-    params.SetMultiplicativeDepth(2); // 3-tower chain
+    params.SetMultiplicativeDepth(4); // 5-tower chain; output uses 3
     params.SetFirstModSize(60);
     params.SetScalingModSize(59);
     params.SetScalingTechnique(FIXEDAUTO);
@@ -49,11 +53,8 @@ TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[inte
     cc->Enable(PKE);
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
-    auto keys = cc->KeyGen();
-    REQUIRE(keys.publicKey);
-    REQUIRE(keys.secretKey);
 
-    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(cc, keys) == HAZE_SUCCESS);
+    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(cc) == HAZE_SUCCESS);
 
     // Pull OpenFHE's picked primes out of the CC and seed haze's modulus
     // table with them so the trace and the templates use the same moduli.

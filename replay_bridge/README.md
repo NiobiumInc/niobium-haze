@@ -6,6 +6,15 @@ format and OpenFHE-serialized `Ciphertext<DCRTPoly>` files on disk.
 that links OpenFHE, so OpenFHE never leaks into libhaze's public surface
 or any downstream consumer.
 
+The bridge holds **no file-scope state**. Everything the post-recording
+hook needs is captured into the lambda installed on
+`niobium::compiler().set_post_recording_hook(...)`; that lambda is freed
+when the next install replaces it or when `niobium::compiler().reset()`
+drops it (via `hazeDeviceReset`). CT shells are built directly through
+`make_shared<CiphertextImpl<DCRTPoly>>(cc, ...) + SetElements`, so the
+bridge never calls `KeyGen` or `Encrypt` — no keys live anywhere, and
+the `Register*` API takes only a CryptoContext, not a KeyPair.
+
 ## Architecture
 
 Solid `-->` is a function call. Thick `==>` is a filesystem write
@@ -30,7 +39,7 @@ flowchart TB
 
   replay["Replay target (HAZE_TARGET):<br/>local → in-process simulator<br/>FUNC_SIM / FHE_SIM / FPGA_TRI → nbcc_fhetch_replay over HTTP"]:::backend
 
-  bridge ---|"all OpenFHE work:<br/>GenCryptoContext, KeyGen,<br/>build Ciphertext shells,<br/>DeserializeFromFile"| openfhe
+  bridge ---|"all OpenFHE work:<br/>GenCryptoContext,<br/>CiphertextImpl + DCRTPoly + SetElements,<br/>DeserializeFromFile"| openfhe
 
   app -->|"1. hazeReplayBridgeInitCryptoContext"| bridge
   bridge -->|"capture_crypto_context,<br/>set_post_recording_hook"| fhetch
@@ -76,7 +85,9 @@ half: the `fhetch::result(...)` overloads — defined in the bridge dylib
 with default visibility so libhaze's link line resolves them — read a
 probe `.ct` back as an `fhetch::` type.
 
-## Public C ABI
+## Public surface
+
+C ABI (in [`include/haze/replay_bridge.h`](include/haze/replay_bridge.h)):
 
 ```c
 hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
@@ -85,15 +96,29 @@ hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 void        hazeReplayBridgeReset(void);
 ```
 
+C++ (in [`include/haze/replay_bridge_cc.hpp`](include/haze/replay_bridge_cc.hpp)),
+for callers that want to supply their own CryptoContext (e.g. with a
+non-default scaling technique):
+
+```cpp
+namespace haze {
+hazeError_t hazeReplayBridgeRegisterCryptoContext(
+    const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc);
+}
+```
+
 Init must be called after every `hazeDeviceReset` (which fires
 `hazeReplayBridgeReset` for you);
 [`test/integration_helpers.hpp`](../test/integration_helpers.hpp)'s
-`setup_integration_compute_config` is the canonical caller.
+`setup_integration_compute_config` is the canonical caller. Register*
+replaces a prior Init/Register; the lambda holding its state lives until
+the next install or the next device reset.
 
 ## Source layout
 
 | Path                                       | What                                                  |
 | ------------------------------------------ | ----------------------------------------------------- |
 | `include/haze/replay_bridge.h`             | Two-symbol public C ABI.                              |
-| `src/openfhe_template.cpp`                 | Everything else: CC cache, shape dispatch (SRP/MRP/SRPArray/MRPArray), `on_post_recording` hook, `fhetch::result` overloads. |
+| `include/haze/replay_bridge_cc.hpp`        | C++ entry for caller-built `CryptoContext`s.          |
+| `src/openfhe_template.cpp`                 | Everything else: `build_context`, shape dispatch (SRP/MRP/SRPArray/MRPArray) via `SetElements`, the `on_post_recording` hook lambda, `fhetch::result` overloads. |
 | `CMakeLists.txt`                           | Builds `haze_replay_bridge` SHARED, linked PRIVATE into `libhaze`. |
