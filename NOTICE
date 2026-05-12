@@ -4,7 +4,7 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 Project: niobium-haze
 Generated: 2026-05-12
 Tool: SCANOSS (snippet detection with License dataset)
-Components: 81
+Components: 79
 
 This file lists all third-party software components detected
 in this repository, along with their licenses and copyright
@@ -27,7 +27,7 @@ LICENSE SUMMARY
   Artistic-1.0-Perl: 1 component(s)
   Artistic-1.0-Perl OR GPL-1.0-or-later: 1 component(s)
   Artistic-2.0: 1 component(s)
-  BSD-2-Clause: 9 component(s)
+  BSD-2-Clause: 8 component(s)
   BSD-2-Clause AND BSD-3-Clause: 1 component(s)
   BSD-2-Clause AND LGPL-2.1-only: 1 component(s)
   BSD-2-Clause-Darwin: 1 component(s)
@@ -96,7 +96,7 @@ LICENSE SUMMARY
   GPL-2.0-or-later [COPYLEFT]: 2 component(s)
   GPL-3.0-linking-exception: 1 component(s)
   GPL-3.0-linking-source-exception: 1 component(s)
-  GPL-3.0-only [COPYLEFT]: 4 component(s)
+  GPL-3.0-only [COPYLEFT]: 3 component(s)
   GPL-3.0-only AND BSD-3-Clause AND GPL-1.0-or-later AND GPL-2.0-only: 1 component(s)
   GPL-3.0-only AND GPL-1.0-or-later AND BSD-3-Clause: 1 component(s)
   GPL-3.0-or-later AND FSFAP: 1 component(s)
@@ -485,15 +485,6 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright (c) 2016-2023 Viktor Kirilov
   License: MPL-2.0
-
-  emacs
-  Version: emacs-24.3.90
-  Source: https://github.com/emacs-mirror/emacs
-  PURL: pkg:github/emacs-mirror/emacs
-  Copyright:
-    Copyright (C) 2002-2014 Free Software Foundation; Inc.
-    Copyright (c) 2002-2014 Free Software Foundation; Inc.
-  License: GPL-3.0-only
 
   Fall_Semester_programing
   Version: 67
@@ -1276,12 +1267,9 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/upx/upx
   PURL: pkg:github/upx/upx
   Copyright:
-    Copyright 1996-2014 Free Software Foundation Inc
     Copyright 1999-2017 Free Software Foundation Inc
     Copyright (C) 1994 X Consortium
-    Copyright (C) 1996-2014 Free Software Foundation; Inc.
     Copyright (C) 1999-2017 Free Software Foundation; Inc.
-    Copyright (c) 1996-2014 Free Software Foundation; Inc.
     Copyright (c) 1999-2017 Free Software Foundation; Inc.
   License: GPL-2.0-or-later
 
@@ -1324,15 +1312,6 @@ COMPONENT ATTRIBUTIONS
     Copyright 2018; Google Inc.
     Copyright 2019; Google LLC.
   License: Apache-2.0
-
-  xmlf90
-  Version: 1.5
-  Source: https://launchpad.net/xmlf90/trunk/1.5/+download/xmlf90-1.5.1.tar.gz
-  PURL: pkg:deb/xmlf90
-  Copyright:
-    Copyright (C) 2011-2017 Free Software Foundation; Inc.
-    Copyright (c) 2011-2017 Free Software Foundation; Inc.
-  License: BSD-2-Clause
 
 ------------------------------------------------------------
 
