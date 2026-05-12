@@ -159,7 +159,7 @@ get_or_build_context_locked(uint64_t ring_dim, const std::vector<uint64_t> &modu
     if (!element_params || element_params->GetParams().empty())
         return std::unexpected(BridgeError::OpenFheUnavailable);
 
-    CachedContext entry{cc, keys, ring_dim};
+    CachedContext entry{.cc = cc, .keys = keys, .ring_dim = ring_dim};
     auto [ins, _] = g_ctx_cache.emplace(moduli, std::move(entry));
     return &ins->second;
 }
@@ -607,7 +607,8 @@ HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
         if (!element_params || element_params->GetParams().empty())
             return HAZE_ERROR_INVALID_VALUE;
 
-        g_user_ctx = CachedContext{cc, keys, element_params->GetRingDimension()};
+        g_user_ctx = CachedContext{
+            .cc = cc, .keys = keys, .ring_dim = element_params->GetRingDimension()};
         push_crypto_to_compiler(*g_user_ctx);
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
