@@ -5,15 +5,9 @@
 // Inc. (a "License Agreement").
 //
 // haze_replay_bridge implementation: synthesize the CryptoContext, per-input
-// .bin files, and per-output templates the simulator / nbcc_fhetch_replay
-// consume to emit serialized_probes/<name>.ct. The bridge holds NO
-// file-scope state — everything the post-recording hook needs is captured
-// into its lambda at install time.
-//
-// Setup entries (Init/Register) are called from test setup outside any
-// lock; on_post_recording runs under EpochState::mutex_. No internal lock
-// is needed because setup completes before any compute begins and the
-// hook's state is owned lexically by libnbfhetch's post_recording_hook slot.
+// .bin files, and per-output templates the replay path consumes. Stateless —
+// the post-recording hook's state lives lexically inside its lambda; setup
+// runs outside any lock, on_post_recording runs under EpochState::mutex_.
 
 #include "ciphertext-ser.h"
 #include "common/log.hpp"
@@ -44,30 +38,25 @@
 #include <utility> // std::move, std::unreachable (C++23)
 #include <vector>
 
-// libnbfhetch internal helpers; forward-declared because compiler_internal.h
-// is private to libnbfhetch's src/ tree. The detail symbols route cereal
-// serialization through libnbfhetch's TU where polymorphic-type registrations
-// live (inlining the calls throws "unregistered polymorphic type" on macOS).
+// libnbfhetch internal helpers forward-declared here so cereal polymorphic-type
+// registrations resolve in libnbfhetch's TU (inlining throws on macOS).
 namespace niobium::detail {
 
-// Serialize a Ciphertext<DCRTPoly> shell to ciphertext_templates/<name>.template;
-// the replay path fills it and re-serializes as serialized_probes/<name>.ct.
+// Serialize a CT shell to ciphertext_templates/<name>.template for the
+// replay path to fill and re-serialize as serialized_probes/<name>.ct.
 bool write_ciphertext_template(const std::string &name,
                                const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct);
 
-// Serialize a populated Ciphertext<DCRTPoly> as the cereal-binary
-// {.bin, .ids} pair the compiler-side fhetch_driver expects for an
-// input named `name`.
+// Serialize a populated CT as the {.bin, .ids} pair fhetch_driver expects
+// for an input named `name`.
 bool write_ciphertext_input_bin(const std::string &name,
                                 const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct,
                                 const std::vector<uint64_t> &addr_ids);
 
-// Fires once per distinct fhetch::tag_input with a full record snapshot
-// (shape, addr_ids, per-residue values) so the bridge can dispatch on kind.
+// Iterate every distinct fhetch::tag_input record (shape, addr_ids, values).
 void for_each_captured_input(const std::function<void(const niobium::CapturedInputRecord &)> &cb);
 
-// Iterate captured outputs; the bridge dispatches on shape.kind to pick the
-// CT geometry (SRP=1×1, MRP=1×N, SRPArray=K×1, MRPArray=K×M_k).
+// Iterate every captured output; shape.kind picks the CT geometry.
 void for_each_captured_output(
     const std::function<void(const std::string &, const niobium::CapturedShape &)> &cb);
 
@@ -78,31 +67,24 @@ namespace {
 namespace fs = std::filesystem;
 using DCRTPoly = lbcrypto::DCRTPoly;
 
-// BridgeError surfaces specific failure modes from the C-ABI entry; lives
-// in this TU because there's exactly one caller and one implementation.
+// Granular failure variants for diagnostics; the C ABI collapses them.
 enum class BridgeError : uint8_t {
     InvalidModulus,
     OpenFheUnavailable,
 };
 
-// A built CryptoContext plus the moduli used to build it. Carries no keys —
-// the bridge does not call Encrypt anywhere; CT shells are built directly
-// via CiphertextImpl + DCRTPoly + SetElements.
+// A built CC plus the moduli used to build it; no keys (the bridge never
+// calls Encrypt — CT shells go through CiphertextImpl + SetElements).
 struct Context {
     uint64_t ring_dim = 0;
-    // User-requested base. Populated when the bridge built the CC itself
-    // (Init / context_for_shape per-shape build); left empty on the
-    // Register* path where the caller hands in a finished CC and we never
-    // consult the original moduli list.
+    // Empty on the Register* path where the caller hands in a finished CC.
     std::vector<uint64_t> moduli;
     std::vector<uint64_t> picked_moduli; // OpenFHE-picked primes per tower
     lbcrypto::CryptoContext<DCRTPoly> cc;
 };
 
-// Build a CryptoContext from (ring_dim, moduli). Pure function: no cache,
-// no globals. moduli.size() == 1 → depth-0 single-tower CC; >1 →
-// depth-(N-1) chain with one tower per residue. The caller decides whether
-// to reuse the result.
+// Pure builder: moduli.size()==1 yields a depth-0 single-tower CC, >1 yields
+// a depth-(N-1) chain with one tower per residue.
 std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
                                                   const std::vector<uint64_t> &moduli) {
     using namespace lbcrypto;
@@ -112,11 +94,10 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     CCParams<CryptoContextCKKSRNS> p;
     p.SetSecurityLevel(HEStd_NotSet); // toy: ring_dim is user-chosen
     p.SetRingDim(static_cast<uint32_t>(ring_dim));
-    // Chain depth d → d+1 towers in a freshly built CT, so SRP wants 0
-    // and MRP with N residues wants N-1; array shapes compose per-element.
+    // Chain depth d → d+1 towers per CT, matching one tower per residue.
     p.SetMultiplicativeDepth(static_cast<uint32_t>(moduli.size() - 1));
-    // First-mod bit-width tracks the primary modulus; scaling-mod tracks the
-    // smallest remaining modulus, minus 1 per OpenFHE's scalingModSize+1 rule.
+    // First-mod tracks the primary; scaling-mod tracks the smallest, -1
+    // per OpenFHE's scalingModSize+1 rule.
     const auto first_bits = static_cast<uint32_t>(std::bit_width(moduli.front()));
     p.SetFirstModSize(first_bits);
     if (moduli.size() == 1) {
@@ -127,10 +108,6 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
             min_bits = std::min(min_bits, static_cast<uint32_t>(std::bit_width(moduli[i])));
         p.SetScalingModSize(min_bits - 1);
     }
-    // FIXEDMANUAL: these CTs are structural shells, never EvalMult'd; default
-    // (FLEXIBLEAUTO) reshapes the chain during GenCryptoContext and breaks
-    // the bridge's depth-(N-1)→N-tower assumption for MRP templates.
-    p.SetScalingTechnique(FIXEDMANUAL);
 
     auto cc = GenCryptoContext(p);
     if (!cc)
@@ -153,8 +130,7 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     return entry;
 }
 
-// Map BridgeError → hazeError_t at the C ABI; granular variants exist for
-// diagnostics, but the public surface is intentionally coarser.
+// Collapse BridgeError to the coarser C-ABI surface.
 hazeError_t to_haze_error(BridgeError e) {
     switch (e) {
     case BridgeError::InvalidModulus:
@@ -165,12 +141,8 @@ hazeError_t to_haze_error(BridgeError e) {
     return HAZE_ERROR_LAUNCH_FAILURE;
 }
 
-// Drop trailing towers from `dcrt` so it carries exactly `target` towers.
-// `current < target` is a hard error: the CC was built too shallow for
-// this output and silently shrinking the shape would corrupt the trace.
-// `current > target` is the load-bearing path for the Register* user-CC
-// flow, where the caller's CC has a deep chain (depth N) and a smaller-
-// residue output (M < N+1 towers) needs its template trimmed.
+// Drop trailing towers from `dcrt` to exactly `target`; throws if the CC
+// chain is too shallow. Load-bearing for the Register* deep-CC path.
 void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
     auto current = dcrt.GetAllElements().size();
     if (current < target) {
@@ -182,12 +154,8 @@ void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
         dcrt.DropLastElements(current - target);
 }
 
-// Build a CT shell with K zero-initialized DCRTPoly elements. K==1 covers
-// SRP/MRP; K>=2 covers SRPArray/MRPArray. No Encrypt, no keys — the public
-// CiphertextImpl(cc, ...) constructor + SetElements is all we need, and
-// reconstruct_probes overwrites every NativePoly before re-serializing.
-// Each DCRTPoly is sized by the CC's full chain; per-output tower trim
-// happens in the synthesize_* dispatch via trim_towers_to.
+// Build a K-element CT shell sized by the CC's full chain; the
+// synthesize_* dispatch trims per output. No Encrypt, no keys.
 lbcrypto::Ciphertext<DCRTPoly> empty_ct_shell(const Context &ctx, size_t k_count = 1) {
     auto element_params = ctx.cc->GetCryptoParameters()->GetElementParams();
     std::vector<DCRTPoly> elements;
@@ -200,8 +168,7 @@ lbcrypto::Ciphertext<DCRTPoly> empty_ct_shell(const Context &ctx, size_t k_count
     return ct;
 }
 
-// Fill NativePoly `np` with `values` after validating the ring-dim
-// match. Logs and leaves the polynomial untouched on size mismatch.
+// Fill NativePoly `np` with `values`; logs and no-ops on ring-dim mismatch.
 void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &values,
                       const std::string &diag) {
     size_t n = np.GetParams()->GetRingDimension();
@@ -217,8 +184,7 @@ void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &val
     np.SetValues(nv, np.GetFormat());
 }
 
-// SRP entrypoint: build a 1-element / 1-tower CT and fill its NativePoly
-// with `values` (empty `values` produces a template).
+// SRP: 1-element / 1-tower CT; empty `values` produces a template.
 lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx,
                                                           const std::vector<uint64_t> &values) {
     auto ct = empty_ct_shell(ctx, /*k_count=*/1);
@@ -230,17 +196,13 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx,
     return ct;
 }
 
-// Build a 1-element / N-tower CT for an MRP output (empty
-// per_residue_values → template shell). The template's tower moduli are
-// OpenFHE's picks; reconstruct_probes overwrites them with the trace's
-// per-residue moduli before serializing the on-disk .ct.
+// MRP: 1-element / N-tower CT; empty per_residue_values produces a template
+// whose tower moduli reconstruct_probes overwrites from the trace.
 lbcrypto::Ciphertext<DCRTPoly>
 synthesize_haze_mrp_ciphertext(const Context &ctx, const std::vector<uint64_t> &moduli,
                                const std::vector<std::vector<uint64_t>> &per_residue_values) {
     auto ct = empty_ct_shell(ctx, /*k_count=*/1);
     auto &dcrt = ct->GetElements()[0];
-    // Trim trailing towers when the CC was built deeper than this output
-    // needs (Register* path with a deep user CC). Throws on under-sized.
     trim_towers_to(dcrt, moduli.size());
     if (per_residue_values.empty())
         return ct; // template — reconstruct_probes installs trace moduli.
@@ -258,9 +220,8 @@ synthesize_haze_mrp_ciphertext(const Context &ctx, const std::vector<uint64_t> &
     return ct;
 }
 
-// Build a K-element CT for SRPArray/MRPArray; heterogeneous per-element
-// bases are rejected since they'd need multi-CC stitching OpenFHE doesn't
-// support.
+// SRPArray/MRPArray: K-element CT; rejects heterogeneous per-element bases
+// (would need multi-CC stitching OpenFHE doesn't support).
 lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     const Context &ctx, const std::vector<std::vector<uint64_t>> &per_element_moduli,
     const std::vector<std::vector<std::vector<uint64_t>>> &per_element_values) {
@@ -280,8 +241,6 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     const size_t k_count = per_element_moduli.size();
 
     auto ct = empty_ct_shell(ctx, k_count);
-    // Trim each element's tower count to match the per-element residue
-    // count (Register* path with a deep user CC).
     for (auto &dcrt : ct->GetElements())
         trim_towers_to(dcrt, shared_moduli.size());
     if (per_element_values.empty())
@@ -312,7 +271,7 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
 }
 
 // Reshape flat per-residue values into per-element rows using
-// per_element_moduli sizes as boundaries; used by the array dispatch below.
+// per_element_moduli sizes as boundaries.
 std::vector<std::vector<std::vector<uint64_t>>>
 slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
                    const std::vector<std::vector<uint64_t>> &per_element_moduli) {
@@ -320,8 +279,7 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
     for (const auto &m : per_element_moduli)
         expected += m.size();
     if (per_residue_values.size() != expected) {
-        // Mismatch implies a bug in fhetch's CapturedInputRecord; surface
-        // it here so fill_native_poly's per-row warnings don't drown the cause.
+        // Surfaced here so fill_native_poly's per-row warnings don't drown the cause.
         std::ostringstream body;
         body << "slice_array_values: per_residue_values.size()=" << per_residue_values.size()
              << " != sum of per_element_moduli sizes (" << expected << ")";
@@ -345,8 +303,7 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
     return out;
 }
 
-// Build the CT shell for `shape`; empty per_residue_values yields a
-// template, non-empty fills with values flattened in encounter order.
+// Dispatch on shape.kind; empty per_residue_values yields a template.
 lbcrypto::Ciphertext<DCRTPoly>
 synthesize_for_shape(const Context &ctx, const niobium::CapturedShape &shape,
                      const std::vector<std::vector<uint64_t>> &per_residue_values) {
@@ -368,27 +325,19 @@ synthesize_for_shape(const Context &ctx, const niobium::CapturedShape &shape,
     std::unreachable();
 }
 
-// State the post-recording hook needs, captured into its lambda by Init or
-// Register. Lives lexically inside the std::function set on niobium::compiler()
-// and is freed when the next hook replaces it or niobium::compiler().reset()
-// is called.
+// State captured into the post-recording hook lambda by Init/Register;
+// freed when the next install replaces it or compiler().reset() is called.
 struct HookCtx {
     uint64_t ring_dim;
     Context primary;
-    // When true (Register* path), use `primary` for every captured shape and
-    // skip per-shape CC builds. When false (Init path), `primary` is only
-    // the fallback for shapes whose moduli we can't resolve; per-shape CCs
-    // get built lazily into the per-call local cache.
+    // Register* sets true → `primary` covers every shape, no per-shape build.
     bool primary_covers_all_shapes;
 };
 
-// Pick the CC for a shape. `local_cache` lives in `on_post_recording`'s
-// frame so successive inputs/outputs with the same moduli share one build;
-// the cache evaporates at hook exit. Heterogeneous arrays are rejected with
-// a logged nullptr so callers needn't distinguish "TODO" from "synthesis
-// failure". Modulus-0 falls back to `primary` (TODO(niobium-fhetch:
-// mod-map-tracking): fhetch's address_modulus_map doesn't register every
-// output before sync_fhetch_state_to_compiler).
+// Pick the CC for a shape; uses `local_cache` (alive only during one hook
+// call) to dedupe per-shape builds. Heterogeneous arrays log + return nullptr.
+// TODO(niobium-fhetch:mod-map-tracking): the modulus-0 fallback covers
+// outputs whose address_modulus_map entry isn't registered before sync.
 const Context *context_for_shape(const HookCtx &hctx,
                                  std::map<std::vector<uint64_t>, Context> &local_cache,
                                  const niobium::CapturedShape &shape) {
@@ -403,9 +352,7 @@ const Context *context_for_shape(const HookCtx &hctx,
         if (q == 0)
             return &hctx.primary;
     }
-    // Reject heterogeneous arrays here so the caller gets a structured
-    // nullptr (mirrors the check in synthesize_haze_array_ciphertext —
-    // change both together).
+    // Mirrors the heterogeneity check in synthesize_haze_array_ciphertext.
     if (shape.kind == niobium::CapturedKind::SRPArray ||
         shape.kind == niobium::CapturedKind::MRPArray) {
         for (size_t k = 1; k < shape.per_element_moduli.size(); ++k) {
@@ -430,26 +377,22 @@ const Context *context_for_shape(const HookCtx &hctx,
         body << "context_for_shape: failed to build CC for ring_dim=" << hctx.ring_dim
              << " (BridgeError=" << static_cast<int>(built.error()) << ")";
         haze::log_error("replay_bridge", body.str());
-        // Returning &hctx.primary here would silently emit a 1-tower template
-        // for an N-tower output; nullptr lets the caller skip this output.
+        // nullptr lets the caller skip; falling back to primary would emit
+        // a 1-tower template for an N-tower output.
         return nullptr;
     }
     auto [ins, _] = local_cache.emplace(moduli, std::move(*built));
     return &ins->second;
 }
 
-// LOAD-BEARING. Synthesizes the OpenFHE artifacts the replay path needs;
-// runs after stop_recording (so for_each_captured_* sees the final sets)
-// and before reconstruct (so cereal registrations resolve). `hctx` is
-// captured by the post_recording_hook lambda; `local_cache` is reborn each
-// call so no state leaks between epochs.
+// LOAD-BEARING. Runs between stop_recording and reconstruct to produce the
+// OpenFHE artifacts the replay path needs. local_cache is per-call.
 void on_post_recording(const HookCtx &hctx) {
     std::map<std::vector<uint64_t>, Context> local_cache;
 
     // ---- Inputs ----
     niobium::detail::for_each_captured_input([&](const niobium::CapturedInputRecord &rec) {
-        // Keys aren't shape-tagged yet (Tier 2 / FIDESlib); skip so we
-        // don't synthesize a key-shaped CT from per-poly tags.
+        // Keys aren't shape-tagged yet (Tier 2 / FIDESlib).
         if (rec.name == "evalmult_key" || rec.name == "automorphism_key")
             return;
         try {
@@ -471,8 +414,7 @@ void on_post_recording(const HookCtx &hctx) {
     });
 
     // ---- Outputs ----
-    // Auto-write a template per output; the replay path fills in values
-    // when emitting serialized_probes/<name>.ct.
+    // Write one template per output; the replay path fills values.
     niobium::detail::for_each_captured_output(
         [&](const std::string &name, const niobium::CapturedShape &shape) {
             try {
@@ -494,10 +436,8 @@ void on_post_recording(const HookCtx &hctx) {
         });
 }
 
-// Install the post-recording hook on niobium::compiler(), moving `hctx`
-// into the lambda closure. Also clears the auto_capture_at_stop bootstrap
-// hook (haze has no bootstrap precompute). The lambda lives until the next
-// install replaces it or niobium::compiler().reset() drops it.
+// Install the post-recording hook, moving `hctx` into the lambda closure;
+// clears the bootstrap-precompute hook haze never uses.
 void install_post_recording_hook(HookCtx hctx) {
     niobium::compiler().set_auto_capture_at_stop(nullptr);
     niobium::compiler().set_post_recording_hook([hctx = std::move(hctx)]() noexcept {
@@ -526,12 +466,8 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 
         *picked_modulus = built->picked_moduli.front();
 
-        // Plant program_name="haze" before capture writes cryptocontext.dat
-        // so it lands in the eventual haze/ program directory rather than
-        // the "niobium_trace" default fallback (libhaze's backend init runs
-        // later, on the first EpochSession, and sets the same value
-        // idempotently). capture_crypto_context serializes cryptocontext.dat
-        // inside libnbfhetch's TU; subsequent Register*/re-init overwrites it.
+        // Plant program_name so cryptocontext.dat lands under haze/ rather
+        // than the "niobium_trace" default; libhaze's later init is idempotent.
         niobium::compiler().set_program_info("haze", "", "");
         niobium::compiler().capture_crypto_context(built->cc);
 
@@ -550,14 +486,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 }
 
 extern "C" void hazeReplayBridgeReset() noexcept {
-    // No in-memory state: the only thing to clean up is the on-disk
-    // remnants from prior epochs so addr-derived template/probe names from
-    // earlier tests don't pollute content-based MRP lookups. The
-    // post-recording-hook lambda is freed by niobium::compiler().reset(),
-    // which lifecycle.cpp::reset_all() invokes immediately after us.
-    //
-    // program_dir is queried live; reset_all() runs us before
-    // niobium::compiler().reset(), so the directory is still valid.
+    // Disk-only cleanup so stale template/probe names from prior tests don't
+    // pollute MRP lookups; the hook lambda is freed by compiler().reset().
+    // program_dir is queried live — reset_all() runs us before compiler().reset().
     fs::path program_dir;
     try {
         program_dir = niobium::compiler().get_program_directory();
@@ -603,11 +534,9 @@ hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &c
         user_ctx.picked_moduli.reserve(element_params->GetParams().size());
         for (const auto &ep : element_params->GetParams())
             user_ctx.picked_moduli.push_back(ep->GetModulus().ConvertToInt());
-        // No user-requested base — the caller built the CC themselves and
-        // we never use Context::moduli when primary_covers_all_shapes is true.
+        // Context::moduli stays empty — unused when primary_covers_all_shapes.
 
-        // Plant program_name="haze" before capture writes cryptocontext.dat;
-        // see hazeReplayBridgeInitCryptoContext for the rationale.
+        // Plant program_name; see Init for rationale.
         niobium::compiler().set_program_info("haze", "", "");
         niobium::compiler().capture_crypto_context(cc);
 
@@ -628,9 +557,8 @@ hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &c
 } // namespace haze
 
 // ============================================================================
-// fhetch::result() overloads — read serialized_probes/<name>.ct as
-// fhetch::Polynomial / MRP / MRPArray. Marked default visibility because the
-// bridge dylib is built with CXX_VISIBILITY_PRESET=hidden.
+// fhetch::result() overloads — read serialized_probes/<name>.ct back as
+// fhetch types. Default visibility so libhaze resolves them out of the bridge.
 // ============================================================================
 
 #define NIOBIUM_FHETCH_RESULT_API __attribute__((visibility("default")))
@@ -639,13 +567,12 @@ namespace niobium::fhetch {
 
 namespace {
 
-// Convert OpenFHE's Format (utils/inttypes.h, global enum) to fhetch::Format.
+// Convert OpenFHE's global ::Format to fhetch::Format.
 inline Format openfhe_to_fhetch_format(::Format fmt) {
     return fmt == ::Format::COEFFICIENT ? Format::Coefficient : Format::Evaluation;
 }
 
-// Load <program_dir>/serialized_probes/<name>.ct as a Ciphertext<DCRTPoly>.
-// Returns nullptr on any I/O / parse error.
+// Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error.
 lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) {
     auto dir = niobium::compiler().get_program_directory();
     auto ct_path = dir / "serialized_probes" / (name + ".ct");
@@ -661,8 +588,7 @@ lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) {
     return ct;
 }
 
-// Pull a single residue's coefficients out of a NativePoly as
-// std::vector<uint64_t>.
+// Pull one residue's coefficients out of a NativePoly.
 std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly &np) {
     const auto &vals = np.GetValues();
     const size_t n = vals.GetLength();
