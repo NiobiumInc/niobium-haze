@@ -164,7 +164,17 @@ Lint and format use the in-tree `.clang-format` (LLVM, indent 4, column 100)
 and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.).
 
 Three CI gates must pass before a PR merges. Each one has a local
-equivalent — run them before pushing rather than after CI fails:
+equivalent — run them before pushing rather than after CI fails.
+
+**Run all three before claiming lint clean.** `cmake --build` enforces
+only compiler-level `-Werror`, a much smaller set than these gates. The
+local build will happily pass while clang-tidy fails on
+`misc-include-cleaner`, `modernize-use-designated-initializers`,
+`readability-isolate-declaration`, and other tidy-only categories. Same
+for `clangd --check`, which uses a grep post-pass for warnings.
+clang-format alone is not a substitute. New files you author need this
+most: existing files have history that filters out these patterns, fresh
+ones don't.
 
 1. `Check clang-format` — runs `clang-format --dry-run -Werror` over
    every first-party `.cpp` / `.hpp` / `.h` / `.c` under `src/`,
