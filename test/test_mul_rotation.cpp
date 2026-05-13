@@ -18,9 +18,9 @@
 
 namespace {
 
-constexpr uint64_t kRingDim = 128;
+constexpr uint64_t kRingDim = 2048;
 constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
-constexpr unsigned kLogRingDim = 7;
+constexpr unsigned kLogRingDim = 11;
 static_assert((1ULL << kLogRingDim) == kRingDim, "kLogRingDim must match log2(kRingDim)");
 
 constexpr uint64_t kQ0 = 576460752303415297ULL;
