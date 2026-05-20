@@ -131,6 +131,7 @@
               "-DBUILD_EXTRAS=OFF"
               "-DWITH_CPROBES=ON"
               "-DWITH_OPENMP=OFF"
+              "-DWITH_REDUCED_NOISE=ON"
             ];
             meta.platforms = pkgs.lib.platforms.unix;
           };

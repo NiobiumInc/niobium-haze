@@ -429,6 +429,10 @@ parent project (e.g., niobium-client) has already built it.
   See `integration_helpers.hpp::setup_integration_compute_config`.
 - Tests `cd` into a runs dir before recording so `program_dir`
   resolves under the build tree, not the source tree.
+- For new CKKS-op e2e tests, see `test/e2e/README.md` — the
+  `haze::test::ops::*` abstraction (`test/e2e/ops.hpp`) and the bridge
+  key-extract APIs (`hazeReplayBridgeExtractEvalMultKey`,
+  `…ExtractAutomorphismKey`) cover the canonical patterns.
 - `clang-format` / `clang-tidy` configs: in-tree `.clang-format` (LLVM,
   indent 4, column 100) and `.clang-tidy` (see file for the curated
   check list and the three `-Werror`-promoted checks).

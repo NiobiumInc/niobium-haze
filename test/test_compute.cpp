@@ -12,9 +12,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <niobium/compiler.h>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -1403,4 +1406,96 @@ TEST_CASE("MRP output round-trip: hazeMulMrp result via fhetch::result(name, MRP
     haze::test::free_all_residues(da);
     haze::test::free_all_residues(db);
     haze::test::free_all_residues(dst);
+}
+
+// ============================================================================
+// Regression: invalidate() must drop pending_mrp_groups_ entries for the freed
+// addr so the stale group can't surface (or get silently rebound on recycle).
+// ============================================================================
+
+TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[integration]") {
+    MrpDriver d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xCAFE1111ULL,
+                            /*seed_b=*/0xBABE2222ULL, add_mod);
+
+    auto d_a = haze::test::allocate_and_h2d_residues(a);
+    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    // dst is pre-allocated so the post-free hazeAddMrp does not recycle
+    // [intt_dst...] from pool_free_ before D2H triggers replay; otherwise
+    // lookup_or_create_locked rebinds them via shadow and hides the bug.
+    auto dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    auto intt_dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    d.intt(intt_dst, haze::test::to_const(d_a));
+
+    // Pre-fix: leaks a stale pending_mrp_groups_ entry. At the D2H below,
+    // replay_and_populate's group walk hits MissingPolyMapBinding ->
+    // HAZE_ERROR_LAUNCH_FAILURE because poly_map_[intt_dst...] are gone.
+    haze::test::free_all_residues(intt_dst);
+
+    d.add(dst, haze::test::to_const(d_a), haze::test::to_const(d_b));
+
+    check_against_per_residue_with_mrp(d, dst, expected);
+
+    haze::test::free_all_residues(d_a);
+    haze::test::free_all_residues(d_b);
+    haze::test::free_all_residues(dst);
+}
+
+TEST_CASE("hazeFree mid-recording does not leak MRP group through allocator recycle",
+          "[integration]") {
+    MrpDriver d;
+    d.setup();
+
+    std::vector<std::vector<uint64_t>> src1(MrpDriver::kNumResidues);
+    for (std::size_t i = 0; i < MrpDriver::kNumResidues; ++i)
+        src1[i] = haze::test::make_residue(d.base[i], 0xA1B2C300ULL + i, kRingDim);
+
+    std::vector<std::vector<uint64_t>> a;
+    std::vector<std::vector<uint64_t>> b;
+    std::vector<std::vector<uint64_t>> expected;
+    make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xCAFEBABEULL,
+                            /*seed_b=*/0xBADDCAFEULL, add_mod);
+
+    // Leftover .ct files from prior binary invocations would inflate the
+    // mrp-file count below; the bridge's own remove_all runs before the
+    // bridge is initialised on the first test, so wipe explicitly.
+    namespace fs = std::filesystem;
+    const auto probes_dir = niobium::compiler().get_program_directory() / "serialized_probes";
+    std::error_code ec;
+    fs::remove_all(probes_dir, ec);
+
+    auto d_src1 = haze::test::allocate_and_h2d_residues(src1);
+    auto ntt_dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    d.ntt(ntt_dst, haze::test::to_const(d_src1));
+
+    haze::test::free_all_residues(ntt_dst);
+
+    auto d_a = haze::test::allocate_and_h2d_residues(a);
+    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto recycled = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
+    d.add(recycled, haze::test::to_const(d_a), haze::test::to_const(d_b));
+
+    check_against_per_residue(d, recycled, expected);
+
+    // Pre-fix the leaked NTT group emits a second .ct under the original
+    // leading addr with garbled residues; with the fix only the AddMrp file lands.
+    REQUIRE(fs::exists(probes_dir));
+    std::size_t mrp_out_files = 0;
+    for (const auto &entry : fs::directory_iterator(probes_dir)) {
+        if (entry.is_regular_file() && entry.path().stem().string().starts_with("haze_mrp_out_"))
+            ++mrp_out_files;
+    }
+    REQUIRE(mrp_out_files == 1);
+
+    haze::test::check_mrp_against_per_residue(d.base, expected);
+
+    haze::test::free_all_residues(d_src1);
+    haze::test::free_all_residues(d_a);
+    haze::test::free_all_residues(d_b);
+    haze::test::free_all_residues(recycled);
 }
