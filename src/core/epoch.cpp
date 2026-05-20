@@ -64,6 +64,26 @@ bool EpochState::is_recording() noexcept {
 
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
+    // Drop any MRP group that names addr so a recycled allocation can't
+    // bind a stale group entry to a new polynomial at replay time.
+    if (auto rev_it = addr_to_mrp_groups_.find(addr); rev_it != addr_to_mrp_groups_.end()) {
+        auto group_names = std::move(rev_it->second);
+        addr_to_mrp_groups_.erase(rev_it);
+        for (const auto &name : group_names) {
+            auto group_it = pending_mrp_groups_.find(name);
+            for (DevAddr other : group_it->second.addrs) {
+                if (other == addr)
+                    continue;
+                auto o = addr_to_mrp_groups_.find(other);
+                if (o == addr_to_mrp_groups_.end())
+                    continue;
+                o->second.erase(name);
+                if (o->second.empty())
+                    addr_to_mrp_groups_.erase(o);
+            }
+            pending_mrp_groups_.erase(group_it);
+        }
+    }
     // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1), so
     // unconditional double-erase is simpler than tagging addrs by owner.
     poly_map_.erase(addr);
@@ -135,6 +155,8 @@ EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
         return {};
     it->second.addrs.assign(addrs.begin(), addrs.end());
     it->second.moduli.assign(moduli.begin(), moduli.end());
+    for (DevAddr a : addrs)
+        addr_to_mrp_groups_[a].insert(it->first);
     return {};
 }
 
@@ -250,6 +272,7 @@ void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
     pending_mrp_groups_.clear();
+    addr_to_mrp_groups_.clear();
     mrp_input_tagged_names_.clear();
     recording_ = false;
     input_counter_ = 0;

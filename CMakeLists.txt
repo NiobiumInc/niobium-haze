@@ -247,6 +247,18 @@ add_executable(haze_tests
   test/test_integration_helpers.cpp
   test/test_user_crypto_context.cpp
   test/test_zero_copy_promotion.cpp
+  test/test_bridge_key_extract.cpp
+  # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
+  # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
+  # `ops.cpp` is the shared per-mode operation library these tests build on.
+  test/e2e/ops.cpp
+  test/e2e/test_openfhe_addition_e2e.cpp
+  test/e2e/test_openfhe_sub_e2e.cpp
+  test/e2e/test_openfhe_scalar_mult_e2e.cpp
+  test/e2e/test_openfhe_mul_no_relin_e2e.cpp
+  test/e2e/test_openfhe_mul_e2e.cpp
+  test/e2e/test_openfhe_rotate_e2e.cpp
+  test/e2e/test_basic_operations_sequential_e2e.cpp
 )
 
 target_include_directories(haze_tests PRIVATE
@@ -269,6 +281,14 @@ target_link_libraries(haze_tests PRIVATE
   Catch2::Catch2WithMain
   ${_openfhe_core_lib}
 )
+
+# Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
+# initializers that omit fields with default member initializers. clang's
+# -Wmissing-field-initializers flags those omissions even though they're
+# well-defined — silence here so tests can use the clean form
+# `make_ctx({.mode=..., .mult_depth=..., ...})` without spelling out the
+# defaulted keyswitch-key fields they don't need.
+target_compile_options(haze_tests PRIVATE -Wno-missing-field-initializers)
 
 # Pass the FBC variant choice through to the test oracle.
 target_compile_definitions(haze_tests PRIVATE

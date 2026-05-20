@@ -3,11 +3,11 @@
     "niobium-fhetch-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1778605016,
-        "narHash": "sha256-O2KUt3mVZlqFf7V1F1l9llj9wepDQ4Eeaa0wIrQOEWw=",
+        "lastModified": 1779247542,
+        "narHash": "sha256-1wl7fYbh5JYHKcgXAILZljRAB2Vswetjz7Lvg0AL3NY=",
         "ref": "refs/heads/main",
-        "rev": "d111dd15dece72916a788593bdff60a6a5c3680a",
-        "revCount": 101,
+        "rev": "4ab3ee9190219c9cbf94ef4d94a5c6c8df794091",
+        "revCount": 108,
         "submodules": true,
         "type": "git",
         "url": "ssh://git@github.com/NiobiumInc/niobium-fhetch.git"

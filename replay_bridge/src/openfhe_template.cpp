@@ -104,20 +104,15 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     CCParams<CryptoContextCKKSRNS> p;
     p.SetSecurityLevel(HEStd_NotSet); // toy: ring_dim is user-chosen
     p.SetRingDim(static_cast<uint32_t>(ring_dim));
-    // Chain depth d → d+1 towers per CT, matching one tower per residue.
     p.SetMultiplicativeDepth(static_cast<uint32_t>(moduli.size() - 1));
-    // First-mod tracks the primary; scaling-mod tracks the smallest, -1
-    // per OpenFHE's scalingModSize+1 rule.
-    const auto first_bits = static_cast<uint32_t>(std::bit_width(moduli.front()));
-    p.SetFirstModSize(first_bits);
-    if (moduli.size() == 1) {
-        p.SetScalingModSize(first_bits - 1);
-    } else {
-        auto min_bits = static_cast<uint32_t>(std::bit_width(moduli[1]));
-        for (size_t i = 2; i < moduli.size(); ++i)
-            min_bits = std::min(min_bits, static_cast<uint32_t>(std::bit_width(moduli[i])));
-        p.SetScalingModSize(min_bits - 1);
-    }
+    // Bit-widths only need to satisfy PreviousPrime for this ring_dim — the
+    // actual primes are overwritten from the trace at reconstruct time.
+    // Use max bit-width so wide chains have enough headroom.
+    auto max_bits = static_cast<uint32_t>(std::bit_width(moduli.front()));
+    for (size_t i = 1; i < moduli.size(); ++i)
+        max_bits = std::max(max_bits, static_cast<uint32_t>(std::bit_width(moduli[i])));
+    p.SetFirstModSize(max_bits);
+    p.SetScalingModSize(max_bits - 1);
 
     auto cc = GenCryptoContext(p);
     if (!cc)
@@ -349,7 +344,19 @@ struct HookCtx {
 const Context *context_for_shape(const HookCtx &hctx,
                                  std::map<std::vector<uint64_t>, Context> &local_cache,
                                  const niobium::CapturedShape &shape) {
-    if (hctx.primary_covers_all_shapes)
+    auto shape_towers = [&]() -> std::size_t {
+        std::size_t max_n = 0;
+        for (const auto &m : shape.per_element_moduli)
+            max_n = std::max(max_n, m.size());
+        return max_n;
+    }();
+    const auto primary_chain_len =
+        hctx.primary.cc->GetCryptoParameters()->GetElementParams()->GetParams().size();
+
+    // Primary chain length is Q-only: Q-only shapes (including post-ModDown
+    // narrow ones) hit the primary; Q∥P shapes exceed it and fall through
+    // to per-shape build_context() even in Register-mode.
+    if (hctx.primary_covers_all_shapes && shape_towers <= primary_chain_len)
         return &hctx.primary;
     if (shape.per_element_moduli.empty())
         return &hctx.primary;
@@ -548,6 +555,168 @@ hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &c
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         log_error("replay_bridge", std::string{"register_crypto_context threw: "} + e.what());
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    } catch (...) {
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    }
+}
+
+namespace {
+
+// Per-tower uint64_t limbs of a DCRTPoly. OpenFHE keyswitch keys are
+// already EVALUATION format. Builds into a local, moves on success.
+bool extract_dcrtpoly_limbs(const lbcrypto::DCRTPoly &poly, std::size_t expected_towers,
+                            std::size_t ring_dim, std::vector<std::vector<uint64_t>> &out) {
+    if (poly.GetNumOfElements() != expected_towers)
+        return false;
+    std::vector<std::vector<uint64_t>> tmp(expected_towers, std::vector<uint64_t>(ring_dim));
+    for (std::size_t t = 0; t < expected_towers; ++t) {
+        const auto &np = poly.GetElementAtIndex(static_cast<usint>(t));
+        const auto &vals = np.GetValues();
+        if (vals.GetLength() != ring_dim)
+            return false;
+        for (std::size_t i = 0; i < ring_dim; ++i) {
+            tmp[t][i] = vals[i].template ConvertToInt<uint64_t>();
+        }
+    }
+    out = std::move(tmp);
+    return true;
+}
+
+// Walk an EvalKey (relin or rotation) into a HybridKeyswitchLimbs.
+// `diag_prefix` distinguishes the two paths in error messages.
+hazeError_t
+extract_keyswitch_key_into(const lbcrypto::CryptoContext<DCRTPoly> &cc,
+                           const std::shared_ptr<lbcrypto::EvalKeyImpl<DCRTPoly>> &eval_key,
+                           const char *diag_prefix, HybridKeyswitchLimbs &out) noexcept {
+    try {
+        const auto crypto_params =
+            std::dynamic_pointer_cast<lbcrypto::CryptoParametersRNS>(cc->GetCryptoParameters());
+        if (!crypto_params) {
+            log_error("replay_bridge",
+                      std::string{diag_prefix} + ": CryptoParameters is not CryptoParametersRNS");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        if (crypto_params->GetKeySwitchTechnique() != lbcrypto::HYBRID) {
+            log_error("replay_bridge",
+                      std::string{diag_prefix} + ": only HYBRID keyswitch is supported");
+            return HAZE_ERROR_NOT_SUPPORTED;
+        }
+        if (!eval_key) {
+            log_error("replay_bridge", std::string{diag_prefix} + ": null EvalKey");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        const auto element_params = crypto_params->GetElementParams();
+        const auto params_p = crypto_params->GetParamsP();
+        if (!element_params || !params_p) {
+            log_error("replay_bridge",
+                      std::string{diag_prefix} + ": missing Q or P element params");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        const std::size_t ring_dim = element_params->GetRingDimension();
+        if (ring_dim == 0)
+            return HAZE_ERROR_INVALID_VALUE;
+        const std::uint32_t num_part_q = crypto_params->GetNumPartQ();
+        if (num_part_q == 0) {
+            log_error("replay_bridge", std::string{diag_prefix} + ": numPartQ == 0");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        const auto &a_vec = eval_key->GetAVector();
+        const auto &b_vec = eval_key->GetBVector();
+        if (a_vec.size() != num_part_q || b_vec.size() != num_part_q) {
+            log_error("replay_bridge",
+                      std::string{diag_prefix} + ": aVector/bVector size != numPartQ");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+
+        // Build into a local; move into `out` only on full success.
+        HybridKeyswitchLimbs tmp;
+        const auto &q_params = element_params->GetParams();
+        const auto &p_params = params_p->GetParams();
+        tmp.q_base.reserve(q_params.size());
+        for (const auto &p : q_params)
+            tmp.q_base.push_back(p->GetModulus().ConvertToInt<uint64_t>());
+        tmp.p_base.reserve(p_params.size());
+        for (const auto &p : p_params)
+            tmp.p_base.push_back(p->GetModulus().ConvertToInt<uint64_t>());
+
+        const std::size_t qp_towers = tmp.q_base.size() + tmp.p_base.size();
+        tmp.a_limbs.resize(num_part_q);
+        tmp.b_limbs.resize(num_part_q);
+        for (std::uint32_t part = 0; part < num_part_q; ++part) {
+            if (!extract_dcrtpoly_limbs(a_vec[part], qp_towers, ring_dim, tmp.a_limbs[part])) {
+                log_error("replay_bridge", std::string{diag_prefix} + ": aVector[" +
+                                               std::to_string(part) +
+                                               "] tower-count or length mismatch");
+                return HAZE_ERROR_INVALID_VALUE;
+            }
+            if (!extract_dcrtpoly_limbs(b_vec[part], qp_towers, ring_dim, tmp.b_limbs[part])) {
+                log_error("replay_bridge", std::string{diag_prefix} + ": bVector[" +
+                                               std::to_string(part) +
+                                               "] tower-count or length mismatch");
+                return HAZE_ERROR_INVALID_VALUE;
+            }
+        }
+        out = std::move(tmp);
+        return HAZE_SUCCESS;
+    } catch (const std::exception &e) {
+        log_error("replay_bridge", std::string{diag_prefix} + " threw: " + e.what());
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    } catch (...) {
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    }
+}
+
+} // namespace
+
+HAZE_API hazeError_t hazeReplayBridgeExtractEvalMultKey(
+    const lbcrypto::CryptoContext<DCRTPoly> &cc, const lbcrypto::PrivateKey<DCRTPoly> &secretKey,
+    HybridKeyswitchLimbs &out) noexcept {
+    if (!cc || !secretKey)
+        return HAZE_ERROR_INVALID_VALUE;
+    try {
+        // GetEvalMultKeyVector throws when no key is registered for this tag.
+        const auto &eval_keys =
+            lbcrypto::CryptoContextImpl<DCRTPoly>::GetEvalMultKeyVector(secretKey->GetKeyTag());
+        if (eval_keys.empty()) {
+            log_error("replay_bridge", "ExtractEvalMultKey: no EvalMult key for secret-key tag '" +
+                                           secretKey->GetKeyTag() +
+                                           "' — was cc->EvalMultKeyGen(secretKey) called?");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        return extract_keyswitch_key_into(cc, eval_keys[0], "ExtractEvalMultKey", out);
+    } catch (const std::exception &e) {
+        log_error("replay_bridge", std::string{"ExtractEvalMultKey threw: "} + e.what());
+        return HAZE_ERROR_INVALID_VALUE;
+    } catch (...) {
+        return HAZE_ERROR_LAUNCH_FAILURE;
+    }
+}
+
+HAZE_API hazeError_t hazeReplayBridgeExtractAutomorphismKey(
+    const lbcrypto::CryptoContext<DCRTPoly> &cc, const lbcrypto::PrivateKey<DCRTPoly> &secretKey,
+    std::uint32_t auto_index, HybridKeyswitchLimbs &out) noexcept {
+    if (!cc || !secretKey)
+        return HAZE_ERROR_INVALID_VALUE;
+    try {
+        const auto key_map_ptr =
+            lbcrypto::CryptoContextImpl<DCRTPoly>::GetEvalAutomorphismKeyMapPtr(
+                secretKey->GetKeyTag());
+        if (!key_map_ptr) {
+            log_error("replay_bridge", "ExtractAutomorphismKey: no automorphism key map for tag '" +
+                                           secretKey->GetKeyTag() +
+                                           "' — was EvalAtIndexKeyGen called?");
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        const auto it = key_map_ptr->find(auto_index);
+        if (it == key_map_ptr->end()) {
+            log_error("replay_bridge", "ExtractAutomorphismKey: no key for automorphism index " +
+                                           std::to_string(auto_index));
+            return HAZE_ERROR_INVALID_VALUE;
+        }
+        return extract_keyswitch_key_into(cc, it->second, "ExtractAutomorphismKey", out);
+    } catch (const std::exception &e) {
+        log_error("replay_bridge", std::string{"ExtractAutomorphismKey threw: "} + e.what());
         return HAZE_ERROR_LAUNCH_FAILURE;
     } catch (...) {
         return HAZE_ERROR_LAUNCH_FAILURE;

@@ -106,6 +106,10 @@ class EpochState {
         std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
     };
     std::unordered_map<std::string, PendingMrpGroup> pending_mrp_groups_ HAZE_GUARDED_BY(mutex_);
+    // Reverse index addr → group names, kept in lockstep with
+    // pending_mrp_groups_ so invalidate() drops stale registrations in O(group_size).
+    std::unordered_map<DevAddr, std::unordered_set<std::string>>
+        addr_to_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // Dedup set for MRP input tags; reset by clear_state_locked.
     std::unordered_set<std::string> mrp_input_tagged_names_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;

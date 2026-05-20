@@ -88,17 +88,26 @@ cleanup() {
   # Clean haze's per-program directories (haze, haze_*, epoch_*) under the
   # runs dir. Leaves the runs dir itself in place so the make target's
   # caller can re-use it across invocations without recreating.
-  if [[ -d "$HAZE_RUNS_DIR" ]]; then
+  # Skip cleanup when HAZE_KEEP_RUNS=1 — useful for post-mortem debugging.
+  if [[ -d "$HAZE_RUNS_DIR" && "${HAZE_KEEP_RUNS:-0}" != "1" ]]; then
     rm -rf "$HAZE_RUNS_DIR"/haze "$HAZE_RUNS_DIR"/haze_* "$HAZE_RUNS_DIR"/epoch_* 2>/dev/null
   fi
 }
 trap cleanup EXIT
 
 echo "=== [1/2] starting fhetch_server (port $PORT) ==="
-PORT="$PORT" BIND=127.0.0.1 \
-NIOBIUM_COMPILER_ROOT="$NIOBIUM_COMPILER_ROOT" \
-NIOBIUM_COMPILER_BUILD="$NIOBIUM_COMPILER_ROOT/build" \
-"$FHETCH_SERVER_SH" > "$SERVER_LOG" 2>&1 &
+# Server's cwd determines where its working files (replay sources, etc.)
+# land. Anchor it to HAZE_RUNS_DIR so the repo isn't polluted on each
+# run — without this the per-request `nbcc_fhetch_replay_source_*` dirs
+# appear wherever the script was invoked from.
+mkdir -p "$HAZE_RUNS_DIR"
+(
+  cd "$HAZE_RUNS_DIR"
+  PORT="$PORT" BIND=127.0.0.1 \
+    NIOBIUM_COMPILER_ROOT="$NIOBIUM_COMPILER_ROOT" \
+    NIOBIUM_COMPILER_BUILD="$NIOBIUM_COMPILER_ROOT/build" \
+    "$FHETCH_SERVER_SH" > "$SERVER_LOG" 2>&1
+) &
 SERVER_PID=$!
 
 # Wait for /healthz, mirroring niobium-client/scripts/test_transport_mult.sh.
@@ -131,5 +140,7 @@ export NBCC_FHETCH_SERVER="http://127.0.0.1:$PORT"
 mkdir -p "$HAZE_RUNS_DIR"
 cd "$HAZE_RUNS_DIR"
 
+: "${HAZE_TEST_FILTER:=[integration]}"
+echo "[test_haze_integration.sh] filter=$HAZE_TEST_FILTER"
 LD_LIBRARY_PATH="$OPENFHE_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$HAZE_TEST_BIN" "[integration]"
+  "$HAZE_TEST_BIN" "$HAZE_TEST_FILTER"

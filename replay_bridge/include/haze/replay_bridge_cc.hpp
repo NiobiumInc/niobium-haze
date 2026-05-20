@@ -11,27 +11,47 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <haze/haze_types.h>
 #include <openfhe.h>
+#include <vector>
 
 namespace haze {
 
-// Register a caller-built CryptoContext for template synthesis; the bridge
-// uses this CC for every captured shape instead of building its own
-// per-shape chain. The CC's chain length must be >= the largest residue
-// count any output uses (smaller-residue templates are trimmed from this
-// chain), and the caller is responsible for aligning the CC's ring_dim
-// with hazeSetRingDimension and hazeSetCiphertextModulus(i, q) with the
-// primes the chain carries.
-//
-// Replaces any previously-registered CC (or one built via the C-entry
-// hazeReplayBridgeInitCryptoContext). Must be re-called after every
-// hazeDeviceReset, which clears the bridge's CC slot and the
-// post-recording hook.
-//
-// No KeyPair argument: the bridge builds CT shells directly via
-// CiphertextImpl + SetElements (no Encrypt), so keys are never consulted.
+// Register a caller-built CryptoContext for template synthesis; replaces
+// any previously-registered CC. Caller aligns the CC's ring_dim with
+// hazeSetRingDimension and hazeSetCiphertextModulus(i, q). Must be
+// re-called after every hazeDeviceReset.
 HAZE_API hazeError_t hazeReplayBridgeRegisterCryptoContext(
     const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc) noexcept;
+
+// Hybrid-keyswitch key limbs over Q∥P, in OpenFHE's EVALUATION format.
+// Used for both EvalMult (relin) and EvalAutomorphism (rotation) keys —
+// both share aVector/bVector layout. Partition layout is implicit
+// (FIDESlib's `RawKeySwitchKey` convention): numPartQ = a_limbs.size(),
+// alpha = (|Q| + numPartQ - 1) / numPartQ, partition `i` covers
+// `q_base[i*alpha .. min((i+1)*alpha, |Q|))`.
+struct HybridKeyswitchLimbs {
+    // [part][tower][coeff]. tower covers `q_base` then `p_base`.
+    std::vector<std::vector<std::vector<uint64_t>>> a_limbs;
+    std::vector<std::vector<std::vector<uint64_t>>> b_limbs;
+
+    std::vector<uint64_t> q_base;
+    std::vector<uint64_t> p_base;
+};
+
+// Requires cc->EvalMultKeyGen(secretKey) to have been called and HYBRID
+// keyswitch. `out` is overwritten only on HAZE_SUCCESS.
+HAZE_API hazeError_t hazeReplayBridgeExtractEvalMultKey(
+    const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc,
+    const lbcrypto::PrivateKey<lbcrypto::DCRTPoly> &secretKey, HybridKeyswitchLimbs &out) noexcept;
+
+// Requires cc->EvalAtIndexKeyGen for `auto_index` to have been called and
+// HYBRID keyswitch. `out` is overwritten only on HAZE_SUCCESS.
+HAZE_API hazeError_t hazeReplayBridgeExtractAutomorphismKey(
+    const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc,
+    const lbcrypto::PrivateKey<lbcrypto::DCRTPoly> &secretKey, std::uint32_t auto_index,
+    HybridKeyswitchLimbs &out) noexcept;
 
 } // namespace haze
