@@ -228,6 +228,42 @@ TEST_CASE("phase2b clone_ct of trace-output preserves polynomial bytes",
     assert_rns_equal(ctx, haze_clone, ref, "clone_of_trace_output");
 }
 
+TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
+          "[integration][e2e]") {
+    // Larger Chebyshev test exercising more recursion depth before
+    // attempting the full bootstrap's degree-80 Chebyshev.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx();
+
+    const std::vector<double> x_vals = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(x_vals, 1, 1);
+    auto ct_in = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    std::vector<double> coeffs(13);
+    for (std::size_t i = 0; i < coeffs.size(); ++i)
+        coeffs[i] = 1.0 / (1 << (i + 1));
+    auto ref = ctx.cc->EvalChebyshevSeries(ct_in, coeffs, -1.0, 1.0);
+    REQUIRE(ref);
+    auto haze_ct = ops::h2d_ct(ctx, ct_in);
+    auto haze_out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+    REQUIRE(haze_out.towers() == ref->GetElements()[0].GetNumOfElements());
+    const auto haze_bytes = ops::d2h_ct(ctx, haze_out);
+    auto ct_haze = ref->Clone();
+    ops::inject_ct(ctx, haze_bytes, ct_haze);
+    Plaintext pt_haze, pt_ref;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_haze, &pt_haze);
+    ctx.cc->Decrypt(ctx.keys.secretKey, ref, &pt_ref);
+    pt_haze->SetLength(x_vals.size());
+    pt_ref->SetLength(x_vals.size());
+    const auto haze_slots = pt_haze->GetRealPackedValue();
+    const auto ref_slots = pt_ref->GetRealPackedValue();
+    for (std::size_t i = 0; i < x_vals.size(); ++i) {
+        INFO("slot " << i << " haze=" << haze_slots[i] << " ref=" << ref_slots[i]);
+        REQUIRE_THAT(haze_slots[i], Catch::Matchers::WithinAbs(ref_slots[i], 1e-2));
+    }
+}
+
 TEST_CASE("phase3 eval_chebyshev_series slot-level vs cc->EvalChebyshevSeries",
           "[integration][e2e]") {
     // Slot-level near-equivalence (not bit-exact). FIDESlib doesn't
@@ -248,11 +284,6 @@ TEST_CASE("phase3 eval_chebyshev_series slot-level vs cc->EvalChebyshevSeries",
 
     auto haze_ct = ops::h2d_ct(ctx, ct_in);
     auto haze_out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
-    std::cerr << "haze_out towers=" << haze_out.towers()
-              << " NSD=" << haze_out.noise_scale_deg()
-              << " | ref towers=" << ref->GetElements()[0].GetNumOfElements()
-              << " NSD=" << ref->GetNoiseScaleDeg()
-              << " SF=" << ref->GetScalingFactor() << "\n";
     REQUIRE(haze_out.towers() == ref->GetElements()[0].GetNumOfElements());
     const auto haze_bytes = ops::d2h_ct(ctx, haze_out);
 
