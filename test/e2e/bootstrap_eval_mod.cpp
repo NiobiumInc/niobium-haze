@@ -255,9 +255,18 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
     // reduction (matches OpenFHE FIXEDAUTO's AdjustLevelsAndDepthInPlace
     // behavior when only the tower count differs, not the noise scale).
     const std::size_t target_towers = T.back().towers();
+    // Align both towers AND NSDs — OpenFHE's
+    // AdjustLevelsAndDepthInPlace (FIXEDAUTO) bumps lower-NSD T[i] via
+    // EvalMultCoreInPlace(T[i], 1.0). Without this NSD alignment,
+    // eval_partial_linear_wsum produces mixed-NSD products (T[k-1] at
+    // NSD=2 vs T[0] at NSD=1 → mult_by_const gives NSD=3 and NSD=2
+    // respectively) and the sum's NSD is wrong by 1.
+    const std::uint32_t target_nsd = T.back().noise_scale_deg();
     for (std::uint32_t i = 0; i + 1 < k; ++i) {
         if (T[i].towers() > target_towers)
             T[i] = level_reduce(ctx, std::move(T[i]), T[i].towers() - target_towers);
+        if (T[i].noise_scale_deg() < target_nsd)
+            T[i] = mult_by_const(ctx, T[i], 1.0);
     }
 
     std::vector<Ct> T2;
@@ -387,16 +396,20 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
         return add_const(ctx, clone_ct(ctx, T2[m - 1]), divcs->q.front() / 2.0);
     }();
 
-    // result = cu_t2 * qu (rescale) + su
-    Ct result = mult(ctx, cu_t2, qu);
-    result = rescale(ctx, result);
-    Ct su_aligned = std::move(su);
-    if (su_aligned.towers() > result.towers())
-        su_aligned = level_reduce(ctx, std::move(su_aligned),
-                                  su_aligned.towers() - result.towers());
-    else if (result.towers() > su_aligned.towers())
-        result = level_reduce(ctx, std::move(result), result.towers() - su_aligned.towers());
-    return add(ctx, result, su_aligned);
+    // result = cu_t2 * qu + su. Mirrors OpenFHE's:
+    //   auto result = cc->EvalMult(cu, qu);
+    //   cc->ModReduceInPlace(result);  // no-op in FIXEDAUTO
+    //   cc->EvalAddInPlace(result, su);
+    // EvalMult in FIXEDAUTO calls AdjustForMult which rescales both to
+    // NSD=1 first, so the mult output is NSD=2 (not NSD=4 from raw mult).
+    auto rp = adjust_for_mult(ctx, std::move(cu_t2), std::move(qu));
+    Ct result = mult(ctx, rp.a, rp.b);
+    // FIXEDAUTO ModReduceInPlace is a no-op; only rescale in FIXEDMANUAL.
+    if (ctx.mode == lbcrypto::FIXEDMANUAL)
+        result = rescale(ctx, result);
+    // EvalAddInPlace adjusts levels — mirror via adjust_for_add.
+    auto ap = adjust_for_add(ctx, std::move(result), std::move(su));
+    return add(ctx, ap.a, ap.b);
 }
 
 // Top-level Chebyshev series evaluation.
