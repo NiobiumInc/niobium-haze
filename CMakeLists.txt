@@ -252,6 +252,11 @@ add_executable(haze_tests
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.
   test/e2e/ops.cpp
+  test/e2e/bootstrap.cpp
+  test/e2e/bootstrap_keys.cpp
+  test/e2e/bootstrap_mod_raise.cpp
+  test/e2e/bootstrap_linear_transform.cpp
+  test/e2e/bootstrap_eval_mod.cpp
   test/e2e/test_openfhe_addition_e2e.cpp
   test/e2e/test_openfhe_sub_e2e.cpp
   test/e2e/test_openfhe_scalar_mult_e2e.cpp
@@ -259,6 +264,7 @@ add_executable(haze_tests
   test/e2e/test_openfhe_mul_e2e.cpp
   test/e2e/test_openfhe_rotate_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
+  test/e2e/test_openfhe_bootstrap_e2e.cpp
 )
 
 target_include_directories(haze_tests PRIVATE

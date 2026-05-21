@@ -1,0 +1,92 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+//
+// First-class CKKS bootstrap built atop the haze::test::ops:: ciphertext
+// abstraction. Records only haze primitive opcodes, so the eventual
+// FIDESlib port inherits bootstrap without a backend-specific path.
+// BootstrapKeys is built once and reused across every bootstrap() call;
+// the FHETCH trace tags each underlying polynomial as input exactly once.
+
+#pragma once
+
+#include "ops.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <openfhe.h>
+#include <vector>
+
+namespace haze::test::ops {
+
+enum class BootstrapVariant : std::uint8_t {
+    // ModRaise → CoeffsToSlots → EvalMod → SlotsToCoeffs.
+    Standard,
+    // SlotsToCoeffs → ModRaise → CoeffsToSlots → EvalMod (thin / StC-first).
+    // Requires additional input levels relative to Standard; Phase 2.
+    StCFirst,
+};
+
+struct BootstrapParams {
+    std::uint32_t slots{};
+    std::vector<std::uint32_t> level_budget;
+    std::vector<std::uint32_t> dim1;
+    std::uint32_t correction_factor{};
+    std::uint32_t chebyshev_degree{};
+    std::uint32_t double_angle_iterations{};
+    // Cyclotomic order M = 2 * ring_dim; cached so conjugate() doesn't re-query ctx.
+    std::uint64_t cyclotomic_order{};
+};
+
+// Owns the haze device allocations for every bootstrap input that is
+// invariant across calls. void* addresses are stable for its lifetime.
+struct BootstrapKeys {
+    haze::HybridKeyswitchLimbs relin_key;
+    haze::HybridKeyswitchLimbs conjugation_key;
+    // Keyed by automorphism index, matching OpenFHE's FindBootstrapRotationIndices.
+    std::map<std::uint32_t, RotationKeyEntry> rotation_keys;
+    std::vector<Allocs> cts_matrices; // U0hatT rows per BSGS level
+    std::vector<Allocs> stc_matrices; // U0 rows per BSGS level
+    std::vector<Allocs> eval_mod_coeffs;
+    // PModq[t] = (product of P-moduli) mod q_t. Needed by KeySwitchExt
+    // to multiply c0/c1 by P before zero-extending the P-portion.
+    std::vector<std::uint64_t> p_mod_q;
+    BootstrapParams params;
+};
+
+// Drives cc->EvalBootstrapSetup + EvalBootstrapKeyGen, then h2d's each
+// artifact into haze memory once. Not yet implemented — see follow-up task.
+BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
+                                  const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc,
+                                  const lbcrypto::PrivateKey<lbcrypto::DCRTPoly> &sk,
+                                  std::uint32_t slots,
+                                  const std::vector<std::uint32_t> &level_budget = {1, 1});
+
+// Top-level bootstrap. Body is a switch over `variant` composing the helpers below.
+Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct,
+             BootstrapVariant variant = BootstrapVariant::Standard);
+
+// Extend `ct` from its current Q-basis to the full extended chain.
+Ct mod_raise(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
+
+// Baby-step / giant-step linear transform; caller passes bk.cts_matrices or bk.stc_matrices.
+Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
+                    const std::vector<Allocs> &matrices, const Ct &ct);
+
+// Chebyshev approximation of sin(2πKx)/(2πK) followed by `r` double-angle iterations.
+Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
+
+// ---------------------------------------------------------------------------
+// Phase helpers exposed for unit-tests. Each mirrors a specific OpenFHE op
+// and is verified bit-exact independently. Internal to eval_mod otherwise.
+// ---------------------------------------------------------------------------
+
+Ct add_const_for_test(const OpCtx &ctx, const Ct &ct, double scalar);
+Ct mult_by_const_for_test(const OpCtx &ctx, const Ct &ct, double scalar);
+Ct mult_int_scalar_for_test(const OpCtx &ctx, const Ct &ct, std::uint64_t scalar);
+Ct mult_monomial_for_test(const OpCtx &ctx, const Ct &ct, std::uint32_t power);
+Ct square_ct_for_test(const OpCtx &ctx, const Ct &ct);
+void apply_double_angle_for_test(const OpCtx &ctx, Ct &ct, std::uint32_t num_iter);
+Ct eval_chebyshev_series_for_test(const OpCtx &ctx, const Ct &x,
+                                  const std::vector<double> &coefficients);
+
+} // namespace haze::test::ops

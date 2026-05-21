@@ -38,6 +38,10 @@ class Allocs {
     bool empty() const noexcept { return ptrs_.empty(); }
     void *operator[](std::size_t i) const noexcept { return ptrs_[i]; }
 
+    // Free the trailing pointers beyond `new_size`, resize the internal
+    // vector. No-op when new_size >= current size.
+    void truncate(std::size_t new_size) noexcept;
+
     std::vector<const void *> as_const() const;
 
   private:
@@ -102,6 +106,8 @@ struct CtxParams {
     bool with_relin_key = false;
     // Slot rotation indices (OpenFHE convention: positive = left).
     std::vector<std::int32_t> rotate_indices;
+    // Explicit ring dimension. 0 = let OpenFHE auto-derive.
+    std::uint32_t ring_dim = 0;
 };
 
 // Construct CC + keys + bridge state. Caller must hazeDeviceReset first.
@@ -130,11 +136,26 @@ void inject_ct(const OpCtx &ctx, const CtBytes &src,
 // Public-API CKKS operations
 // ---------------------------------------------------------------------------
 
+// Deep-copy via per-tower D2D. Needed because Ct is move-only and the
+// Chebyshev recursion references the same input across multiple paths.
+Ct clone_ct(const OpCtx &ctx, const Ct &src);
+
+// Drop `levels` trailing towers from `ct` — pure metadata reduction, no
+// ModDown arithmetic, no allocation. Mirrors OpenFHE's LevelReduceInPlace.
+// Distinct from ops::rescale, which does INTT/ModDown/NTT and consumes a
+// multiplicative level. Use this for tower-count alignment before ops
+// that require matching towers (add, sub, mult_pt rows).
+Ct level_reduce(const OpCtx &ctx, Ct ct, std::size_t levels);
+
 Ct add(const OpCtx &ctx, const Ct &a, const Ct &b);
 Ct sub(const OpCtx &ctx, const Ct &a, const Ct &b);
 
 // CKKS-broadcast plaintext (constant across slots within each tower).
 Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt);
+
+// Multiply by a per-tower polynomial plaintext. Used by linear-transform
+// rows where mult_scalar's constant-broadcast contract doesn't apply.
+Ct mult_pt(const OpCtx &ctx, const Ct &a, const Allocs &pt_chain);
 
 // Tensor + hybrid-keyswitch relin. FLEXIBLEAUTOEXT pre-rescales both inputs.
 Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b);
@@ -145,5 +166,11 @@ Ct rescale(const OpCtx &ctx, const Ct &a);
 
 // slot_index must be in CtxParams::rotate_indices.
 Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index);
+
+// Rotate by an explicit automorphism index, bypassing the slot-index map.
+Ct rotate_with_key(const OpCtx &ctx, const Ct &a, const RotationKeyEntry &entry);
+
+// Complex conjugation: automorphism at index 2N-1.
+Ct conjugate(const OpCtx &ctx, const Ct &a, const haze::HybridKeyswitchLimbs &conj_key);
 
 } // namespace haze::test::ops

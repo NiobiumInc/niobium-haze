@@ -334,6 +334,14 @@ std::vector<const void *> Allocs::as_const() const {
     return {ptrs_.begin(), ptrs_.end()};
 }
 
+void Allocs::truncate(std::size_t new_size) noexcept {
+    while (ptrs_.size() > new_size) {
+        if (ptrs_.back() != nullptr)
+            (void)hazeFree(ptrs_.back());
+        ptrs_.pop_back();
+    }
+}
+
 void Allocs::free_all() noexcept {
     // Swallow INVALID_VALUE so a stale post-reset addr doesn't trip the
     // destructor; hazeFree(nullptr) is already a no-op.
@@ -356,6 +364,10 @@ OpCtx make_ctx(const CtxParams &params) {
     cc_params.SetScalingModSize(params.scaling_mod_size);
     cc_params.SetBatchSize(params.batch_size);
     cc_params.SetScalingTechnique(params.mode);
+    if (params.ring_dim != 0) {
+        cc_params.SetRingDim(params.ring_dim);
+        cc_params.SetSecurityLevel(lbcrypto::HEStd_NotSet);
+    }
     ctx.cc = GenCryptoContext(cc_params);
     REQUIRE(ctx.cc);
     ctx.cc->Enable(PKE);
@@ -499,6 +511,35 @@ void inject_ct(const OpCtx &ctx, const CtBytes &src,
     inject_elem(1, src.c1);
 }
 
+Ct level_reduce(const OpCtx & /*ctx*/, Ct ct, std::size_t levels) {
+    REQUIRE(levels <= ct.towers());
+    const std::size_t new_towers = ct.towers() - levels;
+    Allocs c0 = std::move(ct.c0());
+    Allocs c1 = std::move(ct.c1());
+    c0.truncate(new_towers);
+    c1.truncate(new_towers);
+    return Ct{std::move(c0), std::move(c1), new_towers, ct.noise_scale_deg()};
+}
+
+Ct clone_ct(const OpCtx &ctx, const Ct &src) {
+    // hazeMemcpy(D2D) is a silent no-op on trace-output Allocs — the
+    // allocator's copy_d2d looks up shadow_data_[src] which doesn't
+    // exist for compute-produced polynomials. Use hazeAutomorphMrp with
+    // index=1 (identity permutation) — it emits sr_automorph_eval with
+    // the COPY_MODULUS sentinel, which the simulator replays as a
+    // value-preserving copy. Workaround until haze's D2D path is fixed
+    // to emit the proper sr_addps-with-COPY_MODULUS IR.
+    std::vector<uint64_t> base(ctx.q_base.begin(),
+                               ctx.q_base.begin() + static_cast<std::ptrdiff_t>(src.towers()));
+    Allocs c0(src.towers(), ctx.poly_bytes);
+    Allocs c1(src.towers(), ctx.poly_bytes);
+    REQUIRE(hazeAutomorphMrp(c0.data(), src.c0().as_const().data(), 1, base.data(), base.size(),
+                             nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAutomorphMrp(c1.data(), src.c1().as_const().data(), 1, base.data(), base.size(),
+                             nullptr) == HAZE_SUCCESS);
+    return Ct{std::move(c0), std::move(c1), src.towers(), src.noise_scale_deg()};
+}
+
 Ct add(const OpCtx &ctx, const Ct &a, const Ct &b) {
     REQUIRE(a.towers() == b.towers());
     std::vector<uint64_t> base(ctx.q_base.begin(),
@@ -613,19 +654,16 @@ Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
 }
 
 Ct rescale(const OpCtx &ctx, const Ct &a) {
-    REQUIRE(ctx.mode == lbcrypto::FIXEDMANUAL);
+    // INTT;ModDown;NTT one tower off the end. FIXEDMANUAL callers use this
+    // explicitly; FIXEDAUTO callers (bootstrap helpers) use it to align
+    // mult_pt-emitted ciphertexts with OpenFHE's post-EvalMult level shape.
     REQUIRE(a.towers() >= 2);
     Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
     Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
     return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};
 }
 
-Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index) {
-    const auto it = ctx.rotation_keys.find(slot_index);
-    REQUIRE(it != ctx.rotation_keys.end());
-    const auto &entry = it->second;
-    const std::uint32_t auto_index = entry.auto_index;
-
+Ct rotate_with_key(const OpCtx &ctx, const Ct &a, const RotationKeyEntry &entry) {
     KsContribution ks = hybrid_keyswitch(ctx, a.c1(), a.towers(), entry.limbs);
 
     std::vector<uint64_t> base(ctx.q_base.begin(),
@@ -636,12 +674,45 @@ Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index) {
     Allocs out_c0(a.towers(), ctx.poly_bytes);
     Allocs out_c1(a.towers(), ctx.poly_bytes);
     REQUIRE(hazeAutomorphMrp(out_c0.data(), ks_c0.as_const().data(),
-                             static_cast<std::uint64_t>(auto_index), base.data(), base.size(),
+                             static_cast<std::uint64_t>(entry.auto_index), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeAutomorphMrp(out_c1.data(), ks_c1.as_const().data(),
-                             static_cast<std::uint64_t>(auto_index), base.data(), base.size(),
+                             static_cast<std::uint64_t>(entry.auto_index), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(), a.noise_scale_deg()};
+}
+
+Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index) {
+    const auto it = ctx.rotation_keys.find(slot_index);
+    REQUIRE(it != ctx.rotation_keys.end());
+    return rotate_with_key(ctx, a, it->second);
+}
+
+Ct conjugate(const OpCtx &ctx, const Ct &a, const haze::HybridKeyswitchLimbs &conj_key) {
+    const std::uint32_t auto_index = static_cast<std::uint32_t>((2 * ctx.ring_dim) - 1);
+    RotationKeyEntry entry{.auto_index = auto_index, .limbs = conj_key};
+    return rotate_with_key(ctx, a, entry);
+}
+
+Ct mult_pt(const OpCtx &ctx, const Ct &a, const Allocs &pt_chain) {
+    // Allow pt_chain to be shorter than ct's towers — bootstrap's CtS/StC
+    // plaintexts are encoded at the level they're consumed, which is below
+    // the ct's level on entry. We mult only the leading towers and emit a
+    // ct at that reduced tower count.
+    REQUIRE(pt_chain.size() > 0);
+    REQUIRE(pt_chain.size() <= a.towers());
+    const std::size_t towers = pt_chain.size();
+
+    std::vector<uint64_t> base(ctx.q_base.begin(),
+                               ctx.q_base.begin() + static_cast<std::ptrdiff_t>(towers));
+    Allocs out_c0(towers, ctx.poly_bytes);
+    Allocs out_c1(towers, ctx.poly_bytes);
+    REQUIRE(hazeMulMrp(out_c0.data(), a.c0().as_const().data(), pt_chain.as_const().data(),
+                       base.data(), base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMulMrp(out_c1.data(), a.c1().as_const().data(), pt_chain.as_const().data(),
+                       base.data(), base.size(), nullptr) == HAZE_SUCCESS);
+    // Caller is responsible for any rescale dictated by ctx.mode.
+    return {std::move(out_c0), std::move(out_c1), towers, a.noise_scale_deg() + 1};
 }
 
 } // namespace haze::test::ops
