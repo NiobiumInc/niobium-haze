@@ -342,7 +342,17 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
 }
 
 // Recursive Paterson-Stockmeyer Chebyshev series evaluation. Mirrors
-// niobium's InnerEvalChebyshevPS_NB (ckksrns-advancedshe.cpp:666).
+// the UPSTREAM (non-fused) OpenFHE InnerEvalChebyshevPS at
+// ckksrns-advancedshe.cpp:849 — separate passes for qu / su / cu, each
+// loading T[0..k-1] independently.
+//
+// Note: OpenFHE built with WITH_CPROBES=ON (our case) dispatches
+// EvalChebyshevSeries to the niobium-fused InnerEvalChebyshevPS_NB
+// instead (advancedshe.cpp:666), which uses one shared sweep across
+// the baby steps and per-accumulator ModReduces. This upstream
+// variant produces correct slot-level output (phase 3 / 4 pass) but
+// diverges byte-for-byte from cc->EvalChebyshevSeries with CPROBES on.
+// inner_eval_chebyshev_ps_nb below mirrors the NB variant for parity.
 Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<double> &coefficients,
                            std::uint32_t k, std::uint32_t m, const std::vector<Ct> &T,
                            const std::vector<Ct> &T2) {
@@ -461,6 +471,208 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
     return add(ctx, ap.a, ap.b);
 }
 
+// Mirror of niobium::AccumBabyStep (advancedshe.cpp:654): if scalar is
+// non-zero, mult Ti by it and accumulate into `acc`. acc receives the
+// first non-zero term verbatim, subsequent terms are added via plain
+// add (NSDs all match T[i].nsd+1 because mult_by_const bumps NSD by 1
+// and EvalAddInPlaceNoCheck doesn't change NSD).
+void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &Ti, double scalar) {
+    if (std::abs(scalar) <= 1e-14)
+        return;
+    Ct tmp = mult_by_const(ctx, Ti, scalar);
+    if (acc.has_value())
+        *acc = add(ctx, *acc, tmp);
+    else
+        acc.emplace(std::move(tmp));
+}
+
+// Niobium-fused PS Chebyshev recursion. Byte-exact mirror of
+// niobium::InnerEvalChebyshevPS_NB (ckksrns-advancedshe.cpp:666). The
+// fused base case (q_base && s_base) does ONE sweep over T[0..k-1]
+// accumulating into acc_q / acc_s / acc_c simultaneously, then
+// ModReduces each accumulator independently — this is the path
+// cc->EvalChebyshevSeries dispatches to under WITH_CPROBES=ON, and
+// the source of the 4-tower-budget gap that the upstream variant
+// above did not match.
+//
+// The non-fused (recursive) branch matches OpenFHE's
+// ORIGINAL PATH (advancedshe.cpp:783-836). Same primitives as the
+// upstream variant but with EvalPartialLinearWSum-style ordering: the
+// final EvalAddInPlace(qu, EvalPartialLinearWSum) happens AFTER
+// add_const(qu, q_free/2), and su's add_const happens AFTER the
+// partial-linear-wsum (opposite of the upstream variant's order).
+Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
+                              const std::vector<double> &coefficients,
+                              std::uint32_t k, std::uint32_t m,
+                              const std::vector<Ct> &T, const std::vector<Ct> &T2) {
+    using namespace lbcrypto;
+    const std::uint32_t k2m2k = k * (1u << (m - 1)) - k;
+
+    std::vector<double> Tkm(k2m2k + k + 1, 0.0);
+    Tkm.back() = 1.0;
+    auto divqr = LongDivisionChebyshev(coefficients, Tkm);
+
+    auto &r2 = divqr->r;
+    if (std::uint32_t n = poly_degree(r2); static_cast<std::int32_t>(k2m2k - n) <= 0) {
+        r2.resize(n + 1);
+        r2[k2m2k] -= 1.0;
+    } else {
+        r2.resize(k2m2k + 1, 0.0);
+        r2.back() = -1.0;
+    }
+    auto divcs = LongDivisionChebyshev(r2, divqr->q);
+
+    auto &s2 = divcs->r;
+    s2.resize(k2m2k + 1, 0.0);
+    s2.back() = 1.0;
+
+    const bool q_base = (poly_degree(divqr->q) <= k);
+    const bool s_base = (poly_degree(s2) <= k);
+
+    std::optional<Ct> cu;
+    Ct qu = clone_ct(ctx, T[k - 1]); // placeholder; reassigned below
+    Ct su = clone_ct(ctx, T[k - 1]);
+
+    if (q_base && s_base) {
+        // Fused base case.
+        qu = clone_ct(ctx, T[k - 1]);
+        const std::uint32_t q_lead =
+            static_cast<std::uint32_t>(std::log2(std::abs(divqr->q.back())));
+        for (std::uint32_t i = 0; i < q_lead; ++i)
+            qu = mult_int_scalar(ctx, qu, 2);
+
+        su = clone_ct(ctx, T[k - 1]);
+
+        const double q_free = divqr->q.front();
+        divqr->q.resize(k);
+        const std::uint32_t nq = poly_degree(divqr->q);
+
+        const double s_free = s2.front();
+        s2.resize(k);
+        const std::uint32_t ns = poly_degree(s2);
+
+        const std::uint32_t nc = poly_degree(divcs->q);
+
+        const std::uint32_t max_deg = std::max({nq, ns, (nc > 1) ? nc : 0u});
+        std::optional<Ct> acc_q, acc_s, acc_c;
+        for (std::uint32_t i = 0; i < max_deg; ++i) {
+            if (i < nq)
+                accum_baby_step(ctx, acc_q, T[i], divqr->q[i + 1]);
+            if (i < ns)
+                accum_baby_step(ctx, acc_s, T[i], s2[i + 1]);
+            if (nc > 1 && i < nc)
+                accum_baby_step(ctx, acc_c, T[i], divcs->q[i + 1]);
+        }
+
+        if (acc_q.has_value()) {
+            *acc_q = rescale(ctx, *acc_q);
+            auto ap = adjust_for_add(ctx, std::move(qu), std::move(*acc_q));
+            qu = add(ctx, ap.a, ap.b);
+        }
+        if (acc_s.has_value()) {
+            *acc_s = rescale(ctx, *acc_s);
+            auto ap = adjust_for_add(ctx, std::move(su), std::move(*acc_s));
+            su = add(ctx, ap.a, ap.b);
+        }
+
+        qu = add_const(ctx, qu, q_free / 2.0);
+        su = add_const(ctx, su, s_free / 2.0);
+        // OpenFHE: cc->LevelReduceInPlace(su, nullptr) — drop one level.
+        if (su.towers() >= 2)
+            su = level_reduce(ctx, std::move(su), 1);
+
+        if (nc == 1) {
+            if (std::abs(divcs->q[1] - 1.0) > 1e-14) {
+                Ct c = mult_by_const(ctx, T[0], divcs->q[1]);
+                c = rescale(ctx, std::move(c));
+                cu = std::move(c);
+            } else {
+                cu = clone_ct(ctx, T[0]);
+            }
+        } else if (acc_c.has_value()) {
+            *acc_c = rescale(ctx, *acc_c);
+            cu = std::move(*acc_c);
+        }
+
+        if (cu.has_value()) {
+            *cu = add_const(ctx, *cu, divcs->q.front() / 2.0);
+            // OpenFHE: LevelReduceInPlace(cu, nullptr, (T2[m-1].level -
+            // cu.level) / cd). cd = 1.
+            if (cu->towers() > T2[m - 1].towers())
+                *cu = level_reduce(ctx, std::move(*cu), cu->towers() - T2[m - 1].towers());
+        }
+    } else {
+        // Original recursive path (mirrors OpenFHE 783-836).
+        if (poly_degree(divqr->q) > k) {
+            qu = inner_eval_chebyshev_ps_nb(ctx, x, divqr->q, k, m - 1, T, T2);
+        } else {
+            qu = clone_ct(ctx, T[k - 1]);
+            const std::uint32_t limit =
+                static_cast<std::uint32_t>(std::log2(std::abs(divqr->q.back())));
+            for (std::uint32_t i = 0; i < limit; ++i)
+                qu = mult_int_scalar(ctx, qu, 2);
+            qu = add_const(ctx, qu, divqr->q.front() / 2.0);
+
+            divqr->q.resize(k);
+            if (std::uint32_t n = poly_degree(divqr->q); n > 0) {
+                Ct extra = eval_partial_linear_wsum(ctx, T, divqr->q, n);
+                Ct extra_r = rescale(ctx, extra);
+                auto ap = adjust_for_add(ctx, std::move(qu), std::move(extra_r));
+                qu = add(ctx, ap.a, ap.b);
+            }
+        }
+
+        if (poly_degree(s2) > k) {
+            su = inner_eval_chebyshev_ps_nb(ctx, x, s2, k, m - 1, T, T2);
+        } else {
+            su = clone_ct(ctx, T[k - 1]);
+            s2.resize(k);
+            if (std::uint32_t n = poly_degree(s2); n > 0) {
+                Ct extra = eval_partial_linear_wsum(ctx, T, s2, n);
+                Ct extra_r = rescale(ctx, extra);
+                auto ap = adjust_for_add(ctx, std::move(su), std::move(extra_r));
+                su = add(ctx, ap.a, ap.b);
+            }
+            su = add_const(ctx, su, s2.front() / 2.0);
+            if (su.towers() >= 2)
+                su = level_reduce(ctx, std::move(su), 1);
+        }
+
+        if (std::uint32_t n = poly_degree(divcs->q); n >= 1) {
+            Ct c = [&]() -> Ct {
+                if (n == 1) {
+                    if (std::abs(divcs->q[1] - 1.0) > 1e-14)
+                        return rescale(ctx, mult_by_const(ctx, T[0], divcs->q[1]));
+                    return clone_ct(ctx, T[0]);
+                }
+                return rescale(ctx, eval_partial_linear_wsum(ctx, T, divcs->q, n));
+            }();
+            c = add_const(ctx, c, divcs->q.front() / 2.0);
+            if (c.towers() > T2[m - 1].towers())
+                c = level_reduce(ctx, std::move(c), c.towers() - T2[m - 1].towers());
+            cu = std::move(c);
+        }
+    }
+
+    // Common tail (advancedshe.cpp:838-843):
+    //   cu = cu ? EvalAdd(T2[m-1], cu) : EvalAdd(T2[m-1], divcs->q.front()/2);
+    //   result = EvalMult(cu, qu); ModReduce; EvalAddInPlace(result, su);
+    Ct cu_t2 = [&]() -> Ct {
+        if (cu.has_value()) {
+            auto ap = adjust_for_add(ctx, clone_ct(ctx, T2[m - 1]), std::move(*cu));
+            return add(ctx, ap.a, ap.b);
+        }
+        return add_const(ctx, clone_ct(ctx, T2[m - 1]), divcs->q.front() / 2.0);
+    }();
+
+    auto rp = adjust_for_mult(ctx, std::move(cu_t2), std::move(qu));
+    Ct result = mult(ctx, rp.a, rp.b);
+    if (ctx.mode == lbcrypto::FIXEDMANUAL)
+        result = rescale(ctx, result);
+    auto ap = adjust_for_add(ctx, std::move(result), std::move(su));
+    return add(ctx, ap.a, ap.b);
+}
+
 // Top-level Chebyshev series evaluation.
 Ct eval_chebyshev_series(const OpCtx &ctx, const Ct &x,
                          const std::vector<double> &coefficients) {
@@ -480,7 +692,10 @@ Ct eval_chebyshev_series(const OpCtx &ctx, const Ct &x,
     f2.back() = 1.0;
 
     ChebyTree tree = compute_cheby_tree(ctx, x, k, m);
-    Ct inner = inner_eval_chebyshev_ps(ctx, x, f2, k, m, tree.T, tree.T2);
+    // Dispatch to the NB-fused variant — that's what cc->EvalChebyshevSeries
+    // resolves to under WITH_CPROBES=ON. The upstream non-fused variant
+    // (inner_eval_chebyshev_ps) remains in this file for reference.
+    Ct inner = inner_eval_chebyshev_ps_nb(ctx, x, f2, k, m, tree.T, tree.T2);
 
     // result = inner - T2km1
     Ct t2km1 = clone_ct(ctx, tree.T2km1);
