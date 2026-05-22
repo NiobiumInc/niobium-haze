@@ -414,6 +414,33 @@ TEST_CASE("phase24 Chebyshev byte-parity on fresh ct with g_coefficientsUniform"
     assert_rns_equal(ctx, out, ref, "phase24 g_coefficientsUniform on fresh ct (full 89 entries)");
 }
 
+TEST_CASE("phase26 ops::bootstrap end-to-end completes D2H replay cleanly",
+          "[integration][e2e]") {
+    // Confirms ops::bootstrap + d2h_ct flow does NOT throw on its own. The
+    // SetLevel error in the older slot-parity test came from the post-D2H
+    // shell-construction code's ModReduceInternalInPlace loop, which dropped
+    // towers AND decremented NSD into uint32 underflow — not from ops::bootstrap.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct,
+                                         ops::BootstrapVariant::Standard);
+    std::cerr << "  [phase26] haze.towers=" << haze_refreshed.towers()
+              << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
+    const auto haze_bytes = ops::d2h_ct(ctx, haze_refreshed);
+    REQUIRE(haze_bytes.c0.size() == haze_refreshed.towers());
+    REQUIRE(haze_bytes.c1.size() == haze_refreshed.towers());
+}
+
 TEST_CASE("phase25 Chebyshev byte-parity at varying degree truncation",
           "[integration][e2e]") {
     // Phase 24 confirmed g_coefficientsUniform (degree 84) breaks byte-parity
@@ -1822,12 +1849,20 @@ TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap (N=20
               << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
     const auto haze_bytes = ops::d2h_ct(ctx, haze_refreshed);
 
-    // Build a shell at haze's tower count by ModReduce'ing a fresh ct
-    // down to match.
+    // Build a shell at haze's (towers, NSD). ModReduceInternalInPlace drops
+    // a tower AND decrements NSD; on ct (NSD=1), a second ModReduce
+    // underflows NSD's uint32_t to UINT32_MAX, tripping
+    // CiphertextImpl::SetLevel's `limbNum < NSD` check. LevelReduceInternalInPlace
+    // is metadata-only (matches OpenFHE's FIXEDMANUAL LevelReduce path),
+    // appropriate here since inject_ct overwrites the polynomial bytes
+    // — only the metadata needs to line up for Decrypt to interpret them.
     auto ct_shell = ct->Clone();
     const std::size_t target_towers = haze_refreshed.towers();
-    while (ct_shell->GetElements()[0].GetNumOfElements() > target_towers)
-        ctx.cc->GetScheme()->ModReduceInternalInPlace(ct_shell, 1);
+    const std::size_t drop_count =
+        ct_shell->GetElements()[0].GetNumOfElements() - target_towers;
+    if (drop_count > 0)
+        ctx.cc->GetScheme()->LevelReduceInternalInPlace(ct_shell, drop_count);
+    ct_shell->SetNoiseScaleDeg(haze_refreshed.noise_scale_deg());
     ops::inject_ct(ctx, haze_bytes, ct_shell);
     Plaintext pt_haze;
     ctx.cc->Decrypt(ctx.keys.secretKey, ct_shell, &pt_haze);
