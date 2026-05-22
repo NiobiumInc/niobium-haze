@@ -287,9 +287,17 @@ AdjustedPair adjust_for_add(const OpCtx &ctx, Ct a, Ct b) {
     return {std::move(a), std::move(b)};
 }
 
+// Mirrors OpenFHE's Degree() (ckksrns-utils.h:88-98), which defaults to
+// `delta = 0.0` — STRICT-zero comparison, not the 0x1p-44 epsilon used
+// elsewhere by IsNotEqualZero/IsNotEqualOne. Coefficients like
+// 8.17e-15 in g_coefficientsUniform are below 0x1p-44 (so IsNotEqualZero
+// would treat them as zero), but OpenFHE's Degree() still counts them as
+// non-zero — which means OpenFHE's f2 retains them after `f2.resize(Degree+1)`
+// while a 0x1p-44 threshold would drop them. Phase 25 caught this by
+// adding idx 85 = 8.17e-15 and finding 2048 mismatches.
 uint32_t poly_degree(const std::vector<double> &v) {
     for (std::size_t i = v.size(); i-- > 0;)
-        if (std::abs(v[i]) > 0x1p-44)
+        if (v[i] != 0.0)
             return static_cast<std::uint32_t>(i);
     return 0;
 }
