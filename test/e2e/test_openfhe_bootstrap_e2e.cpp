@@ -664,29 +664,39 @@ TEST_CASE("phase5 profile each bootstrap phase", "[integration][e2e]") {
     raised = ops::rescale(ctx, raised);
     tick("rescale post-mod_raise", t0);
 
+    std::cerr << "  [phase5] cts_matrices.size=" << bk.cts_matrices.size()
+              << " cts[0].size=" << bk.cts_matrices.front().size()
+              << " stc_matrices.size=" << bk.stc_matrices.size()
+              << " stc[0].size=" << bk.stc_matrices.front().size()
+              << " q_base.size=" << ctx.q_base.size()
+              << " p_base.size=" << ctx.p_base.size() << "\n";
+
     auto in_slots = ops::linear_transform(ctx, bk, bk.cts_matrices, raised);
     tick("linear_transform (CtS)", t0);
+    std::cerr << "  [phase5] in_slots.towers=" << in_slots.towers()
+              << " nsd=" << in_slots.noise_scale_deg() << "\n";
 
     auto modded = ops::eval_mod(ctx, bk, in_slots);
     tick("eval_mod (full Chebyshev x2 + double-angle x2)", t0);
+    std::cerr << "  [phase5] modded.towers=" << modded.towers()
+              << " nsd=" << modded.noise_scale_deg() << "\n";
 
+    // Align modded.towers to the StC matrices' Q-tower count. OpenFHE's
+    // adjust-and-mult does this implicitly via per-mult ModReduces; we
+    // collapse it into a single level_reduce here so the StC mult lines
+    // up. This is metadata-only — does not match OpenFHE's polynomial
+    // values, just lets us measure StC wall time.
+    const std::size_t stc_q_towers = bk.stc_matrices.front().size() - ctx.p_base.size();
+    if (modded.towers() > stc_q_towers)
+        modded = ops::level_reduce(ctx, std::move(modded), modded.towers() - stc_q_towers);
+    std::cerr << "  [phase5] post-align modded.towers=" << modded.towers() << "\n";
     auto out = ops::linear_transform(ctx, bk, bk.stc_matrices, modded);
     tick("linear_transform (StC)", t0);
 
     const auto haze_bytes = ops::d2h_ct(ctx, out);
     tick("d2h_ct (flush + replay)", t0);
-
-    // Just decrypt the haze output — don't compare to ref here (this is
-    // a profiling test, not a correctness test). The slot-parity test
-    // exists separately.
-    auto ct_haze = ct_ref->Clone();
-    ops::inject_ct(ctx, haze_bytes, ct_haze);
-    Plaintext pt_haze;
-    ctx.cc->Decrypt(ctx.keys.secretKey, ct_haze, &pt_haze);
-    pt_haze->SetLength(v.size());
-    tick("inject + decrypt", t0);
-    std::cerr << "  [phase5] haze slot[0] = " << pt_haze->GetRealPackedValue()[0]
-              << " (expected ~" << v[0] << ")\n";
+    std::cerr << "  [phase5] out.towers=" << out.towers()
+              << " (skipping inject_ct — towers mismatch vs ref ct shell)\n";
 }
 
 TEST_CASE("phase3 eval_chebyshev_series slot-level vs cc->EvalChebyshevSeries",

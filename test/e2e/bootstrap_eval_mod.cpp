@@ -446,18 +446,15 @@ void apply_double_angle_iterations(const OpCtx &ctx, Ct &ct, std::uint32_t num_i
     constexpr double twoPi = 2.0 * M_PI;
     for (std::int32_t i = 1 - static_cast<std::int32_t>(num_iter); i <= 0; ++i) {
         const double scalar = -std::pow(twoPi, -std::pow(2.0, i));
-        // OpenFHE FIXEDAUTO EvalSquare auto-rescales when input NSD > 1
-        // (to keep NSD=2 on output rather than NSD=4). Mirror that here.
-        if (ctx.mode != lbcrypto::FIXEDMANUAL && ct.noise_scale_deg() > 1)
-            ct = rescale(ctx, ct);
         ct = square_ct(ctx, ct);
-        // Use mult_int_scalar(ct, 2) — add(ct, ct) on a trace-output Ct
-        // triggers a haze IR-replay divergence vs OpenFHE's EvalAdd(ct, ct).
+        // 2*ct + scalar — avoid add(ct, ct) self-add (trace-output replay
+        // divergence).
         Ct doubled = mult_int_scalar(ctx, ct, 2);
         ct = add_const(ctx, doubled, scalar);
-        // cc->ModReduceInPlace is a no-op in FIXEDAUTO mode.
-        if (ctx.mode == lbcrypto::FIXEDMANUAL)
-            ct = rescale(ctx, ct);
+        // OpenFHE FIXEDAUTO does an explicit ModReduce at the END of every
+        // iter (ckksrns-fhe.cpp:733). Mirror that — without it the loop
+        // drops zero towers when the input arrives at NSD=1.
+        ct = rescale(ctx, ct);
     }
 }
 
@@ -485,19 +482,8 @@ Ct eval_chebyshev_series_for_test(const OpCtx &ctx, const Ct &x,
 
 Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
     using namespace lbcrypto;
-
-    // Conjugate-split into real + imaginary.
-    Ct conj = conjugate(ctx, ct, bk.conjugation_key);
-    Ct ctEnc = add(ctx, ct, conj);
-    Ct ctEncI = sub(ctx, ct, conj);
-    // Multiply ctEncI by -i via MultByMonomial(3*slots).
-    ctEncI = mult_monomial(ctx, ctEncI, 3 * bk.params.slots);
-
-    // ModReduce if NSD=2 (FIXEDAUTO).
-    if (ctEnc.noise_scale_deg() == 2) {
-        ctEnc = rescale(ctx, ctEnc);
-        ctEncI = rescale(ctx, ctEncI);
-    }
+    const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+    const bool fully_packed = (bk.params.slots == N / 2);
 
     // g_coefficientsUniform for UNIFORM_TERNARY (FHECKKSRNS header).
     static const std::vector<double> coefficients{
@@ -532,8 +518,29 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         1.0057423059167244e-12, 8.1701187638005194e-15,  -1.0611736208855373e-13,
         -8.9597492970451533e-16, 1.1421575296031385e-14};
 
-    ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
-    ctEncI = eval_chebyshev_series(ctx, ctEncI, coefficients);
+    if (fully_packed) {
+        // Fully-packed path (slots == N/2): conjugate-split into real+imag,
+        // two Chebyshevs, recombine. Not exercised by phase 5/7 (slots=8,
+        // N=2048 falls into sparsely-packed) but kept for completeness.
+        Ct conj = conjugate(ctx, ct, bk.conjugation_key);
+        Ct ctEnc = add(ctx, ct, conj);
+        Ct ctEncI = sub(ctx, ct, conj);
+        ctEncI = mult_monomial(ctx, ctEncI, 3 * bk.params.slots);
+        if (ctEnc.noise_scale_deg() == 2) {
+            ctEnc = rescale(ctx, ctEnc);
+            ctEncI = rescale(ctx, ctEncI);
+        }
+
+        ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
+        ctEncI = eval_chebyshev_series(ctx, ctEncI, coefficients);
+
+    // OpenFHE FIXEDAUTO: unconditional ModReduce after Chebyshev
+    // (ckksrns-fhe.cpp:724-725) regardless of NSD. Drops a level on each
+    // half before double-angle picks up.
+    if (ctx.mode != lbcrypto::FIXEDMANUAL) {
+        ctEnc = rescale(ctx, ctEnc);
+        ctEncI = rescale(ctx, ctEncI);
+    }
 
     // Double-angle iterations (3 for UNIFORM_TERNARY, K=16).
     constexpr std::uint32_t numIter = 3;
@@ -549,7 +556,37 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
     constexpr std::uint64_t K = 16;
     constexpr std::uint64_t correction = 11;
     const std::uint64_t scalar = K * (1ULL << correction);
-    return mult_int_scalar(ctx, combined, scalar);
+    combined = mult_int_scalar(ctx, combined, scalar);
+
+        // OpenFHE FIXEDAUTO does one more ModReduce before StC
+        // (ckksrns-fhe.cpp:757) so the StC linear-transform input lines up
+        // with the precomputed StC plaintext level.
+        if (ctx.mode != lbcrypto::FIXEDMANUAL)
+            combined = rescale(ctx, combined);
+        return combined;
+    }
+
+    // Sparsely-packed path (slots < N/2): conjugate-add, one Chebyshev,
+    // one double-angle, integer scaling, then a final ModReduce so the
+    // StC input lines up with the precomputed StC plaintext level.
+    // Mirrors ckksrns-fhe.cpp:786-842.
+    Ct ctEnc = add(ctx, ct, conjugate(ctx, ct, bk.conjugation_key));
+    // NSD-gated to mirror OpenFHE line 797 — never drop NSD below 1.
+    if (ctx.mode != lbcrypto::FIXEDMANUAL && ctEnc.noise_scale_deg() == 2)
+        ctEnc = rescale(ctx, ctEnc);
+
+    ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
+
+    if (ctx.mode != lbcrypto::FIXEDMANUAL)
+        ctEnc = rescale(ctx, ctEnc);
+    apply_double_angle_iterations(ctx, ctEnc, 3);
+
+    constexpr std::uint64_t K = 16;
+    ctEnc = mult_int_scalar(ctx, ctEnc, K);
+
+    if (ctx.mode != lbcrypto::FIXEDMANUAL)
+        ctEnc = rescale(ctx, ctEnc);
+    return ctEnc;
 }
 
 } // namespace haze::test::ops
