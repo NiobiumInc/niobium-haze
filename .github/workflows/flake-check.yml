@@ -95,10 +95,65 @@ jobs:
       - name: Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
-      - name: Build lint derivation
-        # The clang-tidy flake check configures cmake to emit
-        # compile_commands.json, then lints with --warnings-as-errors='*'.
-        run: nix build -L .#checks.x86_64-linux.clang-tidy
+      - name: Build compile_commands.json
+        # haze-compile-commands is a configure-only flake derivation
+        # that hands us a hermetic compile_commands.json without
+        # rebuilding openfhe / niobium-fhetch (those are cached via
+        # Magic Nix Cache). The output uses a __HAZE_ROOT__ sentinel
+        # for haze's source root; substitute it for the actual
+        # workspace so clang-tidy reads the checked-out files.
+        # Also pre-create the per-target build subdirs that cmake
+        # would otherwise generate during a real build — clang-tidy
+        # chdir's into each entry's `directory` and crashes if the
+        # dir is missing.
+        run: |
+          nix build -L .#haze-compile-commands -o build-cc-nix
+          mkdir -p build
+          sed "s|__HAZE_ROOT__|$GITHUB_WORKSPACE|g" \
+            build-cc-nix/compile_commands.json > build/compile_commands.json
+          jq -r '.[].directory' build/compile_commands.json \
+            | sort -u | xargs -r mkdir -p
+
+      - name: Restore clang-tidy-cache
+        # Persistent ctcache hash database across CI runs. Cache key
+        # binds to .clang-tidy (the check set), flake.lock (toolchain
+        # rev), and scripts/clang-tidy.sh itself (since the flag set
+        # we pass to clang-tidy lives there); commit SHA gives each
+        # run a unique save slot so we can resume from the most recent
+        # match via restore-keys without ever clobbering.
+        id: ctcache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ctcache
+          key: ctcache-${{ runner.os }}-${{ hashFiles('.clang-tidy', 'flake.lock', 'scripts/clang-tidy.sh') }}-${{ github.sha }}
+          restore-keys: |
+            ctcache-${{ runner.os }}-${{ hashFiles('.clang-tidy', 'flake.lock', 'scripts/clang-tidy.sh') }}-
+            ctcache-${{ runner.os }}-
+
+      - name: Run clang-tidy via cache
+        # nix develop pulls in clang-tools (for the real clang-tidy)
+        # and clang-tidy-cache (the wrapper). CTCACHE_CLANG_TIDY tells
+        # the wrapper which real binary to delegate to on a cache
+        # miss; default upstream is /usr/bin/clang-tidy which doesn't
+        # exist in the nix environment. CTCACHE_DIR lives under $HOME
+        # so it's covered by actions/cache above.
+        run: |
+          nix develop -L --command bash -c '
+            export CTCACHE_DIR="$HOME/.ctcache"
+            export CTCACHE_CLANG_TIDY="$(command -v clang-tidy)"
+            CLANG_TIDY=clang-tidy-cache BUILD_DIR=build scripts/clang-tidy.sh
+          '
+
+      - name: Save clang-tidy-cache
+        # `if: always()` ensures partial cache state (e.g. when lint
+        # caught new findings on some files but cached others) still
+        # warms the next run. ctcache only stores successful results,
+        # so the cache never holds stale failure verdicts.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ctcache
+          key: ctcache-${{ runner.os }}-${{ hashFiles('.clang-tidy', 'flake.lock', 'scripts/clang-tidy.sh') }}-${{ github.sha }}
 
       - name: Collect nix build logs on failure
         if: failure()

@@ -24,6 +24,17 @@
       url = "git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?submodules=1";
       flake = false;
     };
+
+    # ctcache (clang-tidy-cache) — wraps clang-tidy with a content-
+    # addressed cache so unchanged TUs return their prior verdict
+    # without re-running checks. CI uses this for the clang-tidy
+    # gate; the cache directory persists across runs via
+    # actions/cache. Pinned to a tagged release for reproducibility
+    # — bump via `nix flake update --update-input ctcache-src`.
+    ctcache-src = {
+      url = "github:matus-chochlik/ctcache/1.2.0";
+      flake = false;
+    };
   };
 
   outputs =
@@ -31,6 +42,7 @@
       self,
       nixpkgs,
       niobium-fhetch-src,
+      ctcache-src,
     }:
     let
       # x86_64-darwin omitted: niobium ships Apple Silicon only.
@@ -54,7 +66,9 @@
       # Dev shell + make-wrapping apps share this toolchain. clang-tools
       # is the unversioned package so clangd/clang-tidy track whatever
       # clang nixpkgs-unstable currently ships, matching clangStdenv
-      # below.
+      # below. clang-tidy-cache is added via the per-system `extra`
+      # arg below so devs get the same cache wrapper CI uses; passed
+      # in rather than referenced here because it lives in mkPackages.
       hazeTools =
         pkgs: with pkgs; [
           cmake
@@ -160,9 +174,9 @@
             meta.platforms = pkgs.lib.platforms.unix;
           };
 
-          # Shared cmake configure for the lint derivation below. It
-          # only needs compile_commands.json — no compile, no link, no
-          # test. Same flags as the haze derivation so the database
+          # Shared cmake configure for the lint derivations below.
+          # They only need compile_commands.json — no compile, no link,
+          # no test. Same flags as the haze derivation so the database
           # matches what `make build` would emit. clang-tidy walks up
           # from each .cpp's path to discover .clang-tidy, which is
           # copied into the source root in postPatch since hazeBuildSrc
@@ -174,6 +188,41 @@
             "-DOPENFHE_INSTALL_DIR=${openfhe}"
             "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
           ];
+
+          # ctcache (https://github.com/matus-chochlik/ctcache) packaged
+          # from the pinned flake input. The upstream entry point is
+          # a bash script named `clang-tidy` (intended to shadow the
+          # real one on PATH); we install it under the explicit
+          # `clang-tidy-cache` name so it can be invoked without
+          # shadowing. The script auto-discovers `src/ctcache/` via
+          # `dirname $(realpath $0)`, so the layout under libexec/
+          # mirrors the upstream tree. makeWrapper prepends python3
+          # to PATH so the script's `/usr/bin/env python3` lookup
+          # always resolves to the nix-pinned interpreter.
+          clang-tidy-cache = pkgs.stdenvNoCC.mkDerivation {
+            pname = "clang-tidy-cache";
+            version = "1.2.0";
+            src = ctcache-src;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            dontConfigure = true;
+            dontBuild = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/libexec/ctcache $out/bin
+              cp clang-tidy $out/libexec/ctcache/clang-tidy-cache
+              chmod +x $out/libexec/ctcache/clang-tidy-cache
+              cp -r src $out/libexec/ctcache/
+              makeWrapper $out/libexec/ctcache/clang-tidy-cache $out/bin/clang-tidy-cache \
+                --prefix PATH : ${pkgs.python3}/bin
+              runHook postInstall
+            '';
+            meta = {
+              description = "Compilation database / caching wrapper for clang-tidy";
+              homepage = "https://github.com/matus-chochlik/ctcache";
+              license = pkgs.lib.licenses.boost;
+              platforms = pkgs.lib.platforms.unix;
+            };
+          };
 
           mkLintDerivation =
             { name, lintScript }:
@@ -287,17 +336,88 @@
 
           # The clang-tidy lint derivation dispatches through
           # `scripts/clang-tidy.sh`, which is also runnable directly from
-          # a haze checkout. The derivation exists so `nix flake check`
-          # stays the CI gate — it wraps the script in a hermetic
-          # toolchain (pinned clang-tools, configured cmake build dir
-          # for compile_commands.json) without duplicating lint logic.
-          # BUILD_DIR=build matches what cmake's setup hook in nixpkgs
-          # configures (the source-tree default `dbuild/` only exists
-          # under `make`-driven builds). Without this, the script
-          # bails with "no compile_commands.json under dbuild/".
+          # a haze checkout. The derivation exists so contributors can
+          # reproduce CI's lint findings byte-for-byte under nix —
+          # `nix build .#checks.<sys>.clang-tidy` is the local pre-push
+          # check. CI itself runs scripts/clang-tidy.sh outside of any
+          # derivation so it can pipe through clang-tidy-cache with a
+          # persistent actions/cache; see flake-check.yml. BUILD_DIR=build
+          # matches what cmake's setup hook in nixpkgs configures (the
+          # source-tree default `dbuild/` only exists under `make`-driven
+          # builds). Without this, the script bails with "no
+          # compile_commands.json under dbuild/".
           haze-clang-tidy = mkLintDerivation {
             name = "haze-clang-tidy";
             lintScript = "BUILD_DIR=build bash scripts/clang-tidy.sh";
+          };
+
+          # Configure-only derivation that hands CI a hermetic,
+          # self-contained compile_commands.json without rebuilding
+          # openfhe / niobium-fhetch (those are cached via Magic Nix
+          # Cache). Mirrors mkLintDerivation's cmake setup but runs no
+          # lint in buildPhase.
+          #
+          # Two wrinkles addressed in preConfigure / installPhase:
+          #
+          #   1. NIX_CFLAGS_COMPILE injection. The cc wrapper applies
+          #      NIX_CFLAGS_COMPILE (-isystem paths for openfhe,
+          #      niobium-fhetch, the C++ stdlib, etc.) at runtime when
+          #      it dispatches to the real clang. That works inside a
+          #      derivation because the lint runs in the same shell.
+          #      Outside the derivation (e.g., CI's actions/cache step
+          #      that runs scripts/clang-tidy.sh through the ctcache
+          #      wrapper), clang-tidy invokes libclang directly — no
+          #      wrapper, no NIX_CFLAGS_COMPILE. Baking the flags into
+          #      CMAKE_CXX_FLAGS makes them part of every recorded
+          #      compile command, so the database is portable.
+          #
+          #   2. /build/source rewrite. cmake bakes the sandbox source
+          #      root into `directory`, `file`, and `-I` flags. We
+          #      sed-rewrite to the __HAZE_ROOT__ sentinel; the
+          #      workflow then substitutes its workspace path at
+          #      consume time. /nix/store paths survive untouched
+          #      because they don't share the /build/source prefix.
+          haze-compile-commands = stdenv.mkDerivation {
+            name = "haze-compile-commands";
+            src = hazeBuildSrc;
+            nativeBuildInputs = [ pkgs.cmake ];
+            buildInputs = [
+              openfhe
+              niobium-fhetch
+              pkgs.catch2_3
+            ];
+            cmakeFlags = lintCmakeFlags;
+            postPatch = ''
+              cp ${./.clang-tidy} .clang-tidy
+            '';
+            preConfigure = ''
+              # The cc-wrapper injects -isystem and -cxx-isystem flags
+              # at compile time (for libstdc++, glibc, niobium-fhetch's
+              # built derivation, etc.); cmake doesn't capture those
+              # in compile_commands.json. Ask clang itself for the
+              # full <...> search path and turn it into -isystem args,
+              # then bake them into CMAKE_CXX_FLAGS so libclang/
+              # clang-tidy consumers outside this sandbox resolve
+              # <mutex> and niobium/compiler.h without the wrapper.
+              effective_flags=$(echo | clang++ -E -v -x c++ - 2>&1 \
+                | sed -n '/^#include <\.\.\.>/,/^End of search/p' \
+                | grep -E "^ /" \
+                | awk '{print "-isystem " $1}' \
+                | tr '\n' ' ')
+              cmakeFlagsArray+=("-DCMAKE_CXX_FLAGS=$effective_flags")
+            '';
+            buildPhase = ''
+              runHook preBuild
+              runHook postBuild
+            '';
+            dontUseCmakeInstall = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              sed 's|/build/source|__HAZE_ROOT__|g' \
+                compile_commands.json > $out/compile_commands.json
+              runHook postInstall
+            '';
           };
         in
         {
@@ -307,35 +427,46 @@
             haze
             haze-clang-format
             haze-clang-tidy
+            haze-compile-commands
+            clang-tidy-cache
             ;
         };
     in
     {
       formatter = forEachSystem (pkgs: pkgs.nixfmt);
 
-      devShells = forEachSystem (pkgs: {
-        # Stdenv override sets the default clang (whatever nixpkgs
-        # currently ships) as the auto-discovered cc/c++ for any tool
-        # that probes the environment.
-        default =
-          (pkgs.mkShell.override {
-            stdenv = pkgs.clangStdenv;
-          })
-            {
-              name = "haze-dev";
-              packages = hazeTools pkgs;
-              shellHook = ''
-                # Resolve haze worktree root via git so scripts/ stays
-                # on PATH even after `cd`-ing to a subdirectory. Falls
-                # back to PWD when invoked outside a git checkout.
-                haze_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-                if [ -z "$haze_root" ]; then haze_root="$PWD"; fi
-                export PATH="$haze_root/scripts:$PATH"
-                echo "haze dev shell ready (clang, cmake, catch2, jj, clang-tools)."
-                echo "Run 'make sync && make build' to bootstrap, then 'make test'."
-              '';
-            };
-      });
+      devShells = forEachSystem (
+        pkgs:
+        let
+          p = mkPackages pkgs;
+        in
+        {
+          # Stdenv override sets the default clang (whatever nixpkgs
+          # currently ships) as the auto-discovered cc/c++ for any tool
+          # that probes the environment.
+          default =
+            (pkgs.mkShell.override {
+              stdenv = pkgs.clangStdenv;
+            })
+              {
+                name = "haze-dev";
+                # clang-tidy-cache comes from mkPackages so devs invoke
+                # the same wrapper CI uses; set CTCACHE_CLANG_TIDY when
+                # calling it so the wrapper finds the nix-pinned tidy.
+                packages = (hazeTools pkgs) ++ [ p.clang-tidy-cache ];
+                shellHook = ''
+                  # Resolve haze worktree root via git so scripts/ stays
+                  # on PATH even after `cd`-ing to a subdirectory. Falls
+                  # back to PWD when invoked outside a git checkout.
+                  haze_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+                  if [ -z "$haze_root" ]; then haze_root="$PWD"; fi
+                  export PATH="$haze_root/scripts:$PATH"
+                  echo "haze dev shell ready (clang, cmake, catch2, jj, clang-tools, clang-tidy-cache)."
+                  echo "Run 'make sync && make build' to bootstrap, then 'make test'."
+                '';
+              };
+        }
+      );
 
       # Each app re-enters the haze dev shell so catch2's cmake setup
       # hook is active (find_package(Catch2 3) needs it). Passing
@@ -372,7 +503,13 @@
           p = mkPackages pkgs;
         in
         {
-          inherit (p) openfhe niobium-fhetch haze;
+          inherit (p)
+            openfhe
+            niobium-fhetch
+            haze
+            haze-compile-commands
+            clang-tidy-cache
+            ;
           default = p.haze;
         }
       );
