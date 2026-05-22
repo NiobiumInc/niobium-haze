@@ -9,11 +9,12 @@ namespace haze::test::ops {
 Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapVariant variant) {
     switch (variant) {
     case BootstrapVariant::Standard: {
-        // Reduce input to a single tower (q_0) — mirrors OpenFHE's
-        // ModReduceInternalInPlace(raised, NSD-1) at ckksrns-fhe.cpp:588.
+        // Reduce input to a single tower (q_0). For UNIFORM_TERNARY the
+        // input to ModRaise just needs the q_0 residue; we drop the rest
+        // via metadata (level_reduce) — rescale would underflow NSD.
         Ct depleted = clone_ct(ctx, ct);
-        while (depleted.towers() > 1)
-            depleted = rescale(ctx, depleted);
+        if (depleted.towers() > 1)
+            depleted = level_reduce(ctx, std::move(depleted), depleted.towers() - 1);
         Ct raised = mod_raise(ctx, bk, depleted);
         // OpenFHE's bootstrap does ModReduceInternalInPlace(raised, 1)
         // between ModRaise and CtS (ckksrns-fhe.cpp:689), bringing the

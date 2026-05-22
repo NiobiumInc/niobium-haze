@@ -11,10 +11,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>
+#include <iostream>
 #include <scheme/ckksrns/ckksrns-fhe.h>
+#include <string>
 #include <vector>
 
 namespace {
@@ -34,7 +37,26 @@ haze::test::ops::OpCtx make_bootstrap_ctx() {
         .batch_size = 8,
         .with_relin_key = true,
         .rotate_indices = {},
-        .ring_dim = 1u << 16, // 65536 — halves polynomial size vs auto 2^17
+        .ring_dim = 1u << 16, // 65536
+    });
+    ctx.cc->Enable(ADVANCEDSHE);
+    ctx.cc->Enable(FHE);
+    return ctx;
+}
+
+// Tiny-ring ctx for phase5 profiling. Drops security level so OpenFHE
+// accepts the small N. Not for correctness — only for timing.
+haze::test::ops::OpCtx make_bootstrap_ctx_tiny(std::uint32_t ring_dim) {
+    using namespace lbcrypto;
+    using namespace haze::test::ops;
+    auto ctx = make_ctx({
+        .mode = FIXEDAUTO,
+        .mult_depth = 25,
+        .scaling_mod_size = 50,
+        .batch_size = 8,
+        .with_relin_key = true,
+        .rotate_indices = {},
+        .ring_dim = ring_dim,
     });
     ctx.cc->Enable(ADVANCEDSHE);
     ctx.cc->Enable(FHE);
@@ -262,6 +284,409 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
         INFO("slot " << i << " haze=" << haze_slots[i] << " ref=" << ref_slots[i]);
         REQUIRE_THAT(haze_slots[i], Catch::Matchers::WithinAbs(ref_slots[i], 1e-2));
     }
+}
+
+TEST_CASE("phase10 microbenchmark ops:: helpers at N=2048",
+          "[integration][e2e]") {
+    // Per-call wall time for each ops:: helper used by bootstrap. Tells us
+    // which helpers run OpenFHE work inside the haze epoch.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    using clk = std::chrono::steady_clock;
+    auto measure = [](const char *label, std::size_t iters, auto &&fn) {
+        auto t0 = clk::now();
+        for (std::size_t i = 0; i < iters; ++i)
+            fn();
+        const double ms =
+            std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+        const double iters_d = static_cast<double>(iters);
+        std::cerr << "  [phase10] " << label << ": " << ms << " ms / " << iters
+                  << " = " << (ms * 1000.0 / iters_d) << " us/call\n";
+        std::cout << "  [phase10] " << label << ": "
+                  << (ms * 1000.0 / iters_d) << " us/call\n";
+    };
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    auto haze_ct = ops::h2d_ct(ctx, ct); // opens epoch
+
+    measure("ops::mult_by_const_for_test", 50,
+            [&] { auto out = ops::mult_by_const_for_test(ctx, haze_ct, 0.5); (void)out; });
+    measure("ops::add_const_for_test", 50,
+            [&] { auto out = ops::add_const_for_test(ctx, haze_ct, 0.5); (void)out; });
+    measure("ops::mult_int_scalar_for_test", 50,
+            [&] { auto out = ops::mult_int_scalar_for_test(ctx, haze_ct, 7); (void)out; });
+    measure("ops::add (ct+ct)", 100,
+            [&] { auto out = ops::add(ctx, haze_ct, haze_ct); (void)out; });
+    measure("ops::sub (ct-ct)", 100,
+            [&] { auto out = ops::sub(ctx, haze_ct, haze_ct); (void)out; });
+    measure("ops::rescale", 5,
+            [&] { auto out = ops::rescale(ctx, haze_ct); (void)out; });
+    measure("ops::square_ct_for_test", 5,
+            [&] { auto out = ops::square_ct_for_test(ctx, haze_ct); (void)out; });
+    measure("ops::clone_ct", 50,
+            [&] { auto out = ops::clone_ct(ctx, haze_ct); (void)out; });
+    measure("ops::mult_monomial_for_test", 5,
+            [&] { auto out = ops::mult_monomial_for_test(ctx, haze_ct, 3); (void)out; });
+
+    // Compound helpers: these are what bootstrap actually calls.
+    measure("apply_double_angle (3 iters)", 1, [&] {
+        auto y = ops::clone_ct(ctx, haze_ct);
+        ops::apply_double_angle_for_test(ctx, y, 3);
+        (void)y;
+    });
+
+    // Chebyshev at degree 5 (k=2, m=2) — fast PS path.
+    measure("eval_chebyshev_series degree 5", 1, [&] {
+        std::vector<double> coeffs = {0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625};
+        auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+        (void)out;
+    });
+
+    // Chebyshev at degree 12 — slightly bigger PS.
+    measure("eval_chebyshev_series degree 12", 1, [&] {
+        std::vector<double> coeffs(13, 0.0);
+        for (std::size_t i = 0; i <= 12; ++i) coeffs[i] = 1.0 / static_cast<double>(i + 1);
+        auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+        (void)out;
+    });
+
+    // Chebyshev at degree 84 = what eval_mod actually uses.
+    measure("eval_chebyshev_series degree 84 (eval_mod-sized)", 1, [&] {
+        std::vector<double> coeffs(85, 0.0);
+        for (std::size_t i = 0; i <= 84; ++i) coeffs[i] = (i & 1) ? -0.001 : 0.05;
+        auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+        (void)out;
+    });
+
+    // Repeat: does per-call cost stay flat as epoch state grows? Bootstrap
+    // calls Chebyshev twice (real + imag) and then double-angle; if cost
+    // grows, the full bootstrap explodes nonlinearly.
+    measure("eval_chebyshev_series degree 12 (x50, look for drift)", 50, [&] {
+        std::vector<double> coeffs(13, 0.0);
+        for (std::size_t i = 0; i <= 12; ++i) coeffs[i] = 1.0 / static_cast<double>(i + 1);
+        auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+        (void)out;
+    });
+
+    // Same for mult_by_const after the heavy run above. If poly_map / shadow
+    // / allocator have ballooned, per-call cost should drift up.
+    measure("ops::mult_by_const_for_test (after heavy run)", 50,
+            [&] { auto out = ops::mult_by_const_for_test(ctx, haze_ct, 0.5); (void)out; });
+}
+
+TEST_CASE("phase9 microbenchmark haze C-ABI primitives at N=2048",
+          "[integration][e2e]") {
+    // Tight-loop calls to individual haze C-ABI entry points to localize
+    // the 18 ms/call observed in the full bootstrap. Each loop is sized
+    // to give ~1 second of work at a realistic per-call cost (10K iters
+    // at 100us = 1s); slower paths just take longer.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    using clk = std::chrono::steady_clock;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    constexpr std::size_t kIters = 5000;
+    constexpr std::size_t kTowers = 20;
+
+    // (1) hazeMalloc rate. No epoch active yet. Pure allocator path.
+    std::vector<void *> mptrs(kIters * kTowers, nullptr);
+    auto t_malloc0 = clk::now();
+    for (std::size_t i = 0; i < kIters * kTowers; ++i) {
+        REQUIRE(hazeMalloc(&mptrs[i], ctx.poly_bytes) == HAZE_SUCCESS);
+    }
+    const double malloc_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_malloc0).count();
+    const double per_malloc_us = malloc_ms * 1000.0 / (kIters * kTowers);
+
+    // (2) Build a stable per-tower input ct: hazeMalloc + H2D.
+    std::vector<void *> in_a(kTowers, nullptr);
+    std::vector<void *> in_b(kTowers, nullptr);
+    std::vector<void *> out_d(kTowers, nullptr);
+    std::vector<uint64_t> host_a(ctx.ring_dim, 1);
+    std::vector<uint64_t> host_b(ctx.ring_dim, 2);
+    for (std::size_t t = 0; t < kTowers; ++t) {
+        REQUIRE(hazeMalloc(&in_a[t], ctx.poly_bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(&in_b[t], ctx.poly_bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(&out_d[t], ctx.poly_bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(in_a[t], host_a.data(), ctx.poly_bytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(in_b[t], host_b.data(), ctx.poly_bytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    }
+    std::vector<uint64_t> base(ctx.q_base.begin(),
+                               ctx.q_base.begin() + static_cast<std::ptrdiff_t>(kTowers));
+
+    // (3) hazeAddMrp rate. Each call emits sr_addp per tower → fhetch emit
+    // path is the hot loop here.
+    auto t_add0 = clk::now();
+    for (std::size_t i = 0; i < kIters; ++i) {
+        REQUIRE(hazeAddMrp(out_d.data(),
+                           const_cast<const void **>(in_a.data()),
+                           const_cast<const void **>(in_b.data()),
+                           base.data(), kTowers, nullptr) == HAZE_SUCCESS);
+    }
+    const double add_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_add0).count();
+    const double per_add_us = add_ms * 1000.0 / kIters;
+
+    // (4) hazeAddMrp with FRESH dst allocs each iter — simulates the
+    // bootstrap pattern where every result Allocs is a new hazeMalloc.
+    auto t_add_fresh0 = clk::now();
+    std::vector<std::vector<void *>> fresh_dsts(kIters);
+    for (std::size_t i = 0; i < kIters; ++i) {
+        fresh_dsts[i].resize(kTowers, nullptr);
+        for (std::size_t t = 0; t < kTowers; ++t)
+            REQUIRE(hazeMalloc(&fresh_dsts[i][t], ctx.poly_bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeAddMrp(fresh_dsts[i].data(),
+                           const_cast<const void **>(in_a.data()),
+                           const_cast<const void **>(in_b.data()),
+                           base.data(), kTowers, nullptr) == HAZE_SUCCESS);
+    }
+    const double add_fresh_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_add_fresh0).count();
+    const double per_add_fresh_us = add_fresh_ms * 1000.0 / kIters;
+
+    std::cerr << "  [phase9] iters=" << kIters << " towers=" << kTowers << " ring=2048\n";
+    std::cerr << "  [phase9] hazeMalloc:                  " << malloc_ms
+              << " ms total, " << per_malloc_us << " us/call\n";
+    std::cerr << "  [phase9] hazeAddMrp (stable dst):     " << add_ms
+              << " ms total, " << per_add_us << " us/call\n";
+    std::cerr << "  [phase9] hazeAddMrp (fresh dst+alloc):" << add_fresh_ms
+              << " ms total, " << per_add_fresh_us << " us/call\n";
+    std::cout << "  [phase9] hazeMalloc:                  " << per_malloc_us << " us/call\n";
+    std::cout << "  [phase9] hazeAddMrp (stable dst):     " << per_add_us << " us/call\n";
+    std::cout << "  [phase9] hazeAddMrp (fresh dst+alloc):" << per_add_fresh_us << " us/call\n";
+}
+
+TEST_CASE("phase8 cprobes-only OpenFHE bootstrap (no ops::bootstrap) at N=2048",
+          "[integration][e2e]") {
+    // Open a haze recording, then call cc->EvalBootstrap. OpenFHE's
+    // CPROBES-instrumented build emits IR for every poly-level op the
+    // bootstrap performs — directly into the active fhetch trace. This
+    // gives us a "what would the same trace look like if haze ops::bootstrap
+    // were a pure passthrough of OpenFHE's bootstrap" baseline.
+    //
+    // emit_ms = how long OpenFHE+CPROBES take to record the bootstrap;
+    // replay_ms = how long the local simulator takes to execute it.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    using clk = std::chrono::steady_clock;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    ctx.cc->EvalBootstrapSetup({1, 1}, {0, 0}, slots, 11);
+    ctx.cc->EvalBootstrapKeyGen(ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // Open the haze epoch with a single dummy compute op. Allocate two
+    // polys, H2D into one, hazeAdd dummy+dummy → triggers start_recording.
+    void *dummy_a = nullptr;
+    void *dummy_dst = nullptr;
+    REQUIRE(hazeMalloc(&dummy_a, ctx.poly_bytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dummy_dst, ctx.poly_bytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> dummy_host(ctx.ring_dim, 1);
+    REQUIRE(hazeMemcpy(dummy_a, dummy_host.data(), ctx.poly_bytes,
+                       HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dummy_dst, dummy_a, dummy_a, 0, nullptr) == HAZE_SUCCESS);
+
+    // Now recording is active — CPROBES will emit IR for EvalBootstrap.
+    auto t_emit0 = clk::now();
+    auto ct_out = ctx.cc->EvalBootstrap(ct);
+    const double emit_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_emit0).count();
+    REQUIRE(ct_out);
+
+    // Close epoch (D2H triggers replay).
+    auto t_replay0 = clk::now();
+    REQUIRE(hazeMemcpy(dummy_host.data(), dummy_dst, ctx.poly_bytes,
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    const double replay_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_replay0).count();
+
+    std::cerr << "  [phase8] N=2048 cprobes EvalBootstrap emit: " << emit_ms
+              << " ms; replay: " << replay_ms << " ms\n";
+    std::cout << "  [phase8] N=2048 cprobes EvalBootstrap emit: " << emit_ms
+              << " ms; replay: " << replay_ms << " ms\n";
+}
+
+TEST_CASE("phase7 full haze ops::bootstrap end-to-end at N=2048",
+          "[integration][e2e]") {
+    // Time the full haze bootstrap at a tiny ring, print slot-level
+    // diagnostics. Correctness is best-effort — N=2048 is below the noise
+    // budget needed for the bootstrap parameters, so slots won't decrypt
+    // cleanly. The goal is a wall-clock number, not slot accuracy.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    using clk = std::chrono::steady_clock;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto t_setup0 = clk::now();
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    const double setup_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_setup0).count();
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // Reference (OpenFHE only) for slot-level comparison.
+    auto t_ref0 = clk::now();
+    auto ct_ref = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+    const double ref_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_ref0).count();
+    Plaintext pt_ref;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_ref, &pt_ref);
+    pt_ref->SetLength(v.size());
+    const auto slots_ref = pt_ref->GetRealPackedValue();
+
+    // Full haze pipeline.
+    auto t_haze0 = clk::now();
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct, ops::BootstrapVariant::Standard);
+    const auto haze_bytes = ops::d2h_ct(ctx, haze_refreshed);
+    const double haze_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_haze0).count();
+
+    auto ct_haze = ct_ref->Clone();
+    ops::inject_ct(ctx, haze_bytes, ct_haze);
+    Plaintext pt_haze;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_haze, &pt_haze);
+    pt_haze->SetLength(v.size());
+    const auto slots_haze = pt_haze->GetRealPackedValue();
+
+    std::cerr << "  [phase7] N=2048 setup+keygen+bk: " << setup_ms
+              << " ms; cc->EvalBootstrap ref: " << ref_ms
+              << " ms; haze bootstrap (h2d+bootstrap+d2h): " << haze_ms << " ms\n";
+    std::cout << "  [phase7] N=2048 setup+keygen+bk: " << setup_ms
+              << " ms; cc->EvalBootstrap ref: " << ref_ms
+              << " ms; haze bootstrap (h2d+bootstrap+d2h): " << haze_ms << " ms\n";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        std::cerr << "  [phase7] slot[" << i << "] in=" << v[i]
+                  << " ref=" << slots_ref[i] << " haze=" << slots_haze[i]
+                  << " diff=" << (slots_haze[i] - slots_ref[i]) << "\n";
+    }
+}
+
+TEST_CASE("phase6 openfhe-only bootstrap reference benchmark at 2^16",
+          "[integration][e2e]") {
+    // Time JUST cc->EvalBootstrap at full ring_dim, with the
+    // CPROBES-instrumented OpenFHE we link against. No haze epoch active,
+    // so CPROBES is inert — this is the baseline "what should this take?"
+    // number the haze recording should track within a small constant factor.
+    using namespace lbcrypto;
+    using clk = std::chrono::steady_clock;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx(); // ring_dim = 1<<16, depth=25
+    constexpr std::uint32_t slots = 8;
+
+    auto t_setup0 = clk::now();
+    ctx.cc->EvalBootstrapSetup({1, 1}, {0, 0}, slots, 11);
+    ctx.cc->EvalBootstrapKeyGen(ctx.keys.secretKey, slots);
+    const double setup_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_setup0).count();
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    auto t_boot0 = clk::now();
+    auto ct_out = ctx.cc->EvalBootstrap(ct);
+    const double boot_ms =
+        std::chrono::duration<double, std::milli>(clk::now() - t_boot0).count();
+    REQUIRE(ct_out);
+
+    std::cerr << "  [phase6] ring_dim=65536 setup+keygen: " << setup_ms
+              << " ms; cc->EvalBootstrap: " << boot_ms << " ms\n";
+    std::cout << "  [phase6] ring_dim=65536 setup+keygen: " << setup_ms
+              << " ms; cc->EvalBootstrap: " << boot_ms << " ms\n";
+}
+
+TEST_CASE("phase5 profile each bootstrap phase", "[integration][e2e]") {
+    // Time each bootstrap phase independently to localize slowness.
+    // Uses ring_dim=2^12 (set by make_bootstrap_ctx) for fast turnaround.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    using clk = std::chrono::steady_clock;
+    auto tick = [](const std::string &label, clk::time_point &t0) {
+        auto t1 = clk::now();
+        const double ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cerr << "  [phase5] " << label << ": " << ms << " ms\n";
+        t0 = t1;
+    };
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto t0 = clk::now();
+    // Tiny ring (2048) so each phase completes quickly; this is profiling,
+    // not correctness — output won't decrypt cleanly at this size.
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    tick("make_bootstrap_ctx_tiny(2048) (build cc + relin key)", t0);
+
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    tick("make_bootstrap_keys (EvalBootstrapSetup+KeyGen + extract)", t0);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    tick("Encrypt", t0);
+
+    auto ct_ref = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+    tick("cc->EvalBootstrap (OpenFHE reference, with CPROBES)", t0);
+
+    // Haze pipeline, phase-by-phase. h2d + ModReduce-to-1 + mod_raise + rescale.
+    auto haze_ct_full = ops::h2d_ct(ctx, ct);
+    tick("h2d_ct", t0);
+    if (haze_ct_full.towers() > 1)
+        haze_ct_full = ops::level_reduce(ctx, std::move(haze_ct_full),
+                                          haze_ct_full.towers() - 1);
+    tick("haze level_reduce-to-1-tower", t0);
+    auto raised = ops::mod_raise(ctx, bk, haze_ct_full);
+    tick("ops::mod_raise", t0);
+    raised = ops::rescale(ctx, raised);
+    tick("rescale post-mod_raise", t0);
+
+    auto in_slots = ops::linear_transform(ctx, bk, bk.cts_matrices, raised);
+    tick("linear_transform (CtS)", t0);
+
+    auto modded = ops::eval_mod(ctx, bk, in_slots);
+    tick("eval_mod (full Chebyshev x2 + double-angle x2)", t0);
+
+    auto out = ops::linear_transform(ctx, bk, bk.stc_matrices, modded);
+    tick("linear_transform (StC)", t0);
+
+    const auto haze_bytes = ops::d2h_ct(ctx, out);
+    tick("d2h_ct (flush + replay)", t0);
+
+    // Just decrypt the haze output — don't compare to ref here (this is
+    // a profiling test, not a correctness test). The slot-parity test
+    // exists separately.
+    auto ct_haze = ct_ref->Clone();
+    ops::inject_ct(ctx, haze_bytes, ct_haze);
+    Plaintext pt_haze;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_haze, &pt_haze);
+    pt_haze->SetLength(v.size());
+    tick("inject + decrypt", t0);
+    std::cerr << "  [phase5] haze slot[0] = " << pt_haze->GetRealPackedValue()[0]
+              << " (expected ~" << v[0] << ")\n";
 }
 
 TEST_CASE("phase3 eval_chebyshev_series slot-level vs cc->EvalChebyshevSeries",
