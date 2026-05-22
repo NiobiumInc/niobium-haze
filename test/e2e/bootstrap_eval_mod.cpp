@@ -125,24 +125,21 @@ Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
 
 Ct square_ct(const OpCtx &ctx, const Ct &ct) { return mult(ctx, ct, ct); }
 
-struct AdjustedPair {
-    Ct a;
-    Ct b;
-};
-
 // Bring `high` (more towers, lower level) down to `low`'s level shape.
 // Mirrors the c1lvl < c2lvl branch of LeveledSHECKKSRNS::
 // AdjustLevelsAndDepthInPlace (ckksrns-leveledshe.cpp:603-733).
 //
-// MODE COVERAGE: currently FIXEDAUTO only. The scaling-factor adjustment
-// factor (scf2/scf1*q1/scf in the OpenFHE source) collapses to 1.0 in
-// FIXEDAUTO because GetScalingFactorReal / GetScalingFactorRealBig /
-// GetModReduceFactor all return the same m_approxSF — so the
-// EvalMultCoreInPlace step is exactly our mult_by_const(_, 1.0).
+// MODE COVERAGE: currently FIXEDAUTO only. compositeDegree=1.
 // FLEXIBLEAUTO/EXT and COMPOSITESCALING* need per-level scaling-factor
-// tracking on Ct + the full formula; out of scope for the current commit.
-// FIXEDMANUAL is the caller's responsibility (adjust_for_mult early-returns).
-// compositeDegree is 1 throughout — bumping to >1 needs a per-call query.
+// tracking on Ct + the full formula; out of scope.
+//
+// Scaling-factor adjustment factor by case (FIXEDAUTO, scf = m_approxSF):
+//   A: h_depth=2,l_depth=2  →  scf2/scf1 * q1/scf = (sf²/sf²)*(sf/sf) = 1
+//   B: h_depth=2,l_depth=1  →  (sf/sf²)*(sf/sf)   = 1/sf
+//   C: h_depth=1,l_depth=2  →  (sf²/sf)/sf        = 1
+//   D: h_depth=1,l_depth=1  →  (sf/sf)/sf         = 1/sf
+// Earlier I lazily assumed all four collapse to 1.0; that's only true
+// for A and C. Phase 11 caught it on case D.
 Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
     REQUIRE(ctx.mode == lbcrypto::FIXEDAUTO);
     REQUIRE(high.towers() > low.towers());
@@ -150,6 +147,12 @@ Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
     const std::uint32_t h_depth = high.noise_scale_deg();
     const std::uint32_t l_depth = low.noise_scale_deg();
     constexpr std::size_t cd = 1;
+
+    auto crypto_params = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(crypto_params);
+    const double scf = crypto_params->GetScalingFactorReal(0);
+    const double inv_scf = 1.0 / scf;
 
     if (h_depth == 2 && l_depth == 2) {
         high = mult_by_const(ctx, high, 1.0);
@@ -160,7 +163,7 @@ Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
         if (towers_diff == cd) {
             high = rescale(ctx, std::move(high));
         } else {
-            high = mult_by_const(ctx, high, 1.0);
+            high = mult_by_const(ctx, high, inv_scf);
             high = rescale(ctx, std::move(high));
             if (towers_diff > 2 * cd)
                 high = level_reduce(ctx, std::move(high), towers_diff - 2 * cd);
@@ -172,7 +175,7 @@ Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
             high = level_reduce(ctx, std::move(high), towers_diff);
     } else {
         // both depth 1
-        high = mult_by_const(ctx, high, 1.0);
+        high = mult_by_const(ctx, high, inv_scf);
         if (towers_diff > cd)
             high = level_reduce(ctx, std::move(high), towers_diff - cd);
         high = rescale(ctx, std::move(high));
@@ -206,19 +209,20 @@ AdjustedPair adjust_for_mult(const OpCtx &ctx, Ct a, Ct b) {
     return {std::move(a), std::move(b)};
 }
 
-// Same-level add/sub adjustment for FIXEDAUTO. If NSDs differ, mult the
-// lower-NSD side by 1.0 to bump NSD to match (this affects polynomial
-// values, not just metadata).
+// Mirror OpenFHE's LeveledSHECKKSRNS::AdjustLevelsAndDepthInPlace
+// (ckksrns-leveledshe.cpp:603) — same level alignment as the mult
+// variant, just without the To-One ModReduce-both wrap. Used by EvalAdd
+// and EvalSub.
 AdjustedPair adjust_for_add(const OpCtx &ctx, Ct a, Ct b) {
     if (ctx.mode == lbcrypto::FIXEDMANUAL)
         return {std::move(a), std::move(b)};
-    // Align tower counts via metadata.
     if (a.towers() > b.towers())
-        a = level_reduce(ctx, std::move(a), a.towers() - b.towers());
+        a = adjust_one_to_other(ctx, std::move(a), b);
     else if (b.towers() > a.towers())
-        b = level_reduce(ctx, std::move(b), b.towers() - a.towers());
-    // Bump lower-NSD side to match higher via mult-by-1.0
-    // (encoded plaintext 1.0 affects c0 and bumps NSD).
+        b = adjust_one_to_other(ctx, std::move(b), a);
+
+    REQUIRE(a.towers() == b.towers());
+
     if (a.noise_scale_deg() < b.noise_scale_deg())
         a = mult_by_const(ctx, a, 1.0);
     else if (b.noise_scale_deg() < a.noise_scale_deg())
@@ -302,21 +306,15 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
             T.push_back(add_const(ctx, rescaled, -1.0));
         }
     }
-    // Bring all T[i] to T[k-1]'s tower count via metadata-only level
-    // reduction (matches OpenFHE FIXEDAUTO's AdjustLevelsAndDepthInPlace
-    // behavior when only the tower count differs, not the noise scale).
-    const std::size_t target_towers = T.back().towers();
-    // Align both towers AND NSDs — OpenFHE's
-    // AdjustLevelsAndDepthInPlace (FIXEDAUTO) bumps lower-NSD T[i] via
-    // EvalMultCoreInPlace(T[i], 1.0). Without this NSD alignment,
-    // eval_partial_linear_wsum produces mixed-NSD products (T[k-1] at
-    // NSD=2 vs T[0] at NSD=1 → mult_by_const gives NSD=3 and NSD=2
-    // respectively) and the sum's NSD is wrong by 1.
-    const std::uint32_t target_nsd = T.back().noise_scale_deg();
+    // Mirror OpenFHE: bring each T[i] to T[k-1]'s level/depth via the
+    // real AdjustLevelsAndDepthInPlace dance (mult-by-factor + rescale +
+    // level_reduce). Doing this with metadata-only level_reduce produces
+    // outputs that diverge from OpenFHE byte-for-byte and underconsumes
+    // levels relative to what StC expects.
     for (std::uint32_t i = 0; i + 1 < k; ++i) {
-        if (T[i].towers() > target_towers)
-            T[i] = level_reduce(ctx, std::move(T[i]), T[i].towers() - target_towers);
-        if (T[i].noise_scale_deg() < target_nsd)
+        if (T[i].towers() > T.back().towers())
+            T[i] = adjust_one_to_other(ctx, std::move(T[i]), T.back());
+        if (T[i].noise_scale_deg() < T.back().noise_scale_deg())
             T[i] = mult_by_const(ctx, T[i], 1.0);
     }
 
@@ -529,6 +527,12 @@ void apply_double_angle_for_test(const OpCtx &ctx, Ct &ct, std::uint32_t r) {
 Ct eval_chebyshev_series_for_test(const OpCtx &ctx, const Ct &x,
                                   const std::vector<double> &c) {
     return eval_chebyshev_series(ctx, x, c);
+}
+AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b) {
+    return adjust_for_mult(ctx, std::move(a), std::move(b));
+}
+AdjustedPair adjust_for_add_for_test(const OpCtx &ctx, Ct a, Ct b) {
+    return adjust_for_add(ctx, std::move(a), std::move(b));
 }
 
 Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {

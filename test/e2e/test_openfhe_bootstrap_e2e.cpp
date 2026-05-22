@@ -286,6 +286,95 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
     }
 }
 
+TEST_CASE("phase11 adjust_for_mult / adjust_for_add byte-parity vs OpenFHE",
+          "[integration][e2e]") {
+    // Per-RNS-limb parity vs OpenFHE's
+    // cc->GetScheme()->AdjustLevelsAndDepthToOneInPlace (mult variant)
+    // and AdjustLevelsAndDepthInPlace (add variant), across all
+    // (level, NSD) combinations that appear inside compute_cheby_tree
+    // and inner_eval_chebyshev_ps.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+    // Build a ciphertext at NSD=2: one EvalMult by 1.0 (no auto-rescale
+    // when input NSD=1, so output is NSD=2 at the same level).
+    auto bump_nsd2 = [&](Ciphertext<DCRTPoly> ct) {
+        return ctx.cc->EvalMult(ct, 1.0);
+    };
+    // ModReduce in place (FIXEDAUTO public ModReduceInPlace is a no-op;
+    // go through the scheme to actually drop a level).
+    auto drop_level = [&](Ciphertext<DCRTPoly> ct) {
+        ctx.cc->GetScheme()->ModReduceInternalInPlace(ct, 1);
+        return ct;
+    };
+
+    auto check_mult_pair = [&](const std::string &label, Ciphertext<DCRTPoly> ct_a,
+                               Ciphertext<DCRTPoly> ct_b) {
+        // OpenFHE reference BEFORE haze epoch opens so CPROBES doesn't
+        // pollute the trace.
+        auto ref_a = ct_a->Clone();
+        auto ref_b = ct_b->Clone();
+        ctx.cc->GetScheme()->AdjustLevelsAndDepthToOneInPlace(ref_a, ref_b);
+
+        auto haze_a = ops::h2d_ct(ctx, ct_a);
+        auto haze_b = ops::h2d_ct(ctx, ct_b);
+        auto pair = ops::adjust_for_mult_for_test(ctx, std::move(haze_a), std::move(haze_b));
+
+        assert_rns_equal(ctx, pair.a, ref_a, "phase11 mult " + label + " .a");
+        assert_rns_equal(ctx, pair.b, ref_b, "phase11 mult " + label + " .b");
+    };
+
+    auto check_add_pair = [&](const std::string &label, Ciphertext<DCRTPoly> ct_a,
+                              Ciphertext<DCRTPoly> ct_b) {
+        auto ref_a = ct_a->Clone();
+        auto ref_b = ct_b->Clone();
+        ctx.cc->GetScheme()->AdjustLevelsAndDepthInPlace(ref_a, ref_b);
+
+        auto haze_a = ops::h2d_ct(ctx, ct_a);
+        auto haze_b = ops::h2d_ct(ctx, ct_b);
+        auto pair = ops::adjust_for_add_for_test(ctx, std::move(haze_a), std::move(haze_b));
+
+        assert_rns_equal(ctx, pair.a, ref_a, "phase11 add " + label + " .a");
+        assert_rns_equal(ctx, pair.b, ref_b, "phase11 add " + label + " .b");
+    };
+
+    // Same level, varied NSD.
+    check_mult_pair("L=0/N=1 vs L=0/N=1", fresh(), fresh());
+    check_mult_pair("L=0/N=2 vs L=0/N=2", bump_nsd2(fresh()), bump_nsd2(fresh()));
+    check_mult_pair("L=0/N=1 vs L=0/N=2", fresh(), bump_nsd2(fresh()));
+
+    // Different levels, varied NSD. drop_level brings NSD 2→1 and L 0→1.
+    check_mult_pair("L=0/N=2 vs L=1/N=2",
+                    bump_nsd2(fresh()), bump_nsd2(drop_level(bump_nsd2(fresh()))));
+    check_mult_pair("L=0/N=2 vs L=1/N=1",
+                    bump_nsd2(fresh()), drop_level(bump_nsd2(fresh())));
+    check_mult_pair("L=0/N=1 vs L=1/N=2",
+                    fresh(), bump_nsd2(drop_level(bump_nsd2(fresh()))));
+    check_mult_pair("L=0/N=1 vs L=1/N=1",
+                    fresh(), drop_level(bump_nsd2(fresh())));
+
+    // adjust_for_add: same coverage.
+    check_add_pair("L=0/N=1 vs L=0/N=1", fresh(), fresh());
+    check_add_pair("L=0/N=2 vs L=0/N=2", bump_nsd2(fresh()), bump_nsd2(fresh()));
+    check_add_pair("L=0/N=1 vs L=0/N=2", fresh(), bump_nsd2(fresh()));
+    check_add_pair("L=0/N=2 vs L=1/N=2",
+                   bump_nsd2(fresh()), bump_nsd2(drop_level(bump_nsd2(fresh()))));
+    check_add_pair("L=0/N=2 vs L=1/N=1",
+                   bump_nsd2(fresh()), drop_level(bump_nsd2(fresh())));
+    check_add_pair("L=0/N=1 vs L=1/N=2",
+                   fresh(), bump_nsd2(drop_level(bump_nsd2(fresh()))));
+    check_add_pair("L=0/N=1 vs L=1/N=1",
+                   fresh(), drop_level(bump_nsd2(fresh())));
+}
+
 TEST_CASE("phase10 microbenchmark ops:: helpers at N=2048",
           "[integration][e2e]") {
     // Per-call wall time for each ops:: helper used by bootstrap. Tells us
