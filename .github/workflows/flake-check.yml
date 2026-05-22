@@ -14,10 +14,13 @@ concurrency:
   group: flake-check-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Two-job pipeline. `lint` runs the clang-tidy flake derivation as a
-# fast gate; `flake-check` runs the slower test suite only after lint
-# succeeds. Magic Nix Cache shares the /nix/store across jobs so the
-# second job reuses everything the first one built.
+# Two-job pipeline running in parallel. `lint` runs the cached
+# clang-tidy gate (ctcache-backed); `flake-check` runs the slower
+# test suite. Both gate the PR independently — running them in
+# parallel rather than sequentially halves wall time on the typical
+# happy path while preserving the property that any uncached
+# regression caught only by the in-sandbox flake derivation still
+# blocks merge. Magic Nix Cache shares the /nix/store across jobs.
 jobs:
   lint:
     name: clang-tidy
@@ -172,7 +175,6 @@ jobs:
 
   flake-check:
     name: nix flake check
-    needs: lint
     runs-on: ubuntu-latest
     if: >-
       github.event_name != 'pull_request' ||
