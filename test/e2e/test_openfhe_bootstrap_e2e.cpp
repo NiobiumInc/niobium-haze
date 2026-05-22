@@ -2017,6 +2017,59 @@ TEST_CASE("ckks bootstrap reference (OpenFHE EvalBootstrap) decrypts", "[integra
     }
 }
 
+TEST_CASE("phase28 OpenFHE-only full bootstrap on depleted ct", "[integration][e2e]") {
+    // Step 1 of Ryan's plan: run real OpenFHE EvalBootstrap end-to-end
+    // (not the shortcut path) on a depleted ct so post-bootstrap towers
+    // exceed input towers. Each EvalMult-by-1 in FIXEDAUTO: NSD 1→2 →
+    // auto-rescale → NSD=1, towers-1. Repeat to deplete cleanly.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx();
+    constexpr std::uint32_t slots = 8;
+    ctx.cc->EvalBootstrapSetup({1, 1}, {0, 0}, slots, 11);
+    ctx.cc->EvalBootstrapKeyGen(ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // Deplete just enough that the bootstrap shortcut won't fire (post-bootstrap
+    // is typically ~11 towers from our trace). Going to 5 towers leaves a wide
+    // gap so the shortcut definitely skips, while keeping enough levels above
+    // q_0 for the bootstrap to refresh cleanly.
+    const std::size_t before = ct->GetElements()[0].GetNumOfElements();
+    const std::size_t target_input_towers = 5;
+    while (ct->GetElements()[0].GetNumOfElements() > target_input_towers)
+        ctx.cc->EvalMultInPlace(ct, 1.0); // drops a level per call (FIXEDAUTO auto-rescale)
+    std::cerr << "  [phase28] depleted " << before << " -> "
+              << ct->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct->GetNoiseScaleDeg() << "\n";
+
+    auto ct_refreshed = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_refreshed);
+    std::cerr << "  [phase28] post-bootstrap towers="
+              << ct_refreshed->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_refreshed->GetNoiseScaleDeg() << "\n";
+
+    Plaintext out;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_refreshed, &out);
+    out->SetLength(v.size());
+    const auto got = out->GetRealPackedValue();
+    for (std::size_t i = 0; i < v.size(); ++i)
+        std::cerr << "    slot[" << i << "] got=" << got[i] << " ref=" << v[i]
+                  << " diff=" << (got[i] - v[i]) << "\n";
+
+    // Depleted-input bootstrap accumulates more noise than the shortcut
+    // path; use a looser tolerance here. The point is to confirm OpenFHE's
+    // full bootstrap pipeline produces decodable output, not tight accuracy.
+    constexpr double kDepletedTolerance = 1e-1;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        INFO("slot " << i << " got=" << got[i] << " ref=" << v[i]);
+        REQUIRE_THAT(got[i], Catch::Matchers::WithinAbs(v[i], kDepletedTolerance));
+    }
+}
+
 TEST_CASE("ckks bootstrap linear_transform slot parity vs EvalLinearTransform",
           "[integration][e2e]") {
     // Hoisted linear_transform compared to OpenFHE's EvalLinearTransform.
