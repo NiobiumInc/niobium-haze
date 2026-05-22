@@ -111,6 +111,9 @@ Allocs rescale_chain_one_tower(const OpCtx &ctx, const Allocs &src, std::size_t 
 }
 
 Ct pre_rescale_ct(const OpCtx &ctx, const Ct &a) {
+    // Same uint32_t underflow hazard as ops::rescale — NSD==0 wraps the
+    // decremented field to UINT32_MAX and silently corrupts downstream.
+    REQUIRE(a.noise_scale_deg() >= 1);
     Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
     Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
     return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};
@@ -615,6 +618,9 @@ Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
 Ct rescale(const OpCtx &ctx, const Ct &a) {
     REQUIRE(ctx.mode == lbcrypto::FIXEDMANUAL);
     REQUIRE(a.towers() >= 2);
+    // noise_scale_deg_ is uint32_t; rescale on NSD==0 underflows to
+    // UINT32_MAX and silently corrupts downstream NSD-branched logic.
+    REQUIRE(a.noise_scale_deg() >= 1);
     Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
     Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
     return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};
