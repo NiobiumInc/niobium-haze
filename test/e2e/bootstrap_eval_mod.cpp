@@ -247,13 +247,6 @@ AdjustedPair adjust_for_add(const OpCtx &ctx, Ct a, Ct b) {
     return {std::move(a), std::move(b)};
 }
 
-// Pure tower-count reduction (no ModDown arithmetic). Used for
-// level-alignment before add/sub/mult, mirroring OpenFHE's
-// LevelReduceInPlace. Distinct from ops::rescale which consumes a level.
-Ct drop_levels(const OpCtx &ctx, Ct ct, std::size_t levels) {
-    return level_reduce(ctx, std::move(ct), levels);
-}
-
 uint32_t poly_degree(const std::vector<double> &v) {
     for (std::size_t i = v.size(); i-- > 0;)
         if (std::abs(v[i]) > 0x1p-44)
@@ -716,13 +709,12 @@ Ct eval_chebyshev_series(const OpCtx &ctx, const Ct &x,
     // (inner_eval_chebyshev_ps) remains in this file for reference.
     Ct inner = inner_eval_chebyshev_ps_nb(ctx, x, f2, k, m, tree.T, tree.T2);
 
-    // result = inner - T2km1
-    Ct t2km1 = clone_ct(ctx, tree.T2km1);
-    if (t2km1.towers() > inner.towers())
-        t2km1 = drop_levels(ctx, std::move(t2km1), t2km1.towers() - inner.towers());
-    else if (inner.towers() > t2km1.towers())
-        inner = drop_levels(ctx, std::move(inner), inner.towers() - t2km1.towers());
-    return sub(ctx, inner, t2km1);
+    // result = inner - T2km1, mirroring cc->EvalSub which routes through
+    // AdjustForAddOrSubInPlace = AdjustLevelsAndDepthInPlace for FIXEDAUTO.
+    // The previous metadata-only drop_levels skipped that arithmetic and
+    // produced byte-divergent output (phase 14 caught the global mismatch).
+    auto ap = adjust_for_add(ctx, std::move(inner), clone_ct(ctx, tree.T2km1));
+    return sub(ctx, ap.a, ap.b);
 }
 
 void apply_double_angle_iterations(const OpCtx &ctx, Ct &ct, std::uint32_t num_iter) {
