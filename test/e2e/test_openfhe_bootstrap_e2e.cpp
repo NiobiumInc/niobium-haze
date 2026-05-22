@@ -2070,6 +2070,40 @@ TEST_CASE("phase28 OpenFHE-only full bootstrap on depleted ct", "[integration][e
     }
 }
 
+TEST_CASE("phase30 haze ops::bootstrap == cc->EvalBootstrap byte-equal (N=2048)",
+          "[integration][e2e]") {
+    // Step 3 of Ryan's plan: with phase 28 (cc->EvalBootstrap works) and
+    // phase 29 (manual replication byte-equal) green, this test verifies
+    // haze's ops::bootstrap also produces byte-equivalent output. Uses
+    // small ring_dim so haze's simulator doesn't OOM during replay.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    // Deplete to ~6 towers so the bootstrap shortcut won't fire.
+    while (ct->GetElements()[0].GetNumOfElements() > 6)
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+
+    auto ct_ref = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct,
+                                         ops::BootstrapVariant::Standard);
+    std::cerr << "  [phase30] ct_ref: towers="
+              << ct_ref->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_ref->GetNoiseScaleDeg() << "\n";
+    std::cerr << "  [phase30] haze: towers=" << haze_refreshed.towers()
+              << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
+    assert_rns_equal(ctx, haze_refreshed, ct_ref, "phase30 e2e bootstrap");
+}
+
 TEST_CASE("phase29 manual OpenFHE bootstrap == cc->EvalBootstrap byte-equal",
           "[integration][e2e]") {
     // Step 2 of Ryan's plan: replicate the full OpenFHE bootstrap pipeline
@@ -2124,8 +2158,10 @@ TEST_CASE("phase29 manual OpenFHE bootstrap == cc->EvalBootstrap byte-equal",
     auto raised = ct->Clone();
     // line 588: ModReduceInternalInPlace(raised, compositeDegree*(NSD-1))
     algo->ModReduceInternalInPlace(raised, 1 * (raised->GetNoiseScaleDeg() - 1));
-    // line 590: AdjustCiphertext = EvalMult(raised, 2^-correction)
+    // line 590: AdjustCiphertext — default modReduce=true, so this is
+    // EvalMult(2^-correction) FOLLOWED BY ModReduceInternalInPlace.
     ctx.cc->EvalMultInPlace(raised, std::pow(2.0, -correction));
+    algo->ModReduceInternalInPlace(raised, 1);
     // lines 620-628: mod-raise re-embed (tower 0 → full Q chain)
     {
         auto elementParams = cp->GetElementParams();

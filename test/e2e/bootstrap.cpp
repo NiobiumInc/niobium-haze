@@ -35,13 +35,11 @@ Ct partial_sum(const OpCtx &ctx, const BootstrapKeys &bk, Ct ct) {
 Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapVariant variant) {
     switch (variant) {
     case BootstrapVariant::Standard: {
-        // Mirror OpenFHE's bootstrap pipeline ordering:
-        //   1. AdjustCiphertext on FULL ct (at level 0; uses scFactor(0))
-        //   2. mod_raise re-embeds tower 0 into the full Q chain
-        //   3. EvalMult(pre/(k*N)) with auto-rescale on NSD=2
-        // Order matters because eval_mult_scalar's per-tower factor depends on
-        // the ct's level (via GetScalingFactorReal). AdjustCiphertext must be
-        // computed against scFactor(0), not scFactor(L0-1), to match OpenFHE.
+        // Mirror OpenFHE's bootstrap pipeline (ckksrns-fhe.cpp:586-805).
+        // AdjustCiphertext (line 590) has modReduce=true as default — it's
+        // EvalMult(2^-correction) FOLLOWED BY ModReduceInternalInPlace.
+        // EvalMult(pre/(k*N)) at line 666 then operates on NSD=1 input
+        // (post-AdjustCiphertext-rescale), so no auto-rescale fires there.
         auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
             ctx.cc->GetCryptoParameters());
         REQUIRE(cp);
@@ -58,6 +56,7 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
 
         Ct adjusted =
             eval_mult_scalar_for_test(ctx, ct, std::pow(2.0, -correction));
+        adjusted = rescale(ctx, std::move(adjusted));
         Ct depleted = clone_ct(ctx, adjusted);
         if (depleted.towers() > 1)
             depleted = level_reduce(ctx, std::move(depleted),
@@ -93,7 +92,10 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             Ct rotated = rotate_with_key(ctx, out, it->second);
             out = add(ctx, out, rotated);
         }
-        constexpr std::uint64_t corFactor = 1ULL << 11; // correctionFactor=11
+        // corFactor = 1 << correction (= correction_factor - deg). For the
+        // tested setup with deg=10, correction=1, so corFactor=2.
+        const std::uint64_t corFactor =
+            static_cast<std::uint64_t>(1) << static_cast<std::uint64_t>(correction);
         out = mult_int_scalar_for_test(ctx, out, corFactor);
         return out;
     }
