@@ -286,6 +286,52 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
     }
 }
 
+TEST_CASE("phase15 compute_cheby_tree byte-parity vs cc->EvalChebyPolys",
+          "[integration][e2e]") {
+    // Isolate whether the phase 14 chebyshev divergence is in the
+    // T-tree build (compute_cheby_tree) or in the inner_eval recursion.
+    // OpenFHE exposes cc->EvalChebyPolys returning a seriesPowers struct
+    // (powersRe / powers2Re / power2km1Re). Compare T[0..k-1] / T2[0..m-1]
+    // / T2km1 byte-for-byte.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+
+    auto check = [&](const std::string &label, const std::vector<double> &coeffs,
+                     Ciphertext<DCRTPoly> ct) {
+        auto ref_tree = ctx.cc->EvalChebyPolys(ct, coeffs, -1.0, 1.0);
+        REQUIRE(ref_tree);
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+        auto my_tree = ops::compute_cheby_tree_for_test(ctx, haze_ct, coeffs);
+        REQUIRE(my_tree.k == ref_tree->k);
+        REQUIRE(my_tree.m == ref_tree->m);
+        REQUIRE(my_tree.T.size() == ref_tree->powersRe.size());
+        REQUIRE(my_tree.T2.size() == ref_tree->powers2Re.size());
+        for (std::size_t i = 0; i < my_tree.T.size(); ++i) {
+            assert_rns_equal(ctx, my_tree.T[i], ref_tree->powersRe[i],
+                             "phase15 " + label + " T[" + std::to_string(i) + "]");
+        }
+        for (std::size_t i = 0; i < my_tree.T2.size(); ++i) {
+            assert_rns_equal(ctx, my_tree.T2[i], ref_tree->powers2Re[i],
+                             "phase15 " + label + " T2[" + std::to_string(i) + "]");
+        }
+        if (ref_tree->power2km1Re)
+            assert_rns_equal(ctx, my_tree.T2km1, ref_tree->power2km1Re,
+                             "phase15 " + label + " T2km1");
+    };
+
+    std::vector<double> coeffs = {0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625};
+    check("degree=5", coeffs, fresh());
+}
+
 TEST_CASE("phase14 eval_chebyshev_series byte-parity vs cc->EvalChebyshevSeries",
           "[integration][e2e]") {
     // Top rung: compare ops::eval_chebyshev_series to OpenFHE's

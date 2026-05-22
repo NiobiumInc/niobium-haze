@@ -100,4 +100,17 @@ struct AdjustedPair {
 AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b);
 AdjustedPair adjust_for_add_for_test(const OpCtx &ctx, Ct a, Ct b);
 
+// Cheby T-tree exposed for byte-parity testing vs OpenFHE
+// cc->EvalChebyPolys's seriesPowers struct. Returns T, T2, T2km1 (k, m
+// inferred from the input degree).
+struct ChebyTreeForTest {
+    std::vector<Ct> T;
+    std::vector<Ct> T2;
+    Ct T2km1;
+    std::uint32_t k;
+    std::uint32_t m;
+};
+ChebyTreeForTest compute_cheby_tree_for_test(const OpCtx &ctx, const Ct &x,
+                                              const std::vector<double> &coeffs);
+
 } // namespace haze::test::ops

@@ -772,6 +772,15 @@ AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b) {
 AdjustedPair adjust_for_add_for_test(const OpCtx &ctx, Ct a, Ct b) {
     return adjust_for_add(ctx, std::move(a), std::move(b));
 }
+ChebyTreeForTest compute_cheby_tree_for_test(const OpCtx &ctx, const Ct &x,
+                                              const std::vector<double> &coeffs) {
+    const std::uint32_t n = poly_degree(coeffs);
+    auto degs = lbcrypto::ComputeDegreesPS(n);
+    const std::uint32_t k = degs[0];
+    const std::uint32_t m = degs[1];
+    ChebyTree tree = compute_cheby_tree(ctx, x, k, m);
+    return ChebyTreeForTest{std::move(tree.T), std::move(tree.T2), std::move(tree.T2km1), k, m};
+}
 
 Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
     using namespace lbcrypto;
