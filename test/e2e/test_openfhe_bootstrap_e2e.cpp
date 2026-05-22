@@ -286,6 +286,44 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
     }
 }
 
+TEST_CASE("phase16 eval_mult_scalar byte-parity vs cc->EvalMult(ct, double)",
+          "[integration][e2e]") {
+    // Test eval_mult_scalar (the auto-rescale-on-NSD=2 helper used in
+    // accum_baby_step) against cc->EvalMult(ct, double) for various
+    // scalars. If this passes, my scalar-mult building block is byte-
+    // exact and the phase 14 divergence isn't in the per-coefficient
+    // multiplication.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+    auto bump_nsd2 = [&](Ciphertext<DCRTPoly> ct) { return ctx.cc->EvalMult(ct, 1.0); };
+
+    auto check = [&](const std::string &label, Ciphertext<DCRTPoly> ct, double scalar) {
+        auto ref = ctx.cc->EvalMult(ct, scalar);
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+        auto out = ops::eval_mult_scalar_for_test(ctx, haze_ct, scalar);
+        assert_rns_equal(ctx, out, ref, "phase16 " + label);
+    };
+
+    // NSD=1 input, various scalars.
+    check("NSD=1 scalar=1.0", fresh(), 1.0);
+    check("NSD=1 scalar=0.5", fresh(), 0.5);
+    check("NSD=1 scalar=-0.001", fresh(), -0.001);
+    check("NSD=1 scalar=2.5", fresh(), 2.5);
+    // NSD=2 input — auto-rescale path.
+    check("NSD=2 scalar=1.0", bump_nsd2(fresh()), 1.0);
+    check("NSD=2 scalar=0.25", bump_nsd2(fresh()), 0.25);
+    check("NSD=2 scalar=-3.14", bump_nsd2(fresh()), -3.14);
+}
+
 TEST_CASE("phase15 compute_cheby_tree byte-parity vs cc->EvalChebyPolys",
           "[integration][e2e]") {
     // Isolate whether the phase 14 chebyshev divergence is in the

@@ -764,6 +764,9 @@ AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b) {
 AdjustedPair adjust_for_add_for_test(const OpCtx &ctx, Ct a, Ct b) {
     return adjust_for_add(ctx, std::move(a), std::move(b));
 }
+Ct eval_mult_scalar_for_test(const OpCtx &ctx, const Ct &ct, double scalar) {
+    return eval_mult_scalar(ctx, ct, scalar);
+}
 ChebyTreeForTest compute_cheby_tree_for_test(const OpCtx &ctx, const Ct &x,
                                               const std::vector<double> &coeffs) {
     const std::uint32_t n = poly_degree(coeffs);

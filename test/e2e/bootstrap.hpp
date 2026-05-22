@@ -99,6 +99,7 @@ struct AdjustedPair {
 };
 AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b);
 AdjustedPair adjust_for_add_for_test(const OpCtx &ctx, Ct a, Ct b);
+Ct eval_mult_scalar_for_test(const OpCtx &ctx, const Ct &ct, double scalar);
 
 // Cheby T-tree exposed for byte-parity testing vs OpenFHE
 // cc->EvalChebyPolys's seriesPowers struct. Returns T, T2, T2km1 (k, m
