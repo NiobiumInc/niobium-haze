@@ -294,38 +294,28 @@ uint32_t poly_degree(const std::vector<double> &v) {
     return 0;
 }
 
-// EvalPartialLinearWSum: Σ T[i] * coeffs[i+1] for i in 0..n-1, only
-// non-zero coefficients. Mirrors OpenFHE's EvalPartialLinearWSum
-// (advancedshe.cpp:143). The key step OpenFHE does that an untracked
-// haze impl misses: if input cts arrive at NSD=2, ModReduceInternalInPlace
-// EACH ONE before the EvalMult/EvalAdd loop (drops a level, brings them
-// to NSD=1). Then per-ct scalar mults bump NSD back to 2.
+// EvalPartialLinearWSum: Σ T[i] * coeffs[i+1] for i in 0..n-1. Mirrors
+// OpenFHE's EvalPartialLinearWSum (advancedshe.cpp:143). Important byte
+// invariant: OpenFHE multiplies by EVERY coefficient including ones below
+// the IsNotEqualZero threshold — must not skip tiny coefs or the IR
+// sequence diverges from OpenFHE's.
 Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
                             const std::vector<double> &coeffs, std::uint32_t n) {
-    std::vector<std::size_t> used;
-    for (std::uint32_t i = 0; i < n; ++i)
-        if (std::abs(coeffs[i + 1]) > 0x1p-44)
-            used.push_back(i);
-    REQUIRE(!used.empty());
-
-    // Stage clones; T[i] are assumed already at the same level after
-    // compute_cheby_tree's alignment loop, so AdjustLevelsAndDepthInPlace
-    // would be a no-op here. Pre-mult ModReduce on NSD=2.
+    REQUIRE(n > 0);
     std::vector<Ct> cts;
-    cts.reserve(used.size());
-    for (std::size_t i = 0; i < used.size(); ++i)
-        cts.push_back(clone_ct(ctx, T[used[i]]));
+    cts.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i)
+        cts.push_back(clone_ct(ctx, T[i]));
     if (ctx.mode != lbcrypto::FIXEDMANUAL && cts.front().noise_scale_deg() == 2) {
         for (auto &c : cts)
             c = rescale(ctx, std::move(c));
     }
 
-    Ct acc = mult_by_const(ctx, cts[0], coeffs[used[0] + 1]);
-    for (std::size_t i = 1; i < used.size(); ++i) {
-        Ct term = mult_by_const(ctx, cts[i], coeffs[used[i] + 1]);
+    Ct acc = mult_by_const(ctx, cts[0], coeffs[1]);
+    for (std::uint32_t i = 1; i < n; ++i) {
+        Ct term = mult_by_const(ctx, cts[i], coeffs[i + 1]);
         acc = add(ctx, acc, term);
     }
-    // Trailing cc->ModReduceInPlace is a no-op in FIXEDAUTO.
     return acc;
 }
 
