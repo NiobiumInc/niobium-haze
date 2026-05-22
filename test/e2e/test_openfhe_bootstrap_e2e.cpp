@@ -441,6 +441,134 @@ TEST_CASE("phase26 ops::bootstrap end-to-end completes D2H replay cleanly",
     REQUIRE(haze_bytes.c1.size() == haze_refreshed.towers());
 }
 
+namespace {
+
+// Compare a haze Ct against an OpenFHE Ciphertext byte-for-byte at the
+// per-tower RNS limb level. Returns first-mismatch tower index, or
+// SIZE_MAX if equal. Mirrors `assert_rns_equal` but without REQUIRE so
+// we can step through stages and observe.
+std::size_t first_mismatch_tower(const haze::test::ops::OpCtx &ctx,
+                                 const haze::test::ops::Ct &haze,
+                                 const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ref) {
+    if (haze.towers() != ref->GetElements()[0].GetNumOfElements())
+        return 0;
+    const auto haze_bytes = haze::test::ops::d2h_ct(ctx, haze);
+    for (std::size_t t = 0; t < haze.towers(); ++t) {
+        for (std::size_t elem = 0; elem < 2; ++elem) {
+            const auto &ref_np = ref->GetElements()[elem].GetElementAtIndex(
+                static_cast<usint>(t));
+            const auto &ref_vals = ref_np.GetValues();
+            const auto &haze_chain = (elem == 0) ? haze_bytes.c0 : haze_bytes.c1;
+            for (std::size_t i = 0; i < haze_chain[t].size(); ++i) {
+                if (haze_chain[t][i] !=
+                    ref_vals[i].template ConvertToInt<std::uint64_t>())
+                    return t;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+} // namespace
+
+TEST_CASE("phase27 byte-parity vs OpenFHE manual bootstrap pipeline — stage 1: mod-raise",
+          "[integration][e2e]") {
+    // Run OpenFHE's EvalBootstrap pipeline manually (ckksrns-fhe.cpp:586+)
+    // up to post-mod-raise + AdjustCiphertext + EvalMult(pre/(k*N)), then
+    // compare to haze's equivalent intermediate. First-divergence checkpoint.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    const double qDouble =
+        cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg =
+        static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction_factor = 11;
+    const std::int32_t correction = correction_factor - deg;
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+
+    // OpenFHE side, manual: clone, AdjustCiphertext (EvalMult by 2^-correction),
+    // basis extension (re-embed tower 0 in full Q chain), EvalMult(pre/(k*N)).
+    auto algo = ctx.cc->GetScheme();
+    auto raised_ref = ct->Clone();
+    algo->ModReduceInternalInPlace(raised_ref, /*levels=*/0);
+    ctx.cc->EvalMultInPlace(raised_ref, std::pow(2.0, -correction));
+    {
+        // Mirror ckksrns-fhe.cpp:620-628: take tower 0, re-embed in the
+        // full elementParams chain.
+        auto elementParams = cp->GetElementParams();
+        auto elementParamsPtr = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            ctx.cc->GetCyclotomicOrder(),
+            [&]() {
+                std::vector<NativeInteger> mods;
+                for (const auto &pp : elementParams->GetParams())
+                    mods.push_back(pp->GetModulus());
+                return mods;
+            }(),
+            [&]() {
+                std::vector<NativeInteger> roots;
+                for (const auto &pp : elementParams->GetParams())
+                    roots.push_back(pp->GetRootOfUnity());
+                return roots;
+            }());
+        const std::uint32_t L0 =
+            static_cast<std::uint32_t>(elementParams->GetParams().size());
+        auto elements = raised_ref->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), elementParamsPtr);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised_ref->SetElements(std::move(elements));
+        raised_ref->SetLevel(L0 - raised_ref->GetElements()[0].GetNumOfElements());
+    }
+    ctx.cc->EvalMultInPlace(raised_ref, pre / (static_cast<double>(K_UNIFORM) * N));
+
+    std::cerr << "  [phase27.s1] OpenFHE raised_ref: towers="
+              << raised_ref->GetElements()[0].GetNumOfElements()
+              << " nsd=" << raised_ref->GetNoiseScaleDeg()
+              << " level=" << raised_ref->GetLevel() << "\n";
+
+    // Haze side, mirroring ops::bootstrap up to the corresponding stage.
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_adjusted = ops::eval_mult_scalar_for_test(
+        ctx, haze_ct, std::pow(2.0, -correction));
+    auto depleted = ops::clone_ct(ctx, haze_adjusted);
+    if (depleted.towers() > 1)
+        depleted = ops::level_reduce(ctx, std::move(depleted),
+                                     depleted.towers() - 1);
+    auto haze_raised = ops::mod_raise(ctx, bk, depleted);
+    haze_raised = ops::eval_mult_scalar_for_test(
+        ctx, haze_raised, pre / (static_cast<double>(K_UNIFORM) * N));
+
+    std::cerr << "  [phase27.s1] haze raised: towers=" << haze_raised.towers()
+              << " nsd=" << haze_raised.noise_scale_deg() << "\n";
+
+    const std::size_t mm =
+        first_mismatch_tower(ctx, haze_raised, raised_ref);
+    std::cerr << "  [phase27.s1] first_mismatch_tower="
+              << (mm == SIZE_MAX ? std::string{"(none)"}
+                                 : std::to_string(mm))
+              << "\n";
+    REQUIRE(mm == SIZE_MAX);
+}
+
 TEST_CASE("phase25 Chebyshev byte-parity at varying degree truncation",
           "[integration][e2e]") {
     // Phase 24 confirmed g_coefficientsUniform (degree 84) breaks byte-parity

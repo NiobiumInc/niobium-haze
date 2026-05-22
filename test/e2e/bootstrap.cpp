@@ -35,16 +35,13 @@ Ct partial_sum(const OpCtx &ctx, const BootstrapKeys &bk, Ct ct) {
 Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapVariant variant) {
     switch (variant) {
     case BootstrapVariant::Standard: {
-        Ct depleted = clone_ct(ctx, ct);
-        if (depleted.towers() > 1)
-            depleted = level_reduce(ctx, std::move(depleted), depleted.towers() - 1);
-        Ct raised = mod_raise(ctx, bk, depleted);
-
-        // Single combined scale: 2^-correction * pre/(k*N). Mathematically
-        // equivalent to OpenFHE's AdjustCiphertext (EvalMult by 2^-correction)
-        // followed by EvalMult(pre/(k*N)). Combining into one mult avoids
-        // an intermediate auto-rescale that would consume an extra level
-        // and misalign with bk.cts_matrices.
+        // Mirror OpenFHE's bootstrap pipeline ordering:
+        //   1. AdjustCiphertext on FULL ct (at level 0; uses scFactor(0))
+        //   2. mod_raise re-embeds tower 0 into the full Q chain
+        //   3. EvalMult(pre/(k*N)) with auto-rescale on NSD=2
+        // Order matters because eval_mult_scalar's per-tower factor depends on
+        // the ct's level (via GetScalingFactorReal). AdjustCiphertext must be
+        // computed against scFactor(0), not scFactor(L0-1), to match OpenFHE.
         auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
             ctx.cc->GetCryptoParameters());
         REQUIRE(cp);
@@ -58,9 +55,16 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
         constexpr std::uint32_t K_UNIFORM = 512;
         const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
-        const double pre_factor =
-            std::pow(2.0, -correction) * pre / (static_cast<double>(K_UNIFORM) * N);
-        raised = eval_mult_scalar_for_test(ctx, raised, pre_factor);
+
+        Ct adjusted =
+            eval_mult_scalar_for_test(ctx, ct, std::pow(2.0, -correction));
+        Ct depleted = clone_ct(ctx, adjusted);
+        if (depleted.towers() > 1)
+            depleted = level_reduce(ctx, std::move(depleted),
+                                    depleted.towers() - 1);
+        Ct raised = mod_raise(ctx, bk, depleted);
+        raised = eval_mult_scalar_for_test(
+            ctx, raised, pre / (static_cast<double>(K_UNIFORM) * N));
 
         if (bk.params.slots < N / 2)
             raised = partial_sum(ctx, bk, std::move(raised));
