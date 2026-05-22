@@ -47,13 +47,53 @@ Allocs encode_const_pt(const OpCtx &ctx, const Ct &ref_ct, double scalar,
     return Allocs(chain);
 }
 
-// Plain plaintext-mult by a double constant. Bumps NSD by 1, no rescale.
-// Mirrors OpenFHE's LeveledSHECKKSRNS::EvalMultCoreInPlace — the *inner*
-// primitive that AdjustLevelsAndDepthInPlace uses for the NSD-bumping
-// step. NOT what cc->EvalMult(ct, double) does (see eval_mult_scalar).
+// Mirror OpenFHE's LeveledSHECKKSRNS::EvalMultCoreInPlace via the
+// GetElementForEvalMult per-tower factor algorithm
+// (ckksrns-leveledshe.cpp:441-506). Bumps NSD by 1, no rescale.
+//
+// Importantly, EvalMult does NOT route through MakeCKKSPackedPlaintext
+// (the slot-FFT encoder) — it builds per-tower integer factors directly
+// from the scalar and the moduli. For negative scalars these encodings
+// diverge from the FFT path; phase 16 catches it. So this helper builds
+// the same per-tower factors and uses hazeMulScalarMrp.
 Ct mult_by_const(const OpCtx &ctx, const Ct &ct, double scalar) {
-    Allocs pt = encode_const_pt(ctx, ct, scalar, 1);
-    return mult_pt(ctx, ct, pt);
+    auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    const std::size_t towers = ct.towers();
+    const std::uint32_t level =
+        static_cast<std::uint32_t>(ctx.q_base.size() - towers);
+    const double scFactor = cp->GetScalingFactorReal(level);
+
+    // Simplified branch of GetElementForEvalMult: assumes the scaled
+    // constant fits in int64 (true for our test scalars at scFactor≈2^50).
+    // Match OpenFHE's `+ 0.5` rounding semantics — truncation toward zero
+    // after the offset.
+    const std::int64_t large =
+        static_cast<std::int64_t>(scalar * scFactor + 0.5);
+
+    std::vector<std::uint64_t> factors(towers);
+    for (std::size_t t = 0; t < towers; ++t) {
+        const std::uint64_t q_t = ctx.q_base[t];
+        std::int64_t reduced = large % static_cast<std::int64_t>(q_t);
+        if (reduced < 0)
+            reduced += static_cast<std::int64_t>(q_t);
+        factors[t] = static_cast<std::uint64_t>(reduced);
+    }
+
+    std::vector<std::uint64_t> base(ctx.q_base.begin(),
+                                    ctx.q_base.begin() +
+                                        static_cast<std::ptrdiff_t>(towers));
+    Allocs out_c0(towers, ctx.poly_bytes);
+    Allocs out_c1(towers, ctx.poly_bytes);
+    REQUIRE(hazeMulScalarMrp(out_c0.data(), ct.c0().as_const().data(),
+                             factors.data(), base.data(), base.size(),
+                             nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMulScalarMrp(out_c1.data(), ct.c1().as_const().data(),
+                             factors.data(), base.data(), base.size(),
+                             nullptr) == HAZE_SUCCESS);
+    return Ct{std::move(out_c0), std::move(out_c1), towers,
+              ct.noise_scale_deg() + 1};
 }
 
 // Mirror cc->EvalMult(ct, double) — the user-facing wrapper. For
