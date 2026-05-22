@@ -949,14 +949,13 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
 
     if (ctx.mode != lbcrypto::FIXEDMANUAL)
         ctEnc = rescale(ctx, ctEnc);
-    apply_double_angle_iterations(ctx, ctEnc, 3);
+    // R_UNIFORM=6 for UNIFORM_TERNARY, R_SPARSE=3 for SPARSE_*. Set in
+    // make_bootstrap_keys via bk.params.double_angle_iterations.
+    const std::uint32_t num_iter = bk.params.double_angle_iterations > 0
+                                       ? bk.params.double_angle_iterations
+                                       : 3;
+    apply_double_angle_iterations(ctx, ctEnc, num_iter);
 
-    // OpenFHE: MultByIntegerInPlace(ctxtEnc, scalar) where
-    //   qDouble = first modulus (compositeDegree=1)
-    //   powP    = 2^plaintextModulus
-    //   deg     = round(log2(qDouble / powP))
-    //   scalar  = round(2^deg)
-    // For correctionFactor=11 and matched setup, deg=0 and scalar=1.
     auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
         ctx.cc->GetCryptoParameters());
     REQUIRE(cp);

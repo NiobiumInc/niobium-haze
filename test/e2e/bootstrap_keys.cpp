@@ -60,6 +60,14 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
     bk.params.level_budget = level_budget;
     bk.params.cyclotomic_order = static_cast<std::uint64_t>(cc->GetCyclotomicOrder());
 
+    // R_UNIFORM=6 for UNIFORM_TERNARY, R_SPARSE=3 for SPARSE_*. Mirrors
+    // ckksrns-fhe.cpp:819,728-731. The test setup uses UNIFORM_TERNARY.
+    const auto rns_params_for_skd =
+        std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(cc->GetCryptoParameters());
+    REQUIRE(rns_params_for_skd);
+    bk.params.double_angle_iterations =
+        (rns_params_for_skd->GetSecretKeyDist() == UNIFORM_TERNARY) ? 6 : 3;
+
     REQUIRE(haze::hazeReplayBridgeExtractEvalMultKey(cc, sk, bk.relin_key) == HAZE_SUCCESS);
 
     const auto M = static_cast<std::uint32_t>(bk.params.cyclotomic_order);

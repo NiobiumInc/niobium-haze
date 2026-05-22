@@ -734,20 +734,22 @@ TEST_CASE("phase18 eval_mod byte-parity vs OpenFHE manual sparsely-packed replic
     const std::uint64_t scalar_ref =
         static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg_ref)));
 
+    // R_UNIFORM=6 for UNIFORM_TERNARY (the test's default secret key dist),
+    // matching haze's bk.params.double_angle_iterations.
+    const std::int32_t num_iter =
+        static_cast<std::int32_t>(bk.params.double_angle_iterations);
     auto openfhe_eval_mod = [&](Ciphertext<DCRTPoly> ctxtEnc) {
         ctxtEnc = ctx.cc->EvalAdd(ctxtEnc, ctx.cc->EvalAtIndex(ctxtEnc, 2 * static_cast<std::int32_t>(ctx.ring_dim) - 1));
         if (ctxtEnc->GetNoiseScaleDeg() == 2)
             ctx.cc->GetScheme()->ModReduceInternalInPlace(ctxtEnc, 1);
         ctxtEnc = ctx.cc->EvalChebyshevSeries(ctxtEnc, coefficients, -1.0, 1.0);
         ctx.cc->GetScheme()->ModReduceInternalInPlace(ctxtEnc, 1);
-        for (std::int32_t i = -2; i <= 0; ++i) {
+        for (std::int32_t i = 1 - num_iter; i <= 0; ++i) {
             const double scalar = -std::pow(2.0 * M_PI, -std::pow(2.0, i));
             ctx.cc->EvalSquareInPlace(ctxtEnc);
             ctx.cc->EvalAddInPlace(ctxtEnc, ctx.cc->EvalAdd(ctxtEnc, scalar));
             ctx.cc->ModReduceInPlace(ctxtEnc); // FIXEDAUTO no-op
         }
-        // OpenFHE line 825: algo->MultByIntegerInPlace(ctxtEnc, scalar).
-        // For our setup scalar=1 so this is identity.
         ctx.cc->GetScheme()->MultByIntegerInPlace(ctxtEnc, scalar_ref);
         ctx.cc->GetScheme()->ModReduceInternalInPlace(ctxtEnc, 1);
         return ctxtEnc;

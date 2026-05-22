@@ -66,9 +66,12 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         raised = rescale(ctx, raised);
         Ct in_slots = linear_transform(ctx, bk, bk.cts_matrices, raised);
         Ct modded = eval_mod(ctx, bk, in_slots);
-        // Align modded.towers to the StC matrices' Q-tower count
-        // (metadata-only). Pragmatic stand-in for matching OpenFHE's
-        // per-mult AdjustLevelsAndDepthInPlace level consumption.
+        // Defensive: with the right double_angle_iterations count for the
+        // secret-key dist (set in make_bootstrap_keys), modded.towers should
+        // already match stc_q_towers — the level_reduce here is a no-op.
+        // Left in as a guard for parameter combinations that consume fewer
+        // levels; remove when ops::bootstrap is mode-aware enough that the
+        // condition becomes unreachable.
         const std::size_t stc_q_towers =
             bk.stc_matrices.front().size() - ctx.p_base.size();
         if (modded.towers() > stc_q_towers)
