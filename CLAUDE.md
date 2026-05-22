@@ -437,13 +437,3 @@ parent project (e.g., niobium-client) has already built it.
   indent 4, column 100) and `.clang-tidy` (see file for the curated
   check list and the three `-Werror`-promoted checks).
 
-## Open issue
-
-`docs/lazy_shadow_flake.md` documents an intermittent test-suite failure
-not yet root-caused. Symptom: random SIGSEGV / SIGABRT / `[NBCC] Replay
-return code: 256` at varying lines across runs of the same binary, gcc
-Debug ~70% flake, clang ~40%, sanitizers clean in single runs. The
-smoking gun points at `niobium-compiler` process-lifetime caches not
-being refreshed across `hazeDeviceReset` boundaries. The lazy-shadow
-design is correct; the flake is a pre-existing latent bug exposed more
-often by heap-layout shift. ASAN/UBSAN/TSAN are still reliable signals.
