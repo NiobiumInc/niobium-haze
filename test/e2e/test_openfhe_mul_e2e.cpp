@@ -96,7 +96,8 @@ TEMPLATE_TEST_CASE("openfhe mul e2e", "[integration][e2e]", FixedManualNoRescale
                               .mult_depth = 2,
                               .scaling_mod_size = 50,
                               .batch_size = 8,
-                              .with_relin_key = true});
+                              .with_relin_key = true,
+                              .ring_dim = ops::RingDimChoice::OpenFHEDerives()});
     INFO("ring_dim=" << ctx.ring_dim << " |Q|=" << ctx.q_base.size()
                      << " |P|=" << ctx.p_base.size());
 

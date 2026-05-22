@@ -259,6 +259,7 @@ add_executable(haze_tests
   test/e2e/test_openfhe_mul_e2e.cpp
   test/e2e/test_openfhe_rotate_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
+  test/e2e/test_ops_ctx_params_e2e.cpp
 )
 
 target_include_directories(haze_tests PRIVATE

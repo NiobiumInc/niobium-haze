@@ -356,6 +356,10 @@ OpCtx make_ctx(const CtxParams &params) {
     cc_params.SetScalingModSize(params.scaling_mod_size);
     cc_params.SetBatchSize(params.batch_size);
     cc_params.SetScalingTechnique(params.mode);
+    if (const auto &pin = params.ring_dim.as_optional()) {
+        cc_params.SetRingDim(*pin);
+        cc_params.SetSecurityLevel(lbcrypto::HEStd_NotSet);
+    }
     ctx.cc = GenCryptoContext(cc_params);
     REQUIRE(ctx.cc);
     ctx.cc->Enable(PKE);
