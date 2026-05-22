@@ -629,8 +629,10 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
 
         qu = add_const(ctx, qu, q_free / 2.0);
         su = add_const(ctx, su, s_free / 2.0);
-        // OpenFHE: cc->LevelReduceInPlace(su, nullptr) — drop one level.
-        if (su.towers() >= 2)
+        // OpenFHE: cc->LevelReduceInPlace(su, nullptr). For FIXEDAUTO this
+        // is a no-op (LeveledSHERNS::LevelReduceInPlace only does work for
+        // FIXEDMANUAL — see rns-leveledshe.cpp:359). Mirror that.
+        if (ctx.mode == lbcrypto::FIXEDMANUAL && su.towers() >= 2)
             su = level_reduce(ctx, std::move(su), 1);
 
         // OpenFHE: `cu = cc->EvalMult(T.front(), divcs->q[1]); ModReduceInPlace(cu)`.
@@ -648,9 +650,8 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
 
         if (cu.has_value()) {
             *cu = add_const(ctx, *cu, divcs->q.front() / 2.0);
-            // OpenFHE: LevelReduceInPlace(cu, nullptr, (T2[m-1].level -
-            // cu.level) / cd). cd = 1.
-            if (cu->towers() > T2[m - 1].towers())
+            // OpenFHE: LevelReduceInPlace(cu, nullptr, ...). FIXEDAUTO no-op.
+            if (ctx.mode == lbcrypto::FIXEDMANUAL && cu->towers() > T2[m - 1].towers())
                 *cu = level_reduce(ctx, std::move(*cu), cu->towers() - T2[m - 1].towers());
         }
     } else {
@@ -686,7 +687,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 su = add(ctx, ap.a, ap.b);
             }
             su = add_const(ctx, su, s2.front() / 2.0);
-            if (su.towers() >= 2)
+            if (ctx.mode == lbcrypto::FIXEDMANUAL && su.towers() >= 2)
                 su = level_reduce(ctx, std::move(su), 1);
         }
 
@@ -700,7 +701,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 return rescale(ctx, eval_partial_linear_wsum(ctx, T, divcs->q, n));
             }();
             c = add_const(ctx, c, divcs->q.front() / 2.0);
-            if (c.towers() > T2[m - 1].towers())
+            if (ctx.mode == lbcrypto::FIXEDMANUAL && c.towers() > T2[m - 1].towers())
                 c = level_reduce(ctx, std::move(c), c.towers() - T2[m - 1].towers());
             cu = std::move(c);
         }
