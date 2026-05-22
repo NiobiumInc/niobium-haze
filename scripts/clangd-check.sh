@@ -81,20 +81,24 @@ find src replay_bridge test -name '*.cpp' -print0 \
         report=$(clangd --check="$f" --check-locations=false \
                         --compile-commands-dir="$HAZE_CLANGD_BUILD_DIR" 2>&1) || true
         if printf "%s\n" "$report" | grep -qE ": (warning|error):"; then
-            # Slot name encodes the source path so the final concat
-            # sorts back into a stable order (find walks lexically).
-            slot=$(printf "%s" "$f" | tr "/" "_")
+            # Mirror the source path under the tmpdir so two files like
+            # src/api/compute.cpp and src/api_compute.cpp (hypothetical)
+            # cannot collide on the same slot. mkdir -p is idempotent
+            # and safe under the concurrent xargs workers.
+            outfile="$HAZE_CLANGD_TMPDIR/$f"
+            mkdir -p "$(dirname "$outfile")"
             {
                 printf "=== %s ===\n" "$f"
                 printf "%s\n" "$report"
-            } > "$HAZE_CLANGD_TMPDIR/$slot"
+            } > "$outfile"
             exit 1
         fi
     ' _ || xargs_exit=$?
 
-shopt -s nullglob
-for report in "$tmpdir"/*; do
-    cat "$report"
-done
+# LC_ALL=C pins the sort to byte order so output is byte-identical
+# across locales (the flake check sandbox vs. a dev shell).
+find "$tmpdir" -type f -print0 \
+    | LC_ALL=C sort -z \
+    | xargs -0 -r cat
 
 test "$xargs_exit" = 0
