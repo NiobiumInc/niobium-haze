@@ -1625,15 +1625,16 @@ TEST_CASE("ckks bootstrap mod_raise RNS parity vs OpenFHE basis extension",
     }
 }
 
-TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap",
+TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap (N=2048)",
           "[integration][e2e]") {
     // Round-trip ct through haze, run ops::bootstrap, decrypt and compare
-    // slot-wise to cc->EvalBootstrap on the same input.
+    // slot-wise to cc->EvalBootstrap on the same input. N=2048 keeps the
+    // simulator memory footprint manageable; the 2^16 variant OOMs.
     using namespace lbcrypto;
     namespace ops = haze::test::ops;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    auto ctx = make_bootstrap_ctx();
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
 
     constexpr std::uint32_t slots = 8;
     auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
