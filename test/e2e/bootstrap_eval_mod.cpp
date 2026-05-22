@@ -47,10 +47,27 @@ Allocs encode_const_pt(const OpCtx &ctx, const Ct &ref_ct, double scalar,
     return Allocs(chain);
 }
 
-// EvalMult by a double constant: encode and mult_pt, returns NSD bumped by 1.
+// Plain plaintext-mult by a double constant. Bumps NSD by 1, no rescale.
+// Mirrors OpenFHE's LeveledSHECKKSRNS::EvalMultCoreInPlace — the *inner*
+// primitive that AdjustLevelsAndDepthInPlace uses for the NSD-bumping
+// step. NOT what cc->EvalMult(ct, double) does (see eval_mult_scalar).
 Ct mult_by_const(const OpCtx &ctx, const Ct &ct, double scalar) {
     Allocs pt = encode_const_pt(ctx, ct, scalar, 1);
     return mult_pt(ctx, ct, pt);
+}
+
+// Mirror cc->EvalMult(ct, double) — the user-facing wrapper. For
+// FIXEDAUTO with input NSD=2, OpenFHE's EvalMultInPlace first
+// ModReduceInternalInPlace (drops level + NSD), then EvalMultCoreInPlace
+// (bumps NSD back to 2). Net: same NSD, -1 tower. Use this in code that
+// mirrors a `cc->EvalMult(ct, scalar)` call (AccumBabyStep, the nc==1 cu
+// path); use plain mult_by_const for AdjustLevelsAndDepth-style NSD bumps.
+Ct eval_mult_scalar(const OpCtx &ctx, const Ct &ct, double scalar) {
+    if (ctx.mode != lbcrypto::FIXEDMANUAL && ct.noise_scale_deg() == 2) {
+        Ct rescaled = rescale(ctx, ct);
+        return mult_by_const(ctx, rescaled, scalar);
+    }
+    return mult_by_const(ctx, ct, scalar);
 }
 
 // EvalAdd by a double constant. The c1 component is unchanged, so we
@@ -472,14 +489,13 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
 }
 
 // Mirror of niobium::AccumBabyStep (advancedshe.cpp:654): if scalar is
-// non-zero, mult Ti by it and accumulate into `acc`. acc receives the
-// first non-zero term verbatim, subsequent terms are added via plain
-// add (NSDs all match T[i].nsd+1 because mult_by_const bumps NSD by 1
-// and EvalAddInPlaceNoCheck doesn't change NSD).
+// non-zero, mult Ti by it and accumulate into `acc`. Uses eval_mult_scalar
+// (matches OpenFHE's cc->EvalMult(Ti, scalar) — auto-rescales NSD=2
+// inputs); plain mult_by_const would diverge byte-for-byte.
 void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &Ti, double scalar) {
     if (std::abs(scalar) <= 1e-14)
         return;
-    Ct tmp = mult_by_const(ctx, Ti, scalar);
+    Ct tmp = eval_mult_scalar(ctx, Ti, scalar);
     if (acc.has_value())
         *acc = add(ctx, *acc, tmp);
     else
@@ -564,13 +580,16 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 accum_baby_step(ctx, acc_c, T[i], divcs->q[i + 1]);
         }
 
+        // OpenFHE's pattern is `ModReduceInPlace(acc_q); EvalAddInPlace(qu,
+        // acc_q)`. In FIXEDAUTO, ModReduceInPlace is a no-op — the rescale
+        // happens implicitly inside EvalAddInPlace as part of its level
+        // alignment. Mirroring: skip the explicit rescale, let
+        // adjust_for_add + add handle the level/NSD mismatch.
         if (acc_q.has_value()) {
-            *acc_q = rescale(ctx, *acc_q);
             auto ap = adjust_for_add(ctx, std::move(qu), std::move(*acc_q));
             qu = add(ctx, ap.a, ap.b);
         }
         if (acc_s.has_value()) {
-            *acc_s = rescale(ctx, *acc_s);
             auto ap = adjust_for_add(ctx, std::move(su), std::move(*acc_s));
             su = add(ctx, ap.a, ap.b);
         }
@@ -581,16 +600,16 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
         if (su.towers() >= 2)
             su = level_reduce(ctx, std::move(su), 1);
 
+        // OpenFHE: `cu = cc->EvalMult(T.front(), divcs->q[1]); ModReduceInPlace(cu)`.
+        // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar);
+        // ModReduceInPlace after that is a no-op in FIXEDAUTO.
         if (nc == 1) {
             if (std::abs(divcs->q[1] - 1.0) > 1e-14) {
-                Ct c = mult_by_const(ctx, T[0], divcs->q[1]);
-                c = rescale(ctx, std::move(c));
-                cu = std::move(c);
+                cu = eval_mult_scalar(ctx, T[0], divcs->q[1]);
             } else {
                 cu = clone_ct(ctx, T[0]);
             }
         } else if (acc_c.has_value()) {
-            *acc_c = rescale(ctx, *acc_c);
             cu = std::move(*acc_c);
         }
 
