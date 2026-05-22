@@ -658,6 +658,9 @@ Ct rescale(const OpCtx &ctx, const Ct &a) {
     // explicitly; FIXEDAUTO callers (bootstrap helpers) use it to align
     // mult_pt-emitted ciphertexts with OpenFHE's post-EvalMult level shape.
     REQUIRE(a.towers() >= 2);
+    // noise_scale_deg_ is uint32_t; rescale on NSD==0 underflows to UINT32_MAX
+    // and silently corrupts downstream decisions. Fail loudly.
+    REQUIRE(a.noise_scale_deg() >= 1);
     Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
     Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
     return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};

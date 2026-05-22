@@ -125,33 +125,84 @@ Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
 
 Ct square_ct(const OpCtx &ctx, const Ct &ct) { return mult(ctx, ct, ct); }
 
-// Mirror OpenFHE's LeveledSHECKKSRNS::AdjustLevelsAndDepthToOneInPlace
-// for the same-level case (which is what compute_cheby_tree and
-// inner_eval_chebyshev_ps hit after my explicit level_reduce alignment).
-// In FIXEDAUTO this rescales BOTH ciphertexts to NSD=1 if either is at
-// NSD=2 — without this, a subsequent EvalMult produces wrong output
-// because the implicit auto-rescale only fires on the input with NSD>1.
 struct AdjustedPair {
     Ct a;
     Ct b;
 };
+
+// Bring `high` (more towers, lower level) down to `low`'s level shape.
+// Mirrors the c1lvl < c2lvl branch of LeveledSHECKKSRNS::
+// AdjustLevelsAndDepthInPlace (ckksrns-leveledshe.cpp:603-733).
+//
+// MODE COVERAGE: currently FIXEDAUTO only. The scaling-factor adjustment
+// factor (scf2/scf1*q1/scf in the OpenFHE source) collapses to 1.0 in
+// FIXEDAUTO because GetScalingFactorReal / GetScalingFactorRealBig /
+// GetModReduceFactor all return the same m_approxSF — so the
+// EvalMultCoreInPlace step is exactly our mult_by_const(_, 1.0).
+// FLEXIBLEAUTO/EXT and COMPOSITESCALING* need per-level scaling-factor
+// tracking on Ct + the full formula; out of scope for the current commit.
+// FIXEDMANUAL is the caller's responsibility (adjust_for_mult early-returns).
+// compositeDegree is 1 throughout — bumping to >1 needs a per-call query.
+Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
+    REQUIRE(ctx.mode == lbcrypto::FIXEDAUTO);
+    REQUIRE(high.towers() > low.towers());
+    const std::size_t towers_diff = high.towers() - low.towers();
+    const std::uint32_t h_depth = high.noise_scale_deg();
+    const std::uint32_t l_depth = low.noise_scale_deg();
+    constexpr std::size_t cd = 1;
+
+    if (h_depth == 2 && l_depth == 2) {
+        high = mult_by_const(ctx, high, 1.0);
+        high = rescale(ctx, std::move(high));
+        if (towers_diff > cd)
+            high = level_reduce(ctx, std::move(high), towers_diff - cd);
+    } else if (h_depth == 2 && l_depth != 2) {
+        if (towers_diff == cd) {
+            high = rescale(ctx, std::move(high));
+        } else {
+            high = mult_by_const(ctx, high, 1.0);
+            high = rescale(ctx, std::move(high));
+            if (towers_diff > 2 * cd)
+                high = level_reduce(ctx, std::move(high), towers_diff - 2 * cd);
+            high = rescale(ctx, std::move(high));
+        }
+    } else if (h_depth != 2 && l_depth == 2) {
+        high = mult_by_const(ctx, high, 1.0);
+        if (towers_diff > 0)
+            high = level_reduce(ctx, std::move(high), towers_diff);
+    } else {
+        // both depth 1
+        high = mult_by_const(ctx, high, 1.0);
+        if (towers_diff > cd)
+            high = level_reduce(ctx, std::move(high), towers_diff - cd);
+        high = rescale(ctx, std::move(high));
+    }
+    return high;
+}
+
+// Mirror OpenFHE's LeveledSHECKKSRNS::AdjustLevelsAndDepthToOneInPlace
+// (ckksrns-leveledshe.cpp:736). Equalize levels via adjust_one_to_other,
+// equalize depths via mult_by_const(_, 1.0), then if both NSD=2 ModReduce
+// both. Output: a and b at the same level, both at NSD=1.
 AdjustedPair adjust_for_mult(const OpCtx &ctx, Ct a, Ct b) {
     if (ctx.mode == lbcrypto::FIXEDMANUAL)
         return {std::move(a), std::move(b)};
-    // Same-NSD path: if both at NSD=2, rescale both down.
+    if (a.towers() > b.towers())
+        a = adjust_one_to_other(ctx, std::move(a), b);
+    else if (b.towers() > a.towers())
+        b = adjust_one_to_other(ctx, std::move(b), a);
+
+    REQUIRE(a.towers() == b.towers());
+
+    if (a.noise_scale_deg() < b.noise_scale_deg())
+        a = mult_by_const(ctx, a, 1.0);
+    else if (b.noise_scale_deg() < a.noise_scale_deg())
+        b = mult_by_const(ctx, b, 1.0);
+
     if (a.noise_scale_deg() == 2 && b.noise_scale_deg() == 2) {
         a = rescale(ctx, std::move(a));
         b = rescale(ctx, std::move(b));
-    } else if (a.noise_scale_deg() == 2) {
-        a = rescale(ctx, std::move(a));
-    } else if (b.noise_scale_deg() == 2) {
-        b = rescale(ctx, std::move(b));
     }
-    // Align tower counts via metadata.
-    if (a.towers() > b.towers())
-        a = level_reduce(ctx, std::move(a), a.towers() - b.towers());
-    else if (b.towers() > a.towers())
-        b = level_reduce(ctx, std::move(b), b.towers() - a.towers());
     return {std::move(a), std::move(b)};
 }
 
