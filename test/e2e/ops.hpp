@@ -14,6 +14,7 @@
 #include <haze/replay_bridge_cc.hpp>
 #include <map>
 #include <openfhe.h>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -94,6 +95,27 @@ struct OpCtx {
     bool with_relin_key{};
 };
 
+// No default ctor — `make_ctx` callers must spell out OpenFHEDerives()
+// or Pinned(N), making the choice visible at the call site instead of
+// hidden in a sentinel.
+class RingDimChoice {
+  public:
+    RingDimChoice() = delete;
+    // OpenFHE picks N from mult_depth + scaling_mod_size + the configured
+    // HEStd security level.
+    static RingDimChoice OpenFHEDerives() noexcept { return RingDimChoice{std::nullopt}; }
+    // Pin N and drop the security level to HEStd_NotSet. Test fixtures
+    // only (e.g. N=2048 profiling) — never production parameters.
+    static RingDimChoice Pinned(std::uint32_t n) noexcept { return RingDimChoice{n}; }
+
+    // nullopt = OpenFHE picks; value = pinned N.
+    [[nodiscard]] const std::optional<std::uint32_t> &as_optional() const noexcept { return pin_; }
+
+  private:
+    explicit RingDimChoice(std::optional<std::uint32_t> pin) noexcept : pin_(pin) {}
+    std::optional<std::uint32_t> pin_;
+};
+
 struct CtxParams {
     lbcrypto::ScalingTechnique mode;
     std::uint32_t mult_depth;
@@ -102,6 +124,7 @@ struct CtxParams {
     bool with_relin_key = false;
     // Slot rotation indices (OpenFHE convention: positive = left).
     std::vector<std::int32_t> rotate_indices;
+    RingDimChoice ring_dim;
 };
 
 // Construct CC + keys + bridge state. Caller must hazeDeviceReset first.

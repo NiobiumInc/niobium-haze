@@ -32,7 +32,8 @@ TEMPLATE_TEST_CASE("openfhe basic-operations-sequential e2e", "[integration][e2e
                               .scaling_mod_size = 50,
                               .batch_size = 8,
                               .with_relin_key = true,
-                              .rotate_indices = {1, -2}});
+                              .rotate_indices = {1, -2},
+                              .ring_dim = ops::RingDimChoice::OpenFHEDerives()});
     INFO("ring_dim=" << ctx.ring_dim << " |Q|=" << ctx.q_base.size()
                      << " |P|=" << ctx.p_base.size());
 

@@ -76,11 +76,6 @@ struct Allocation {
 //    allocate any byte storage. The first write — H2D, memset, D2D,
 //    or materialization update — creates the shadow entry.
 //
-// See docs/lazy_shadow_flake.md for an open intermittent-failure
-// investigation: gcc Debug ~70% flake rate, clang ~40%, sanitizers
-// clean in single runs. Latent bug exists at baseline (no lazy
-// shadows) too; lazy just hits it more often via heap-layout shift.
-//
 // Thread-safety: all public methods take mutex_ themselves (annotated
 // HAZE_EXCLUDES). DeviceAllocator must NOT call back into EpochState
 // while holding mutex_ — that violates the epoch -> allocator lock

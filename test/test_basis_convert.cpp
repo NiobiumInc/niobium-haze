@@ -480,11 +480,6 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
 // OpenFHE's plain-mod variant. The CMake option HAZE_FBC_REDUCED_NOISE
 // (default ON) tells the oracle which variant to compute; flip it if
 // you ever pair HAZE with a Standard-variant OpenFHE.
-//
-// The intermittent multi-output materialization flake characterised in
-// docs/lazy_shadow_flake.md applies to these tests as well — the bug is
-// in libnbcc, not in HAZE. A failure in these tests should be triaged
-// against that flake first before assuming a logic bug here.
 // ---------------------------------------------------------------------------
 
 namespace {

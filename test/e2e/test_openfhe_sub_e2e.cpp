@@ -26,8 +26,11 @@ TEMPLATE_TEST_CASE("openfhe sub e2e", "[integration][e2e]", haze::test::scaling:
     INFO("policy: " << P::kName);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 
-    auto ctx =
-        ops::make_ctx({.mode = P::kTech, .mult_depth = 1, .scaling_mod_size = 50, .batch_size = 8});
+    auto ctx = ops::make_ctx({.mode = P::kTech,
+                              .mult_depth = 1,
+                              .scaling_mod_size = 50,
+                              .batch_size = 8,
+                              .ring_dim = ops::RingDimChoice::OpenFHEDerives()});
     INFO("ring_dim=" << ctx.ring_dim << " towers=" << ctx.q_base.size());
 
     const std::vector<double> a_vals = {3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0};

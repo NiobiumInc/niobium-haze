@@ -11,19 +11,9 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Positive tests for ring_dim handling on the HAZE/niobium boundary.
-// Companion to docs/lazy_shadow_flake.md, which tracks an intermittent
-// abort signature `m=962` from OpenFHE's RootOfUnity inside niobium's
-// stop_epoch NTT-table generation. The corruption is downstream of
-// HAZE's tag_input handoff (we instrumented HAZE to log any drift in
-// the Polynomial it registers and observed zero drift events across
-// hundreds of runs). These tests therefore exercise the public-API
-// paths that *would* exercise a HAZE-side ring_dim leak if one
-// existed — round-trip at canonical N, multi-op chaining within one
-// epoch, repeated reset/configure cycles, basis-convert identity
-// math, and reset-then-reconfigure-at-same-N — all expected to pass.
-// They serve as positive regression coverage; they will not catch the
-// niobium-side leak that remains under investigation.
+// Positive regression coverage exercising the public-API paths a
+// HAZE-side ring_dim leak would surface through. Not targeted
+// reproducers.
 
 #include "integration_helpers.hpp"
 
@@ -67,13 +57,10 @@ inline void h2d(void *dev, const std::vector<uint64_t> &src) {
 } // namespace
 
 // (1) Construction-time ring_dim is preserved end-to-end at the canonical N.
-//
-// The pertinent property is not the arithmetic but that stop_epoch()
-// doesn't fire RootOfUnity with a bogus 2*N. The bisect in
-// docs/lazy_shadow_flake.md traced the failure signature ("m=962")
-// back to a Polynomial reaching tag_input with ring_dim ≠ 4096 — this
-// test is the simplest end-to-end exercise that would surface the
-// HAZE-side variant of that bug.
+// The pertinent property is that stop_epoch() doesn't fire RootOfUnity
+// with a bogus 2*N — a Polynomial reaching tag_input with ring_dim ≠
+// 4096 would surface as an `m=962` abort from OpenFHE's NTT-table
+// generation.
 TEST_CASE("ring_dim consistency: H2D->Add->D2H round-trip at N=4096", "[integration]") {
     setup_4096();
 
@@ -176,15 +163,10 @@ TEST_CASE("ring_dim consistency: 50 reset/configure/compute cycles", "[integrati
     }
 }
 
-// (4) Basis-convert end-to-end: the multi-output materialization path
-// is the dominant trigger for the lazy_shadow_flake.md flake — every
-// basis-convert call tags multiple input residues as fhetch inputs
-// and stores multiple output residues, multiplying the chances of a
-// stale-ring_dim Polynomial slipping through. Verify the math
-// actually computes correctly, not just that the call returns
-// SUCCESS. A "shared modulus identity convert" (src_base == dst_base,
-// single residue) is the simplest non-trivial case: dst should
-// equal src byte-for-byte.
+// (4) Basis-convert end-to-end. Multi-residue I/O makes this the
+// densest public-API path for surfacing a stale-ring_dim Polynomial;
+// verify the math computes correctly, not just that the call returns
+// SUCCESS.
 TEST_CASE("ring_dim consistency: hazeBasisConvert preserves data on identity convert",
           "[integration]") {
     setup_4096();
