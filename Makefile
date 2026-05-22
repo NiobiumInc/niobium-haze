@@ -47,7 +47,7 @@ endif
 # Mode selection (debug vs release)
 # ==============================================================================
 
-MODE ?= debug
+MODE ?= release
 
 BUILD_DIR_debug   := dbuild
 BUILD_DIR_release := build

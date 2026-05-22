@@ -107,16 +107,15 @@ before checking.
 
 ## Build, test, lint
 
-Top-level `Makefile` is the standalone entry point. `MODE=debug`
-(default) selects `dbuild/`; `MODE=release` selects `build/`. CI
-forces `MODE=release` so the gates exercise the optimization-level
-that ships; local iteration defaults to debug so editor diagnostics,
-asserts, and sanitizer turnaround line up with the build that gets
-produced.
+Top-level `Makefile` is the standalone entry point. `MODE=release`
+(default) selects `build/`; `MODE=debug` selects `dbuild/`. Both CI
+and local `make test` default to release so the test suite exercises
+the optimization level that ships; pass `MODE=debug` explicitly when
+you need debug asserts, faster turnaround, or sanitizer matching.
 
 ```sh
 make sync                      # init vendor/niobium-fhetch (recursive)
-make build                     # configure + build (debug; build/ for release)
+make build                     # configure + build (release; dbuild/ for debug)
 make test                      # test-unit + test-sim (default)
 make test-unit                 # ~[integration] tag, HAZE_TARGET=local
 make test-sim                  # [integration] tag, in-process FHETCH simulator
@@ -128,12 +127,12 @@ make help                      # full target list
 ```
 
 Single test (Catch2 tag or substring filter) — bypass make and call the
-binary directly. Tests `cd` into `$(BUILD_DIR)/runs/` (`dbuild/runs/`
-by default, `build/runs/` for release) so `niobium::compiler()`'s
+binary directly. Tests `cd` into `$(BUILD_DIR)/runs/` (`build/runs/` by
+default, `dbuild/runs/` under `MODE=debug`) so `niobium::compiler()`'s
 `program_dir` resolves under the build tree:
 
 ```sh
-mkdir -p dbuild/runs && cd dbuild/runs
+mkdir -p build/runs && cd build/runs
 HAZE_TARGET=local ../haze_tests "[integration]"           # all integration tests
 HAZE_TARGET=local ../haze_tests "hazeAdd: pointwise sum"  # one case by name
 HAZE_TARGET=local ../haze_tests --list-tests              # enumerate
@@ -229,11 +228,11 @@ matches:
    Reproduce locally (after `make build`):
 
    ```sh
-   scripts/clang-tidy.sh                  # default; reads dbuild/
+   scripts/clang-tidy.sh                  # default; reads build/
 
-   # Match CI's release-mode database when chasing CI-only failures:
-   make build MODE=release
-   BUILD_DIR=build scripts/clang-tidy.sh
+   # Lint against a debug-mode database (faster compile, asserts on):
+   make build MODE=debug
+   BUILD_DIR=dbuild scripts/clang-tidy.sh
    ```
 
 When iterating on a single file, skip the flake build and call
@@ -241,14 +240,15 @@ clang-tidy directly — but keep `--warnings-as-errors='*'` so local
 output matches what CI promotes to errors:
 
 ```sh
-clang-tidy -p dbuild --warnings-as-errors='*' src/api/compute.cpp
+clang-tidy -p build --warnings-as-errors='*' src/api/compute.cpp
 ```
 
 The `scripts/clang-tidy.sh` wrapper honors `BUILD_DIR=<dir>` (default
-`dbuild`, matching the Makefile's debug default; pass `BUILD_DIR=build`
-after `make build MODE=release` to match CI), `PARALLEL_JOBS=<n>`
-(defaults to `NIX_BUILD_CORES` or the host CPU count), and `CLANG_TIDY=<bin>`
-(the binary to invoke per file; defaults to `clang-tidy`).
+`build`, matching the Makefile's release default; pass `BUILD_DIR=dbuild`
+after `make build MODE=debug` to lint the debug build),
+`PARALLEL_JOBS=<n>` (defaults to `NIX_BUILD_CORES` or the host CPU
+count), and `CLANG_TIDY=<bin>` (the binary to invoke per file; defaults
+to `clang-tidy`).
 
 ### How CI lints faster than `nix build .#checks.<sys>.clang-tidy`
 
@@ -257,8 +257,10 @@ runs uncached on every invocation. CI bypasses it for the merge gate
 and routes through [matus-chochlik/ctcache] (`clang-tidy-cache`),
 a Python wrapper that hashes the source content + compile command
 + `.clang-tidy` config and returns the previously-recorded verdict
-for unchanged TUs. On a typical PR touching <10% of files, this turns
-the lint step from ~2 min into a handful of seconds.
+for unchanged TUs. On a typical PR touching <10% of files this turns
+the in-derivation lint (~2 min) into a tens-of-seconds step — most of
+the residual time is `nix develop` startup + cache restore/save round-
+trips, not clang-tidy itself.
 
 `clang-tidy-cache` is packaged from the `ctcache-src` flake input
 and shipped in the devshell, so `CLANG_TIDY=clang-tidy-cache
@@ -290,8 +292,10 @@ persistent cache dir):
    binary via `CTCACHE_CLANG_TIDY`.
 
 A `nix build .#checks.<sys>.clang-tidy` run remains valid for local
-pre-push validation and produces byte-identical *findings* to CI; only
-the latency differs (uncached, ~2 min, vs CI's <1 min on warm cache).
+pre-push validation and produces byte-identical *findings* (not
+byte-identical compile commands — CI's database bakes the cc-wrapper's
+`-isystem` flags in directly while the derivation gets them via env);
+only the latency differs.
 
 [matus-chochlik/ctcache]: https://github.com/matus-chochlik/ctcache
 
