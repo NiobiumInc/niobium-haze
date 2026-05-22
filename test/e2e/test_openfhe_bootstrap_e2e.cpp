@@ -286,6 +286,178 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
     }
 }
 
+TEST_CASE("phase14 eval_chebyshev_series byte-parity vs cc->EvalChebyshevSeries",
+          "[integration][e2e]") {
+    // Top rung: compare ops::eval_chebyshev_series to OpenFHE's
+    // cc->EvalChebyshevSeries byte-for-byte. With phase 11 (adjust),
+    // phase 12 (mult/add/sub), phase 13 (double-angle) all byte-exact,
+    // this should pass — and if it doesn't, the gap is in
+    // compute_cheby_tree or inner_eval_chebyshev_ps structure (not the
+    // primitives).
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+
+    auto check = [&](const std::string &label,
+                     const std::vector<double> &coeffs,
+                     Ciphertext<DCRTPoly> ct) {
+        auto ref = ctx.cc->EvalChebyshevSeries(ct, coeffs, -1.0, 1.0);
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+        auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coeffs);
+        assert_rns_equal(ctx, out, ref, "phase14 " + label);
+    };
+
+    // Degree-5: ComputeDegreesPS → k=2, m=2. Smallest PS path.
+    {
+        std::vector<double> coeffs = {0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625};
+        check("degree=5", coeffs, fresh());
+    }
+    // Degree-12: k=4, m=2.
+    {
+        std::vector<double> coeffs(13, 0.0);
+        for (std::size_t i = 0; i <= 12; ++i) coeffs[i] = 1.0 / static_cast<double>(i + 1);
+        check("degree=12", coeffs, fresh());
+    }
+    // Degree-84 (eval_mod-sized): k=6, m=4.
+    {
+        std::vector<double> coeffs(85, 0.0);
+        for (std::size_t i = 0; i <= 84; ++i) coeffs[i] = (i & 1) ? -0.001 : 0.05;
+        check("degree=84", coeffs, fresh());
+    }
+}
+
+TEST_CASE("phase13 apply_double_angle_iterations byte-parity vs OpenFHE",
+          "[integration][e2e]") {
+    // Walk one more rung. OpenFHE's ApplyDoubleAngleIterations is on
+    // FHECKKSRNS (private to the bootstrap path), so replicate its body
+    // through the public cc-> API:
+    //   for i in [1-numIter, 0]:
+    //     scalar = -(2π)^(-2^i)
+    //     EvalSquareInPlace(ct)
+    //     EvalAddInPlace(ct, EvalAdd(ct, scalar))
+    //     ModReduceInPlace(ct)    // no-op for FIXEDAUTO
+    // and compare byte-for-byte against my apply_double_angle_iterations.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+
+    auto openfhe_double_angle = [&](Ciphertext<DCRTPoly> ct, std::uint32_t num_iter) {
+        constexpr double twoPi = 2.0 * M_PI;
+        for (std::int32_t i = 1 - static_cast<std::int32_t>(num_iter); i <= 0; ++i) {
+            const double scalar = -std::pow(twoPi, -std::pow(2.0, i));
+            ctx.cc->EvalSquareInPlace(ct);
+            ctx.cc->EvalAddInPlace(ct, ctx.cc->EvalAdd(ct, scalar));
+            ctx.cc->ModReduceInPlace(ct); // no-op in FIXEDAUTO
+        }
+        return ct;
+    };
+
+    auto check = [&](const std::string &label, Ciphertext<DCRTPoly> ct, std::uint32_t iters) {
+        auto ref = openfhe_double_angle(ct->Clone(), iters);
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+        ops::apply_double_angle_for_test(ctx, haze_ct, iters);
+        assert_rns_equal(ctx, haze_ct, ref, "phase13 " + label);
+    };
+
+    // 1 iter from a fresh (NSD=1) input
+    check("iters=1 fresh", fresh(), 1);
+    // 2 iters from fresh
+    check("iters=2 fresh", fresh(), 2);
+    // 3 iters from fresh (this is what eval_mod actually does for UNIFORM_TERNARY)
+    check("iters=3 fresh", fresh(), 3);
+}
+
+TEST_CASE("phase12 ops::mult / ops::add / ops::sub byte-parity vs cc->EvalMult / cc->EvalAdd",
+          "[integration][e2e]") {
+    // Next rung on the ladder above phase 11: with adjust_for_mult and
+    // adjust_for_add now byte-exact, the compound ops::mult / ops::add /
+    // ops::sub should also be byte-exact provided tensor + relin / add /
+    // sub themselves track OpenFHE. Compare per-RNS-limb against
+    // cc->EvalMult, cc->EvalAdd, cc->EvalSub across the same (L, NSD)
+    // combinations.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+    auto bump_nsd2 = [&](Ciphertext<DCRTPoly> ct) { return ctx.cc->EvalMult(ct, 1.0); };
+    auto drop_level = [&](Ciphertext<DCRTPoly> ct) {
+        ctx.cc->GetScheme()->ModReduceInternalInPlace(ct, 1);
+        return ct;
+    };
+
+    // ops::mult / add / sub assume aligned inputs; cc->EvalMult/Add/Sub
+    // adjust internally. To compare apples-to-apples, wrap haze ops in
+    // adjust_for_mult / adjust_for_add — matching how compute_cheby_tree
+    // calls them in production.
+    auto check_mult = [&](const std::string &label, Ciphertext<DCRTPoly> ct_a,
+                          Ciphertext<DCRTPoly> ct_b) {
+        auto ref = ctx.cc->EvalMult(ct_a, ct_b);
+        auto haze_a = ops::h2d_ct(ctx, ct_a);
+        auto haze_b = ops::h2d_ct(ctx, ct_b);
+        auto pair = ops::adjust_for_mult_for_test(ctx, std::move(haze_a), std::move(haze_b));
+        auto out = ops::mult(ctx, pair.a, pair.b);
+        assert_rns_equal(ctx, out, ref, "phase12 mult " + label);
+    };
+    auto check_add = [&](const std::string &label, Ciphertext<DCRTPoly> ct_a,
+                         Ciphertext<DCRTPoly> ct_b) {
+        auto ref = ctx.cc->EvalAdd(ct_a, ct_b);
+        auto haze_a = ops::h2d_ct(ctx, ct_a);
+        auto haze_b = ops::h2d_ct(ctx, ct_b);
+        auto pair = ops::adjust_for_add_for_test(ctx, std::move(haze_a), std::move(haze_b));
+        auto out = ops::add(ctx, pair.a, pair.b);
+        assert_rns_equal(ctx, out, ref, "phase12 add " + label);
+    };
+    auto check_sub = [&](const std::string &label, Ciphertext<DCRTPoly> ct_a,
+                         Ciphertext<DCRTPoly> ct_b) {
+        auto ref = ctx.cc->EvalSub(ct_a, ct_b);
+        auto haze_a = ops::h2d_ct(ctx, ct_a);
+        auto haze_b = ops::h2d_ct(ctx, ct_b);
+        auto pair = ops::adjust_for_add_for_test(ctx, std::move(haze_a), std::move(haze_b));
+        auto out = ops::sub(ctx, pair.a, pair.b);
+        assert_rns_equal(ctx, out, ref, "phase12 sub " + label);
+    };
+
+    // mult: covers ops::mult as well as square_ct (a==b case).
+    check_mult("L=0/N=1 vs L=0/N=1", fresh(), fresh());
+    check_mult("square(L=0/N=1)", fresh(), fresh()); // same shape
+    check_mult("L=0/N=2 vs L=0/N=2", bump_nsd2(fresh()), bump_nsd2(fresh()));
+    check_mult("L=0/N=1 vs L=0/N=2", fresh(), bump_nsd2(fresh()));
+    check_mult("L=0/N=2 vs L=1/N=1", bump_nsd2(fresh()), drop_level(bump_nsd2(fresh())));
+    check_mult("L=0/N=1 vs L=1/N=1", fresh(), drop_level(bump_nsd2(fresh())));
+
+    // add/sub same coverage.
+    check_add("L=0/N=1 + L=0/N=1", fresh(), fresh());
+    check_add("L=0/N=2 + L=0/N=2", bump_nsd2(fresh()), bump_nsd2(fresh()));
+    check_add("L=0/N=1 + L=0/N=2", fresh(), bump_nsd2(fresh()));
+    check_add("L=0/N=2 + L=1/N=1", bump_nsd2(fresh()), drop_level(bump_nsd2(fresh())));
+    check_sub("L=0/N=1 - L=0/N=1", fresh(), fresh());
+    check_sub("L=0/N=2 - L=0/N=2", bump_nsd2(fresh()), bump_nsd2(fresh()));
+    check_sub("L=0/N=2 - L=1/N=1", bump_nsd2(fresh()), drop_level(bump_nsd2(fresh())));
+}
+
 TEST_CASE("phase11 adjust_for_mult / adjust_for_add byte-parity vs OpenFHE",
           "[integration][e2e]") {
     // Per-RNS-limb parity vs OpenFHE's

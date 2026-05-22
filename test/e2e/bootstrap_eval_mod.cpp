@@ -495,15 +495,19 @@ void apply_double_angle_iterations(const OpCtx &ctx, Ct &ct, std::uint32_t num_i
     constexpr double twoPi = 2.0 * M_PI;
     for (std::int32_t i = 1 - static_cast<std::int32_t>(num_iter); i <= 0; ++i) {
         const double scalar = -std::pow(twoPi, -std::pow(2.0, i));
-        ct = square_ct(ctx, ct);
+        // OpenFHE's EvalSquareInPlace runs AdjustLevelsAndDepthToOneInPlace
+        // on its single input pair first — drops the level when NSD=2 — so
+        // we must mirror that here. My ops::mult doesn't auto-adjust, so do
+        // it explicitly before squaring.
+        auto sq_in = adjust_for_mult(ctx, clone_ct(ctx, ct), clone_ct(ctx, ct));
+        ct = mult(ctx, sq_in.a, sq_in.b);
         // 2*ct + scalar — avoid add(ct, ct) self-add (trace-output replay
         // divergence).
         Ct doubled = mult_int_scalar(ctx, ct, 2);
         ct = add_const(ctx, doubled, scalar);
-        // OpenFHE FIXEDAUTO does an explicit ModReduce at the END of every
-        // iter (ckksrns-fhe.cpp:733). Mirror that — without it the loop
-        // drops zero towers when the input arrives at NSD=1.
-        ct = rescale(ctx, ct);
+        // OpenFHE's trailing cc->ModReduceInPlace is a no-op in FIXEDAUTO
+        // (line 733 of ckksrns-fhe.cpp). Level drops come from the NEXT
+        // iter's EvalSquareInPlace via AdjustLevelsAndDepthToOneInPlace.
     }
 }
 
