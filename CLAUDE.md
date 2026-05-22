@@ -254,8 +254,8 @@ clangd --check=src/api/compute.cpp
 The `scripts/clang-tidy.sh` and `scripts/clangd-check.sh` wrappers honor
 `BUILD_DIR=<dir>` (default `dbuild`, matching the Makefile's debug
 default; pass `BUILD_DIR=build` after `make build MODE=release` to
-match CI) and `PARALLEL_JOBS=<n>` (clang-tidy only; defaults to
-`NIX_BUILD_CORES` or the host CPU count).
+match CI) and `PARALLEL_JOBS=<n>` (defaults to `NIX_BUILD_CORES` or
+the host CPU count).
 
 A bare `clang-tidy -p dbuild <file>` (no `--warnings-as-errors`) prints
 the same diagnostics as warnings; CI will still fail. Always pass

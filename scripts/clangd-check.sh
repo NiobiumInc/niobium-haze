@@ -5,6 +5,7 @@
 # Usage:
 #   scripts/clangd-check.sh             # default; uses dbuild/ for compile_commands.json
 #   BUILD_DIR=build scripts/clangd-check.sh
+#   PARALLEL_JOBS=4 scripts/clangd-check.sh
 #   scripts/clangd-check.sh --help
 #
 # Resolves the repo root via `git rev-parse` (falls back to the script's
@@ -17,6 +18,13 @@
 # include hygiene through this gate. `--check-locations=false` skips
 # the per-token feature-test sweep that prints spurious tweak failures
 # on `break`/`continue` tokens in functions with switches.
+#
+# Parallelism: each .cpp is checked in its own clangd invocation, fanned
+# out via `xargs -P`. Per-file reports are written to a tmpdir and
+# concatenated at the end so the failure output for one file is not
+# interleaved with another's. xargs propagates a worker's non-zero
+# exit (set on warning/error grep hit) as overall non-zero, which we
+# map to a single failed=1.
 #
 # Requires compile_commands.json — run `make build` locally, or rely on
 # the flake derivation's cmake setup hook which configures one before
@@ -49,21 +57,44 @@ if [[ ! -f "$build_dir/compile_commands.json" ]]; then
     exit 1
 fi
 
-# clangd reads compile_commands.json from --compile-commands-dir or by
-# walking up from the .cpp's path. The latter works when build/ is at
-# the repo root; we set it explicitly so callers using a non-default
-# BUILD_DIR get the right database.
-files=$(find src replay_bridge test -name '*.cpp')
-count=$(printf '%s\n' "$files" | grep -c .)
-echo "haze-clangd-check: linting $count first-party .cpp files"
-failed=0
-for f in $files; do
-    report=$(clangd --check="$f" --check-locations=false \
-                    --compile-commands-dir="$build_dir" 2>&1) || true
-    if echo "$report" | grep -qE ': (warning|error):'; then
-        echo "=== $f ==="
-        echo "$report"
-        failed=1
-    fi
+parallel="${PARALLEL_JOBS:-${NIX_BUILD_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}}"
+
+# Per-file failure reports land here; cleaned on exit. Using a tmpdir
+# (rather than serializing stdout via flock) keeps the worker portable
+# across linux/darwin and gives deterministic post-mortem output.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+count=$(find src replay_bridge test -name '*.cpp' | wc -l | tr -d ' ')
+echo "haze-clangd-check: linting $count first-party .cpp files (-P$parallel)"
+
+# Exported so xargs's `bash -c` children see them. We capture xargs's
+# exit code separately because `set -e` would otherwise abort here on
+# any worker failure before we get a chance to flush the reports.
+export HAZE_CLANGD_BUILD_DIR="$build_dir"
+export HAZE_CLANGD_TMPDIR="$tmpdir"
+
+xargs_exit=0
+find src replay_bridge test -name '*.cpp' -print0 \
+    | xargs -0 -n1 -P"$parallel" bash -c '
+        f="$1"
+        report=$(clangd --check="$f" --check-locations=false \
+                        --compile-commands-dir="$HAZE_CLANGD_BUILD_DIR" 2>&1) || true
+        if printf "%s\n" "$report" | grep -qE ": (warning|error):"; then
+            # Slot name encodes the source path so the final concat
+            # sorts back into a stable order (find walks lexically).
+            slot=$(printf "%s" "$f" | tr "/" "_")
+            {
+                printf "=== %s ===\n" "$f"
+                printf "%s\n" "$report"
+            } > "$HAZE_CLANGD_TMPDIR/$slot"
+            exit 1
+        fi
+    ' _ || xargs_exit=$?
+
+shopt -s nullglob
+for report in "$tmpdir"/*; do
+    cat "$report"
 done
-test "$failed" = 0
+
+test "$xargs_exit" = 0
