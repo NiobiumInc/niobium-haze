@@ -39,12 +39,6 @@ class AllocatorTestAccess;
 // addresses in a typical FHE program are intermediate compute results
 // that flow entirely inside fhetch::Polynomial storage and never need
 // a HAZE shadow.
-struct Allocation {
-    DevAddr addr{};      ///< Virtual device address handed to the user.
-    size_t size = 0;     ///< Allocation size in bytes (== poly_bytes_ under strict contract).
-    bool pooled = false; ///< True iff this allocation participates in pool recycling.
-};
-
 // Single-size device allocator with sparse-map shadow storage.
 //
 // HAZE's device address space is FHETCH-addressable storage — every
@@ -54,7 +48,8 @@ struct Allocation {
 // host allocations (or `hazeHostMalloc` when page-aligned host memory
 // is needed).
 //
-// Storage model. Each DevAddr has metadata in `map_` (size, pool flag).
+// Storage model. Live DevAddrs are tracked as set membership in
+// `alloc_set_` — allocation size is implicit (always `poly_bytes_`).
 // Component payloads live in a separate sparse map `shadow_data_`
 // keyed by DevAddr, with each entry a `vector<uint64_t>` sized to the
 // allocation. An entry exists only when the address currently carries
@@ -119,13 +114,20 @@ class DeviceAllocator {
     HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
     extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept HAZE_EXCLUDES(mutex_);
 
+    // Non-evicting copy of the shadow components. Used by the H2D eager-tag
+    // path that must leave shadow_data_ intact (a subsequent compute-free
+    // D2H still reads the original H2D bytes).
+    HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
+    read_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept
+        HAZE_EXCLUDES(mutex_);
+
     // Read shadow bytes into a host buffer. Caller is responsible for
     // any compute materialization; this only touches the staging buffer.
     hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept
         HAZE_EXCLUDES(mutex_);
 
     // Full-replace write of the shadow buffer; `values` is truncated
-    // or zero-padded to `elems_for_allocation` then moved in.
+    // or zero-padded to `poly_bytes_ / sizeof(uint64_t)` then moved in.
     std::expected<void, HazeInternalError> update_shadow(DevAddr addr,
                                                          std::vector<uint64_t> &&values) noexcept
         HAZE_EXCLUDES(mutex_);
@@ -155,13 +157,6 @@ class DeviceAllocator {
 
     friend class test::AllocatorTestAccess;
 
-    // Byte→element conversion shared by every shadow write path
-    // (copy_h2d, copy_d2d, memset, update_shadow). One place so a new
-    // write path can't drift from the formula.
-    static constexpr size_t elems_for_allocation(const Allocation &a) noexcept {
-        return a.size / sizeof(uint64_t);
-    }
-
     // Helper (caller holds mutex_).
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
 
@@ -170,11 +165,12 @@ class DeviceAllocator {
     // allocator). Allocator-side code must NOT call into EpochState
     // while holding this lock — the reverse direction is forbidden.
     mutable HazeMutex mutex_;
-    // Per-address metadata. Entry exists for the lifetime of the
-    // hazeMalloc/hazeFree contract.
-    std::unordered_map<DevAddr, Allocation> map_ HAZE_GUARDED_BY(mutex_);
+    // Live DevAddrs. Set membership covers the lifetime of the
+    // hazeMalloc/hazeFree contract; allocation size is implicit
+    // (== poly_bytes_) under the single-size invariant.
+    std::unordered_set<DevAddr> alloc_set_ HAZE_GUARDED_BY(mutex_);
     // Sparse uint64_t component storage, vector sized to
-    // `elems_for_allocation`. Created by H2D/memset/D2D/update_shadow,
+    // `poly_bytes_ / sizeof(uint64_t)`. Created by H2D/memset/D2D/update_shadow,
     // evicted by extract / hazeFree / set_polynomial_size / reset.
     std::unordered_map<DevAddr, std::vector<uint64_t>> shadow_data_ HAZE_GUARDED_BY(mutex_);
     std::vector<DevAddr>

@@ -21,24 +21,37 @@ namespace haze {
 
 hazeError_t to_public_error(HazeInternalError err) noexcept {
     switch (err) {
+    case HazeInternalError::InvalidArgument:
+        return HAZE_ERROR_INVALID_VALUE;
     case HazeInternalError::NotConfigured:
         return HAZE_ERROR_CONFIGERR;
-    case HazeInternalError::InvalidArgument:
     case HazeInternalError::UnknownAddress:
+        return HAZE_ERROR_UNKNOWN_ADDRESS;
     case HazeInternalError::NoData:
+        return HAZE_ERROR_NO_DATA;
     case HazeInternalError::AllocTooSmall:
-        return HAZE_ERROR_INVALID_VALUE;
+        return HAZE_ERROR_ALLOC_TOO_SMALL;
+    case HazeInternalError::SourceUnavailable:
+        return HAZE_ERROR_SOURCE_UNAVAILABLE;
     case HazeInternalError::BackendInitFailed:
+        return HAZE_ERROR_BACKEND_INIT_FAILED;
     case HazeInternalError::BackendReplayFailed:
+        return HAZE_ERROR_BACKEND_REPLAY_FAILED;
     case HazeInternalError::BackendShapeMismatch:
     case HazeInternalError::MrpGroupAddrModuliMismatch:
+        return HAZE_ERROR_BACKEND_SHAPE_MISMATCH;
     case HazeInternalError::MissingPolyMapBinding:
+        return HAZE_ERROR_MISSING_POLYMAP_BINDING;
     case HazeInternalError::ShadowSizeMismatch:
+        return HAZE_ERROR_SHADOW_SIZE_MISMATCH;
     case HazeInternalError::BackendOutputMissing:
+        return HAZE_ERROR_BACKEND_OUTPUT_MISSING;
     case HazeInternalError::BackendOutputDecodeFailed:
+        return HAZE_ERROR_BACKEND_OUTPUT_DECODE_FAILED;
     case HazeInternalError::BridgeHookFailed:
+        return HAZE_ERROR_BRIDGE_HOOK_FAILED;
     case HazeInternalError::PoolMapDesync:
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_POOL_MAP_DESYNC;
     }
     return HAZE_ERROR_INVALID_VALUE;
 }
@@ -77,6 +90,8 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "post-recording hook reported failures";
     case HazeInternalError::PoolMapDesync:
         return "pool/map desync";
+    case HazeInternalError::SourceUnavailable:
+        return "compute / D2D source has no shadow data and no poly_map_ binding";
     }
     return "unknown";
 }

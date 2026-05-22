@@ -69,6 +69,15 @@ class EpochState {
     void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
 
+    // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
+    // Builds the Polynomial via a non-evicting read (shadow stays intact
+    // for subsequent compute-free D2H), tag_inputs it, and binds it in
+    // poly_map_. Modulus tracking is left to the first real op that
+    // consumes the address. Returns an internal error if the H2D
+    // post-conditions (ring_dim set, shadow populated) are violated.
+    std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
+        HAZE_REQUIRES(mutex_);
+
     // Register an MRP-shaped grouping so replay can emit a single
     // fhetch::tag_output(name, MRP); deduped by name on re-registration.
     std::expected<void, HazeInternalError>
@@ -153,5 +162,18 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 // copy from the device shadow buffer to host. Returns a public
 // hazeError_t already translated for the C ABI.
 hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
+
+// D2D as a recorded copy: promotes `src` if needed (via
+// `lookup_or_create_locked`), emits a pass-through fhetch IR node, and
+// binds `dst` to the result. Always starts an epoch — there is no
+// pre-recording byte-copy escape hatch. Returns the internal error type
+// so the api/ shim does the public-code translation at the C ABI edge.
+std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
+                                                             size_t count) noexcept;
+
+// H2D-time eager-tag: register the H2D'd buffer at `addr` as a fhetch
+// input so subsequent compute / D2D ops see a tagged polynomial instead
+// of a never-touched shadow buffer.
+std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept;
 
 } // namespace haze

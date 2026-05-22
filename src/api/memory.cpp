@@ -86,9 +86,11 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
         const haze::DevAddr dev = haze::to_dev_addr(dst);
         const hazeError_t err = alloc.copy_h2d(dev, src, count);
-        if (err == HAZE_SUCCESS)
-            haze::epoch().invalidate(dev);
-        return set_error(err);
+        if (err != HAZE_SUCCESS)
+            return set_error(err);
+        if (auto tag = haze::tag_h2d_input(dev); !tag)
+            return set_error(haze::to_public_error(tag.error()));
+        return set_error(HAZE_SUCCESS);
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
@@ -99,12 +101,11 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {
-        const haze::DevAddr dev_dst = haze::to_dev_addr(dst);
-        const haze::DevAddr dev_src = haze::to_dev_addr(src);
-        const hazeError_t err = alloc.copy_d2d(dev_dst, dev_src, count);
-        if (err == HAZE_SUCCESS)
-            haze::epoch().invalidate(dev_dst);
-        return set_error(err);
+        auto result =
+            haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count);
+        if (!result)
+            return set_error(haze::to_public_error(result.error()));
+        return set_error(HAZE_SUCCESS);
     }
 
     return set_error(HAZE_ERROR_INVALID_VALUE);

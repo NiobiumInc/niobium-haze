@@ -26,9 +26,9 @@ extern thread_local hazeError_t g_last_error;
 
 namespace haze {
 
-// Internal error type; several variants collapse to one public hazeError_t
-// (e.g. UnknownAddress/NoData/AllocTooSmall → INVALID_VALUE), so internal
-// callers keep the typed enum and map only at the C ABI boundary.
+// Internal error type. `to_public_error` maps each variant to a granular
+// `hazeError_t`; internal callers keep the typed enum and translate only
+// at the C ABI boundary.
 enum class HazeInternalError : std::uint8_t {
     InvalidArgument,            // params struct field violates the API contract
     NotConfigured,              // ring_dim / modulus not set when required
@@ -44,7 +44,8 @@ enum class HazeInternalError : std::uint8_t {
     BackendOutputMissing,       // fhetch::result(name, ...) returned false
     BackendOutputDecodeFailed,  // extract_polynomial_values returned false
     BridgeHookFailed,           // replay_bridge post-recording hook reported failures
-    PoolMapDesync               // pool_free_ entry has no map_ peer
+    PoolMapDesync,              // pool_free_ entry has no `alloc_set_` peer
+    SourceUnavailable           // compute / D2D source has no shadow data and no poly_map_ binding
 };
 
 // Map an internal error to the public hazeError_t the C ABI returns.

@@ -98,22 +98,22 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 
     const uint64_t ring_dim = config().ring_dim();
     auto components = allocator().extract_polynomial_components(addr, ring_dim);
-
-    fhetch::Polynomial poly;
-    if (components) {
-        poly = fhetch::Polynomial::from_data(std::move(*components), ring_dim,
-                                             fhetch::Format::Evaluation);
-    } else if (components.error() == HazeInternalError::NoData) {
-        // Address allocated but never written: build a fhetch zero polynomial
-        // so HAZE doesn't fabricate the bytes (matches FIDESlib's SPECIAL pattern).
-        poly = fhetch::Polynomial::zeros(ring_dim);
-    } else {
+    if (!components) {
+        // Compute / D2D on an addr with neither shadow data nor a
+        // poly_map_ binding is undefined under the record-and-replay
+        // model — there's no value to read. Translate NoData into the
+        // sharper SourceUnavailable; pass other errors through.
+        if (components.error() == HazeInternalError::NoData) {
+            record_internal_error(HazeInternalError::SourceUnavailable,
+                                  "lookup_or_create_locked: no shadow and no poly_map_ binding");
+            return std::unexpected(HazeInternalError::SourceUnavailable);
+        }
         return std::unexpected(components.error());
     }
-
+    fhetch::Polynomial poly =
+        fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
-
     poly_map_.emplace(addr, poly);
     return poly;
 }
@@ -126,6 +126,33 @@ void EpochState::store_compute_result_locked(DevAddr addr,
     if (!pending_outputs_.contains(addr)) {
         pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
     }
+}
+
+std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr addr) noexcept {
+    // Both guards below cover invariants that the H2D entry point has
+    // already enforced (copy_h2d requires alloc_set_ membership and a
+    // configured poly_bytes_, so by the time this runs ring_dim is set
+    // and shadow bytes exist). Treat hits as broken-haze internal
+    // errors so we don't silently drop the input tag.
+    const uint64_t ring_dim = config().ring_dim();
+    if (ring_dim == 0) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "tag_h2d_input_locked: ring_dim == 0 after copy_h2d");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    auto components = allocator().read_polynomial_components(addr, ring_dim);
+    if (!components)
+        return std::unexpected(components.error());
+    fhetch::Polynomial poly =
+        fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
+    const std::string name = "haze_in_" + std::to_string(input_counter_++);
+    fhetch::tag_input(name, poly);
+    // Overwrite any prior binding — the new H2D bytes are the truth at addr.
+    // Prior MRP-group entries naming addr stay valid (the group's claim is
+    // addr-bound; the new poly is just the residue's new value).
+    poly_map_.insert_or_assign(addr, std::move(poly));
+    pending_outputs_.erase(addr);
+    return {};
 }
 
 void EpochState::tag_mrp_input_if_new_locked(const std::string &name, const fhetch::MRP &mrp) {
@@ -164,6 +191,15 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
     HazeLockGuard lock(mutex_);
     if (!recording_) {
         return {}; // nothing to replay
+    }
+
+    // No outputs to materialize — recording was opened (e.g., by H2D's
+    // eager-tag) but no compute followed. The shadow buffer holds the
+    // current bytes; skip the replay entirely so the bridge crypto context
+    // isn't a prerequisite for compute-free D2H reads.
+    if (pending_outputs_.empty() && pending_mrp_groups_.empty()) {
+        clear_state_locked();
+        return {};
     }
 
     // pending_outputs_ and poly_map_ stay in lockstep via store + invalidate,
@@ -302,6 +338,32 @@ hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
     if (!replay_result)
         return to_public_error(replay_result.error());
     return allocator().copy_to_host(dst, src, count);
+}
+
+std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
+                                                             size_t /*count*/) noexcept {
+    // D2D is a recorded polynomial copy under the first configured ciphertext
+    // modulus. sr_addps with imm=0 and a real modulus is a normalize-and-copy
+    // — identity for any well-formed CKKS residue and the right contract for
+    // record-and-replay; an "unbounded" copy isn't meaningful in CKKS. The
+    // real modulus also triggers remember_modulus, which is what makes a
+    // freshly-tagged input visible to sync_fhetch_state_to_compiler at
+    // replay time.
+    const uint64_t q = config().modulus(0);
+    if (q == 0)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    EpochSession session;
+    auto src_poly = epoch().lookup_or_create_locked(src);
+    if (!src_poly)
+        return std::unexpected(src_poly.error());
+    fhetch::Polynomial result = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), q);
+    epoch().store_compute_result_locked(dst, std::move(result));
+    return {};
+}
+
+std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept {
+    EpochSession session;
+    return epoch().tag_h2d_input_locked(addr);
 }
 
 } // namespace haze

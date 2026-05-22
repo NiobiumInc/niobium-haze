@@ -336,16 +336,18 @@ and events exist for CUDA-shape parity but do not model ordering.
 
 ### Shadow storage model
 
-`DeviceAllocator` keeps two maps keyed by `DevAddr`:
+`DeviceAllocator` keeps two `DevAddr`-keyed structures:
 
-- `map_`: per-allocation metadata (`size`, `pooled`). Lives for the entire
-  `hazeMalloc` / `hazeFree` lifetime.
+- `alloc_set_`: set membership covering the lifetime of the
+  `hazeMalloc` / `hazeFree` contract. Allocation size is implicit
+  (always `poly_bytes_`) under the single-size invariant.
 - `shadow_data_`: sparse byte payload. Entry exists only when the address
   carries user-written or materialized bytes. H2D / memset / D2D /
   `update_shadow` create entries; `extract_polynomial_components` (used
   when promoting bytes to a FHETCH input) and `hazeFree` evict them.
-  Reads from a missing entry return zero (D2H) or `NoData` (compute
-  extract path, falling back to a zero polynomial).
+  Reads from a missing entry return zero (D2H) or `SourceUnavailable`
+  (compute / D2D extract path — using an addr that was never written
+  is a contract violation).
 
 Every `hazeMalloc` allocation must equal the configured polynomial size
 (`ring_dim * sizeof(uint64_t)`). `hazeSetRingDimension` is required before
