@@ -160,13 +160,13 @@
             meta.platforms = pkgs.lib.platforms.unix;
           };
 
-          # Shared cmake configure for the lint derivations below. They
-          # only need compile_commands.json — no compile, no link, no
+          # Shared cmake configure for the lint derivation below. It
+          # only needs compile_commands.json — no compile, no link, no
           # test. Same flags as the haze derivation so the database
-          # matches what `make build` would emit. clang-tidy and clangd
-          # walk up from each .cpp's path to discover .clang-tidy /
-          # .clangd, which are copied into the source root in
-          # postPatch since hazeBuildSrc deliberately omits them.
+          # matches what `make build` would emit. clang-tidy walks up
+          # from each .cpp's path to discover .clang-tidy, which is
+          # copied into the source root in postPatch since hazeBuildSrc
+          # deliberately omits it.
           lintCmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
@@ -192,11 +192,10 @@
               cmakeFlags = lintCmakeFlags;
               postPatch = ''
                 cp ${./.clang-tidy} .clang-tidy
-                cp ${./.clangd} .clangd
               '';
               # cmake setup hook leaves us in build/. The lint walks
-              # back to the source root so .clang-tidy / .clangd
-              # discovery works for every .cpp.
+              # back to the source root so .clang-tidy discovery works
+              # for every .cpp.
               buildPhase = ''
                 runHook preBuild
                 cd ..
