@@ -89,6 +89,9 @@ void apply_double_angle_for_test(const OpCtx &ctx, Ct &ct, std::uint32_t num_ite
 Ct eval_chebyshev_series_for_test(const OpCtx &ctx, const Ct &x,
                                   const std::vector<double> &coefficients);
 
+// Expose eval_mod for byte-parity testing.
+Ct eval_mod_for_test(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
+
 // Adjust-pair helpers. adjust_for_mult mirrors OpenFHE's
 // AdjustLevelsAndDepthToOneInPlace; adjust_for_add mirrors
 // AdjustLevelsAndDepthInPlace. The test variants expose them so the

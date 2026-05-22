@@ -821,6 +821,9 @@ Ct eval_chebyshev_series_for_test(const OpCtx &ctx, const Ct &x,
                                   const std::vector<double> &c) {
     return eval_chebyshev_series(ctx, x, c);
 }
+Ct eval_mod_for_test(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
+    return eval_mod(ctx, bk, ct);
+}
 AdjustedPair adjust_for_mult_for_test(const OpCtx &ctx, Ct a, Ct b) {
     return adjust_for_mult(ctx, std::move(a), std::move(b));
 }
@@ -911,19 +914,28 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
     ctEncI = mult_monomial(ctx, ctEncI, bk.params.slots);
     Ct combined = add(ctx, ctEnc, ctEncI);
 
-    // Final scalar multiply: K * postscalar. For FIXEDAUTO bootstrap with
-    // correctionFactor=11, scalar = K * 2^correction = 16 * 2048 = 32768.
-    constexpr std::uint64_t K = 16;
-    constexpr std::uint64_t correction = 11;
-    const std::uint64_t scalar = K * (1ULL << correction);
-    combined = mult_int_scalar(ctx, combined, scalar);
+    // Match OpenFHE: scalar = round(2^deg) where
+    //   deg = round(log2(qDouble / 2^plaintextModulus))
+    // Computed dynamically from crypto params.
+    auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    const double qDouble =
+        cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg =
+        static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::uint64_t scalar =
+        static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    if (scalar != 1)
+        combined = mult_int_scalar(ctx, combined, scalar);
 
-        // OpenFHE FIXEDAUTO does one more ModReduce before StC
-        // (ckksrns-fhe.cpp:757) so the StC linear-transform input lines up
-        // with the precomputed StC plaintext level.
-        if (ctx.mode != lbcrypto::FIXEDMANUAL)
-            combined = rescale(ctx, combined);
-        return combined;
+    // OpenFHE FIXEDAUTO does one more ModReduce before StC
+    // (ckksrns-fhe.cpp:757) so the StC linear-transform input lines up
+    // with the precomputed StC plaintext level.
+    if (ctx.mode != lbcrypto::FIXEDMANUAL)
+        combined = rescale(ctx, combined);
+    return combined;
     }
 
     // Sparsely-packed path (slots < N/2): conjugate-add, one Chebyshev,
@@ -941,8 +953,24 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         ctEnc = rescale(ctx, ctEnc);
     apply_double_angle_iterations(ctx, ctEnc, 3);
 
-    constexpr std::uint64_t K = 16;
-    ctEnc = mult_int_scalar(ctx, ctEnc, K);
+    // OpenFHE: MultByIntegerInPlace(ctxtEnc, scalar) where
+    //   qDouble = first modulus (compositeDegree=1)
+    //   powP    = 2^plaintextModulus
+    //   deg     = round(log2(qDouble / powP))
+    //   scalar  = round(2^deg)
+    // For correctionFactor=11 and matched setup, deg=0 and scalar=1.
+    auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    const double qDouble =
+        cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg =
+        static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::uint64_t scalar =
+        static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    if (scalar != 1)
+        ctEnc = mult_int_scalar(ctx, ctEnc, scalar);
 
     if (ctx.mode != lbcrypto::FIXEDMANUAL)
         ctEnc = rescale(ctx, ctEnc);
