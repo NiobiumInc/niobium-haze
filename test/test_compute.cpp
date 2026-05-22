@@ -1205,7 +1205,7 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeAdd(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAdd(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_UNKNOWN_ADDRESS);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
@@ -1252,7 +1252,7 @@ TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeMul(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeMul(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_UNKNOWN_ADDRESS);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);

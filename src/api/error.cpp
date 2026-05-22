@@ -49,6 +49,32 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
         return "configuration error";
     case HAZE_ERROR_ISEQERR:
         return "instruction sequence error";
+    case HAZE_ERROR_UNKNOWN_ADDRESS:
+        return "unknown device address";
+    case HAZE_ERROR_NO_DATA:
+        return "no data at device address";
+    case HAZE_ERROR_ALLOC_TOO_SMALL:
+        return "allocation size below polynomial size";
+    case HAZE_ERROR_SOURCE_UNAVAILABLE:
+        return "compute / D2D source has no shadow data and no poly_map_ binding";
+    case HAZE_ERROR_BACKEND_INIT_FAILED:
+        return "backend init failed";
+    case HAZE_ERROR_BACKEND_REPLAY_FAILED:
+        return "backend replay failed";
+    case HAZE_ERROR_BACKEND_SHAPE_MISMATCH:
+        return "backend result shape mismatch";
+    case HAZE_ERROR_MISSING_POLYMAP_BINDING:
+        return "address missing from poly_map_";
+    case HAZE_ERROR_SHADOW_SIZE_MISMATCH:
+        return "shadow buffer length disagrees with ring_dim";
+    case HAZE_ERROR_BACKEND_OUTPUT_MISSING:
+        return "backend output missing";
+    case HAZE_ERROR_BACKEND_OUTPUT_DECODE_FAILED:
+        return "backend output decode failed";
+    case HAZE_ERROR_BRIDGE_HOOK_FAILED:
+        return "replay bridge post-recording hook failed";
+    case HAZE_ERROR_POOL_MAP_DESYNC:
+        return "allocator pool / alloc_set_ desync";
     default:
         return "unknown error";
     }

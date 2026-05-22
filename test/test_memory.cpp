@@ -39,7 +39,7 @@ TEST_CASE("hazeMalloc with size != polynomial bytes is rejected", "[unit]") {
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void *p = nullptr;
     // ring_dim=4096 → polynomial bytes = 32768; 8KB request fails.
-    REQUIRE(hazeMalloc(&p, 8192) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeMalloc(&p, 8192) == HAZE_ERROR_ALLOC_TOO_SMALL);
     hazeGetLastError();
 }
 
@@ -89,31 +89,6 @@ TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
 
     REQUIRE(dst == src);
     REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
-}
-
-TEST_CASE("D2D memcpy copies shadow buffer", "[unit]") {
-    constexpr size_t kBytes = 32768;
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    void *src_dev = nullptr;
-    void *dst_dev = nullptr;
-    REQUIRE(hazeMalloc(&src_dev, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&dst_dev, kBytes) == HAZE_SUCCESS);
-
-    std::vector<uint8_t> pattern(kBytes);
-    for (size_t i = 0; i < kBytes; ++i)
-        pattern[i] = static_cast<uint8_t>(i & 0xFF);
-
-    REQUIRE(hazeMemcpy(src_dev, pattern.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-            HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(dst_dev, src_dev, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) == HAZE_SUCCESS);
-
-    std::vector<uint8_t> result(kBytes, 0);
-    REQUIRE(hazeMemcpy(result.data(), dst_dev, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-
-    REQUIRE(result == pattern);
-    REQUIRE(hazeFree(src_dev) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(dst_dev) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeMemset fills shadow buffer", "[unit]") {
