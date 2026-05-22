@@ -3,7 +3,11 @@
 #include "bootstrap.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
+#include <memory>
+#include <openfhe.h>
+#include <scheme/ckksrns/ckksrns-cryptoparameters.h>
 #include <stdexcept>
 
 namespace haze::test::ops {
@@ -39,14 +43,26 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             depleted = level_reduce(ctx, std::move(depleted), depleted.towers() - 1);
         Ct raised = mod_raise(ctx, bk, depleted);
 
-        // SPARSELY PACKED: partial-sum loop before CtS lifts the slot-packed
-        // copies up to all N/2 slots. Fully-packed (slots==N/2) skips this.
+        // Mirrors ckksrns-fhe.cpp:666 — scale by pre/(k*N). Without this, the
+        // post-mod_raise NSD=1 makes the subsequent rescale underflow to 0.
+        auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+            ctx.cc->GetCryptoParameters());
+        REQUIRE(cp);
+        const double qDouble =
+            cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+        const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+        const std::int32_t deg =
+            static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+        const double post = std::pow(2.0, static_cast<double>(deg));
+        const double pre = 1.0 / post;
+        constexpr std::uint32_t K_UNIFORM = 512;
         const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+        const double pre_factor = pre / (static_cast<double>(K_UNIFORM) * N);
+        raised = eval_mult_scalar_for_test(ctx, raised, pre_factor);
+
         if (bk.params.slots < N / 2)
             raised = partial_sum(ctx, bk, std::move(raised));
 
-        // Pre-CtS ModReduce — drops the level so the CtS plaintext bases
-        // line up. Mirrors ckksrns-fhe.cpp:783.
         raised = rescale(ctx, raised);
         Ct in_slots = linear_transform(ctx, bk, bk.cts_matrices, raised);
         Ct modded = eval_mod(ctx, bk, in_slots);
