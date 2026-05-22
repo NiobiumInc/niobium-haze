@@ -1643,29 +1643,45 @@ TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap (N=20
     auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
     auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
 
-    // OpenFHE reference.
+    // OpenFHE reference. Note: on a fresh ct this takes EvalBootstrap's
+    // shortcut (ckksrns-fhe.cpp:862) and just returns the input. We use
+    // it only for its level shape; slot values come from decrypting.
     auto ct_ref = ctx.cc->EvalBootstrap(ct);
     REQUIRE(ct_ref);
     Plaintext pt_ref;
     ctx.cc->Decrypt(ctx.keys.secretKey, ct_ref, &pt_ref);
     pt_ref->SetLength(v.size());
     const auto slots_ref = pt_ref->GetRealPackedValue();
+    std::cerr << "  [slot-parity] ct_ref.towers="
+              << ct_ref->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_ref->GetNoiseScaleDeg() << "\n";
 
     auto haze_ct = ops::h2d_ct(ctx, ct);
     auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct, ops::BootstrapVariant::Standard);
+    std::cerr << "  [slot-parity] haze.towers=" << haze_refreshed.towers()
+              << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
     const auto haze_bytes = ops::d2h_ct(ctx, haze_refreshed);
 
-    // Inject the haze result into a shell and decrypt.
-    auto ct_haze = ct_ref->Clone();
-    ops::inject_ct(ctx, haze_bytes, ct_haze);
+    // Build a shell at haze's tower count by ModReduce'ing a fresh ct
+    // down to match.
+    auto ct_shell = ct->Clone();
+    const std::size_t target_towers = haze_refreshed.towers();
+    while (ct_shell->GetElements()[0].GetNumOfElements() > target_towers)
+        ctx.cc->GetScheme()->ModReduceInternalInPlace(ct_shell, 1);
+    ops::inject_ct(ctx, haze_bytes, ct_shell);
     Plaintext pt_haze;
-    ctx.cc->Decrypt(ctx.keys.secretKey, ct_haze, &pt_haze);
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_shell, &pt_haze);
     pt_haze->SetLength(v.size());
     const auto slots_haze = pt_haze->GetRealPackedValue();
 
+    std::cerr << "  [slot-parity] decoded slots:\n";
+    for (std::size_t i = 0; i < v.size(); ++i)
+        std::cerr << "    slot[" << i << "] in=" << v[i] << " ref=" << slots_ref[i]
+                  << " haze=" << slots_haze[i] << " diff=" << (slots_haze[i] - v[i]) << "\n";
+
     for (std::size_t i = 0; i < v.size(); ++i) {
-        INFO("slot " << i << " haze=" << slots_haze[i] << " ref=" << slots_ref[i]);
+        INFO("slot " << i << " haze=" << slots_haze[i] << " in=" << v[i]);
         REQUIRE_THAT(slots_haze[i],
-                     Catch::Matchers::WithinAbs(slots_ref[i], kBootstrapTolerance));
+                     Catch::Matchers::WithinAbs(v[i], kBootstrapTolerance));
     }
 }
