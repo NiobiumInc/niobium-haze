@@ -107,15 +107,18 @@ before checking.
 
 ## Build, test, lint
 
-Top-level `Makefile` is the standalone entry point. `MODE=release`
-(default) selects `build/`; `MODE=debug` selects `dbuild/`. Both CI
-and local `make test` default to release so the test suite exercises
-the optimization level that ships; pass `MODE=debug` explicitly when
-you need debug asserts, faster turnaround, or sanitizer matching.
+Top-level `Makefile` is the standalone entry point. `MODE=debug`
+(default) selects `dbuild/`; `MODE=release` selects `build/`. CI
+forces `MODE=release` (via `build-test.yml`'s explicit flag and via
+the flake derivations, which build `haze` with
+`-DCMAKE_BUILD_TYPE=Release`) so the gates exercise the optimization
+level that ships; local iteration defaults to debug so editor
+diagnostics, asserts, and sanitizer turnaround line up with the
+binary that gets produced.
 
 ```sh
 make sync                      # init vendor/niobium-fhetch (recursive)
-make build                     # configure + build (release; dbuild/ for debug)
+make build                     # configure + build (debug; build/ for release)
 make test                      # test-unit + test-sim (default)
 make test-unit                 # ~[integration] tag, HAZE_TARGET=local
 make test-sim                  # [integration] tag, in-process FHETCH simulator
@@ -127,12 +130,12 @@ make help                      # full target list
 ```
 
 Single test (Catch2 tag or substring filter) — bypass make and call the
-binary directly. Tests `cd` into `$(BUILD_DIR)/runs/` (`build/runs/` by
-default, `dbuild/runs/` under `MODE=debug`) so `niobium::compiler()`'s
+binary directly. Tests `cd` into `$(BUILD_DIR)/runs/` (`dbuild/runs/` by
+default, `build/runs/` for release) so `niobium::compiler()`'s
 `program_dir` resolves under the build tree:
 
 ```sh
-mkdir -p build/runs && cd build/runs
+mkdir -p dbuild/runs && cd dbuild/runs
 HAZE_TARGET=local ../haze_tests "[integration]"           # all integration tests
 HAZE_TARGET=local ../haze_tests "hazeAdd: pointwise sum"  # one case by name
 HAZE_TARGET=local ../haze_tests --list-tests              # enumerate
@@ -228,11 +231,11 @@ matches:
    Reproduce locally (after `make build`):
 
    ```sh
-   scripts/clang-tidy.sh                  # default; reads build/
+   scripts/clang-tidy.sh                  # default; reads dbuild/
 
-   # Lint against a debug-mode database (faster compile, asserts on):
-   make build MODE=debug
-   BUILD_DIR=dbuild scripts/clang-tidy.sh
+   # Match CI's release-mode database when chasing CI-only failures:
+   make build MODE=release
+   BUILD_DIR=build scripts/clang-tidy.sh
    ```
 
 When iterating on a single file, skip the flake build and call
@@ -240,15 +243,14 @@ clang-tidy directly — but keep `--warnings-as-errors='*'` so local
 output matches what CI promotes to errors:
 
 ```sh
-clang-tidy -p build --warnings-as-errors='*' src/api/compute.cpp
+clang-tidy -p dbuild --warnings-as-errors='*' src/api/compute.cpp
 ```
 
 The `scripts/clang-tidy.sh` wrapper honors `BUILD_DIR=<dir>` (default
-`build`, matching the Makefile's release default; pass `BUILD_DIR=dbuild`
-after `make build MODE=debug` to lint the debug build),
-`PARALLEL_JOBS=<n>` (defaults to `NIX_BUILD_CORES` or the host CPU
-count), and `CLANG_TIDY=<bin>` (the binary to invoke per file; defaults
-to `clang-tidy`).
+`dbuild`, matching the Makefile's debug default; pass `BUILD_DIR=build`
+after `make build MODE=release` to match CI), `PARALLEL_JOBS=<n>`
+(defaults to `NIX_BUILD_CORES` or the host CPU count), and `CLANG_TIDY=<bin>`
+(the binary to invoke per file; defaults to `clang-tidy`).
 
 ### How CI lints faster than `nix build .#checks.<sys>.clang-tidy`
 
