@@ -286,6 +286,89 @@ TEST_CASE("phase4 eval_chebyshev_series slot-level at degree 12 (k=3,m=2)",
     }
 }
 
+TEST_CASE("phase21 rescale byte-parity vs cc->GetScheme()->ModReduceInternalInPlace",
+          "[integration][e2e]") {
+    // Validate ops::rescale against OpenFHE's ModReduceInternalInPlace.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    auto fresh = [&]() {
+        std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        return ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    };
+    auto bump_nsd2 = [&](Ciphertext<DCRTPoly> ct) { return ctx.cc->EvalMult(ct, 1.0); };
+
+    auto check = [&](const std::string &label, Ciphertext<DCRTPoly> ct) {
+        auto ref = ct->Clone();
+        ctx.cc->GetScheme()->ModReduceInternalInPlace(ref, 1);
+
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+        auto out = ops::rescale(ctx, haze_ct);
+        assert_rns_equal(ctx, out, ref, "phase21 " + label);
+    };
+
+    check("NSD=1", fresh());
+    check("NSD=2", bump_nsd2(fresh()));
+}
+
+TEST_CASE("phase20 conjugate-add byte-parity (the eval_mod head step)",
+          "[integration][e2e]") {
+    // Sparsely-packed eval_mod's first op is: ctxtEnc = EvalAdd(ct, Conjugate(ct)).
+    // Phase 19 validates conjugate alone byte-exact. Phase 20 validates
+    // the full conjugate-add composition.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    const std::int32_t conj_idx = 2 * static_cast<std::int32_t>(ctx.ring_dim) - 1;
+    auto ref = ctx.cc->EvalAdd(ct, ctx.cc->EvalAtIndex(ct, conj_idx));
+
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto conj = ops::conjugate(ctx, haze_ct, bk.conjugation_key);
+    auto out = ops::add(ctx, haze_ct, conj);
+    assert_rns_equal(ctx, out, ref, "phase20 conjugate-add");
+}
+
+TEST_CASE("phase19 conjugate + rotate byte-parity vs cc->EvalAtIndex",
+          "[integration][e2e]") {
+    // Validate ops::conjugate matches cc->EvalAtIndex(ct, 2N-1) byte-exact
+    // (and rotate_with_key matches cc->EvalAtIndex(ct, idx) byte-exact for
+    // a few common indices). If conjugate diverges, the eval_mod
+    // conjugate-add will too; that's the next suspect after phase 14/17/16
+    // are all green.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // Conjugate: index 2N-1 = M-1.
+    const std::int32_t conj_idx = 2 * static_cast<std::int32_t>(ctx.ring_dim) - 1;
+    auto ref_conj = ctx.cc->EvalAtIndex(ct, conj_idx);
+
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_conj = ops::conjugate(ctx, haze_ct, bk.conjugation_key);
+    assert_rns_equal(ctx, haze_conj, ref_conj, "phase19 conjugate idx=2N-1");
+}
+
 TEST_CASE("phase18 eval_mod byte-parity vs OpenFHE manual sparsely-packed replication",
           "[integration][e2e]") {
     // Compose OpenFHE's sparsely-packed eval_mod via the public cc-> API
