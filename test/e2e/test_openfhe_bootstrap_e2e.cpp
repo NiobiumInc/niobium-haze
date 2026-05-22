@@ -44,6 +44,24 @@ haze::test::ops::OpCtx make_bootstrap_ctx() {
     return ctx;
 }
 
+haze::test::ops::OpCtx make_bootstrap_ctx_mode(lbcrypto::ScalingTechnique mode,
+                                                std::uint32_t ring_dim = 1u << 16) {
+    using namespace lbcrypto;
+    using namespace haze::test::ops;
+    auto ctx = make_ctx({
+        .mode = mode,
+        .mult_depth = 25,
+        .scaling_mod_size = 50,
+        .batch_size = 8,
+        .with_relin_key = true,
+        .rotate_indices = {},
+        .ring_dim = ring_dim,
+    });
+    ctx.cc->Enable(ADVANCEDSHE);
+    ctx.cc->Enable(FHE);
+    return ctx;
+}
+
 // Tiny-ring ctx for phase5 profiling. Drops security level so OpenFHE
 // accepts the small N. Not for correctness — only for timing.
 haze::test::ops::OpCtx make_bootstrap_ctx_tiny(std::uint32_t ring_dim) {
@@ -2102,6 +2120,265 @@ TEST_CASE("phase30 haze ops::bootstrap == cc->EvalBootstrap byte-equal (N=2048)"
     std::cerr << "  [phase30] haze: towers=" << haze_refreshed.towers()
               << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
     assert_rns_equal(ctx, haze_refreshed, ct_ref, "phase30 e2e bootstrap");
+}
+
+TEST_CASE("phase31 OpenFHE-only full bootstrap, FIXEDMANUAL mode",
+          "[integration][e2e]") {
+    // Mode sweep step 1 (FIXEDMANUAL): verify cc->EvalBootstrap runs
+    // end-to-end on a depleted ct at FIXEDMANUAL. Mirrors phase 28.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_mode(FIXEDMANUAL);
+    constexpr std::uint32_t slots = 8;
+    ctx.cc->EvalBootstrapSetup({1, 1}, {0, 0}, slots, 11);
+    ctx.cc->EvalBootstrapKeyGen(ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // FIXEDMANUAL: EvalMult doesn't auto-rescale. Deplete via explicit
+    // EvalMult(1.0) + ModReduceInPlace pairs.
+    auto algo = ctx.cc->GetScheme();
+    while (ct->GetElements()[0].GetNumOfElements() > 5) {
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+        ctx.cc->ModReduceInPlace(ct);
+    }
+    std::cerr << "  [phase31] depleted: towers="
+              << ct->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct->GetNoiseScaleDeg() << "\n";
+
+    auto ct_refreshed = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_refreshed);
+    std::cerr << "  [phase31] post-bootstrap towers="
+              << ct_refreshed->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_refreshed->GetNoiseScaleDeg() << "\n";
+
+    Plaintext out;
+    ctx.cc->Decrypt(ctx.keys.secretKey, ct_refreshed, &out);
+    out->SetLength(v.size());
+    const auto got = out->GetRealPackedValue();
+    for (std::size_t i = 0; i < v.size(); ++i)
+        std::cerr << "    slot[" << i << "] got=" << got[i] << " ref=" << v[i]
+                  << " diff=" << (got[i] - v[i]) << "\n";
+    constexpr double kDepletedTolerance = 1e-1;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        INFO("slot " << i << " got=" << got[i] << " ref=" << v[i]);
+        REQUIRE_THAT(got[i], Catch::Matchers::WithinAbs(v[i], kDepletedTolerance));
+    }
+}
+
+TEST_CASE("phase33 haze ops::bootstrap == cc->EvalBootstrap byte-equal, FIXEDMANUAL (N=2048)",
+          "[integration][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = ops::make_ctx({
+        .mode = FIXEDMANUAL,
+        .mult_depth = 35,
+        .scaling_mod_size = 50,
+        .batch_size = 8,
+        .with_relin_key = true,
+        .rotate_indices = {},
+        .ring_dim = 1u << 11,
+    });
+    ctx.cc->Enable(ADVANCEDSHE);
+    ctx.cc->Enable(FHE);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > 6) {
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+        ctx.cc->ModReduceInPlace(ct);
+    }
+
+    auto ct_ref = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct,
+                                         ops::BootstrapVariant::Standard);
+    std::cerr << "  [phase33] ct_ref: towers="
+              << ct_ref->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_ref->GetNoiseScaleDeg() << "\n";
+    std::cerr << "  [phase33] haze: towers=" << haze_refreshed.towers()
+              << " nsd=" << haze_refreshed.noise_scale_deg() << "\n";
+    assert_rns_equal(ctx, haze_refreshed, ct_ref, "phase33 e2e bootstrap FIXEDMANUAL");
+}
+
+TEST_CASE("phase32 manual OpenFHE bootstrap == cc->EvalBootstrap byte-equal, FIXEDMANUAL",
+          "[integration][e2e]") {
+    // Mirrors phase 29 for FIXEDMANUAL mode. Key differences vs FIXEDAUTO:
+    //   - EvalMult doesn't auto-rescale on NSD=2 (user-managed)
+    //   - Post-conjugate-add: while(NSD>1) ModReduceInPlace (vs single rescale)
+    //   - SKIP post-Chebyshev ModReduce (line 818)
+    //   - SKIP pre-StC ModReduce (line 842)
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_mode(FIXEDMANUAL);
+    constexpr std::uint32_t slots = 8;
+    ctx.cc->EvalBootstrapSetup({1, 1}, {0, 0}, slots, 11);
+    ctx.cc->EvalBootstrapKeyGen(ctx.keys.secretKey, slots);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    const double qDouble =
+        cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg =
+        static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction_factor = 11;
+    const std::int32_t correction = correction_factor - deg;
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = ctx.cc->GetRingDimension();
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    const std::uint64_t corFactor =
+        static_cast<std::uint64_t>(1) << static_cast<std::uint64_t>(correction);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > 5) {
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+        ctx.cc->ModReduceInPlace(ct);
+    }
+
+    auto ct_real = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_real);
+
+    auto fhe_base = ctx.cc->GetScheme()->GetFHE();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(fhe_base);
+    REQUIRE(fhe_ckks);
+    const auto &precom_map = fhe_ckks->GetBootPrecomMap();
+    const auto &precom = *precom_map.at(slots);
+
+    auto algo = ctx.cc->GetScheme();
+    auto raised = ct->Clone();
+    algo->ModReduceInternalInPlace(raised, 1 * (raised->GetNoiseScaleDeg() - 1));
+    ctx.cc->EvalMultInPlace(raised, std::pow(2.0, -correction));
+    algo->ModReduceInternalInPlace(raised, 1);
+    {
+        auto elementParams = cp->GetElementParams();
+        std::vector<NativeInteger> moduli;
+        std::vector<NativeInteger> roots;
+        for (const auto &pp : elementParams->GetParams()) {
+            moduli.push_back(pp->GetModulus());
+            roots.push_back(pp->GetRootOfUnity());
+        }
+        auto elementParamsPtr = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            ctx.cc->GetCyclotomicOrder(), moduli, roots);
+        const std::uint32_t L0 =
+            static_cast<std::uint32_t>(elementParams->GetParams().size());
+        auto elements = raised->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), elementParamsPtr);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised->SetElements(std::move(elements));
+        raised->SetLevel(L0 - raised->GetElements()[0].GetNumOfElements());
+    }
+    ctx.cc->EvalMultInPlace(raised, pre / (static_cast<double>(K_UNIFORM) * N));
+    {
+        const auto limit = N / (2 * slots);
+        for (std::uint32_t j = 1; j < limit; j <<= 1)
+            ctx.cc->EvalAddInPlace(raised,
+                                   ctx.cc->EvalRotate(raised,
+                                                      static_cast<int>(j * slots)));
+    }
+    algo->ModReduceInternalInPlace(raised, 1);
+    auto ctxtEnc = fhe_ckks->EvalLinearTransform(precom.m_U0hatTPre, raised);
+    const std::int32_t conj_idx = 2 * static_cast<std::int32_t>(N) - 1;
+    ctx.cc->EvalAddInPlace(ctxtEnc, ctx.cc->EvalAtIndex(ctxtEnc, conj_idx));
+    // FIXEDMANUAL: while(NSD > 1) ModReduceInPlace (mirrors line 791-794)
+    while (ctxtEnc->GetNoiseScaleDeg() > 1)
+        ctx.cc->ModReduceInPlace(ctxtEnc);
+
+    static const std::vector<double> g_coefficientsUniform{
+        0.15421426400235561,    -0.0037671538417132409,  0.16032011744533031,
+        -0.0034539657223742453, 0.17711481926851286,     -0.0027619720033372291,
+        0.19949802549604084,    -0.0015928034845171929,  0.21756948616367638,
+        0.00010729951647566607, 0.21600427371240055,     0.0022171399198851363,
+        0.17647500259573556,    0.0042856217194480991,   0.086174491919472254,
+        0.0054640252312780444,  -0.046667988130649173,   0.0047346914623733714,
+        -0.17712686172280406,   0.0016205080004247200,   -0.22703114241338604,
+        -0.0028145845916205865, -0.13123089730288540,    -0.0056345646688793190,
+        0.078818395388692147,   -0.0037868875028868542,  0.23226434602675575,
+        0.0021116338645426574,  0.13985510526186795,     0.0059365649669377071,
+        -0.13918475289368595,   0.0018580676740836374,   -0.23254376365752788,
+        -0.0054103844866927788, 0.056840618403875359,    -0.0035227192748552472,
+        0.25667909012207590,    0.0055029673963982112,   -0.073334392714092062,
+        0.0027810273357488265,  -0.24912792167850559,    -0.0069524866497120566,
+        0.21288810409948347,    0.0017810057298691725,   0.088760951809475269,
+        0.0055957188940032095,  -0.31937177676259115,    -0.0087539416335935556,
+        0.34748800245527145,    0.0075378299617709235,   -0.25116537379803394,
+        -0.0047285674679876204, 0.13970502851683486,     0.0023672533925155220,
+        -0.063649401080083698,  -0.00098993213448982727, 0.024597838934816905,
+        0.00035553235917057483, -0.0082485030307578155,  -0.00011176184313622549,
+        0.0024390574829093264,  0.000031180384864488629, -0.00064373524734389861,
+        -7.8036008952377965e-6, 0.00015310015145922058,  1.7670804180220134e-6,
+        -0.000033066844379476900, -3.6460909134279425e-7, 6.5276969021754105e-6,
+        6.8957843666189918e-8,  -1.1842811187642386e-6,  -1.2015133285307312e-8,
+        1.9839339947648331e-7,  1.9372045971100854e-9,   -3.0815418032523593e-8,
+        -2.9013806338735810e-10, 4.4540904298173700e-9,  4.0505136697916078e-11,
+        -6.0104912807134771e-10, -5.2873323696828491e-12, 7.5943206779351725e-11,
+        6.4679566322060472e-13, -9.0081200925539902e-12, -7.4396949275292252e-14,
+        1.0057423059167244e-12, 8.1701187638005194e-15,  -1.0611736208855373e-13,
+        -8.9597492970451533e-16, 1.1421575296031385e-14};
+    ctxtEnc = ctx.cc->EvalChebyshevSeries(ctxtEnc, g_coefficientsUniform, -1.0, 1.0);
+    // FIXEDMANUAL: SKIP the post-Chebyshev ModReduce (line 817-818).
+    constexpr std::uint32_t R_UNIFORM = 6;
+    constexpr double twoPi = 2.0 * M_PI;
+    for (std::int32_t i = 1 - static_cast<std::int32_t>(R_UNIFORM); i <= 0; ++i) {
+        const double scalar = -std::pow(twoPi, -std::pow(2.0, i));
+        ctx.cc->EvalSquareInPlace(ctxtEnc);
+        ctx.cc->EvalAddInPlace(ctxtEnc, ctx.cc->EvalAdd(ctxtEnc, scalar));
+        ctx.cc->ModReduceInPlace(ctxtEnc);
+    }
+    const std::uint64_t scalar_for_mult =
+        static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    algo->MultByIntegerInPlace(ctxtEnc, scalar_for_mult);
+    // FIXEDMANUAL: SKIP the pre-StC ModReduce (line 841-842).
+    auto ctxtDec = fhe_ckks->EvalLinearTransform(precom.m_U0Pre, ctxtEnc);
+    ctx.cc->EvalAddInPlace(ctxtDec,
+                           ctx.cc->EvalRotate(ctxtDec, static_cast<int>(slots)));
+    algo->MultByIntegerInPlace(ctxtDec, corFactor);
+
+    std::cerr << "  [phase32] real: towers="
+              << ct_real->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct_real->GetNoiseScaleDeg()
+              << "; manual: towers="
+              << ctxtDec->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ctxtDec->GetNoiseScaleDeg() << "\n";
+    REQUIRE(ct_real->GetElements()[0].GetNumOfElements() ==
+            ctxtDec->GetElements()[0].GetNumOfElements());
+    std::size_t total_mism = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &d_real = ct_real->GetElements()[elem];
+        const auto &d_man = ctxtDec->GetElements()[elem];
+        for (std::size_t t = 0; t < d_real.GetNumOfElements(); ++t) {
+            const auto &vr = d_real.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+            const auto &vm = d_man.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < vr.GetLength(); ++i)
+                if (vr[i].template ConvertToInt<std::uint64_t>() !=
+                    vm[i].template ConvertToInt<std::uint64_t>())
+                    ++mism;
+            if (mism > 0)
+                std::cerr << "    elem=" << elem << " tower=" << t
+                          << " mismatches=" << mism << "/" << vr.GetLength() << "\n";
+            total_mism += mism;
+        }
+    }
+    std::cerr << "  [phase32] total mismatches=" << total_mism << "\n";
+    REQUIRE(total_mism == 0);
 }
 
 TEST_CASE("phase29 manual OpenFHE bootstrap == cc->EvalBootstrap byte-equal",
