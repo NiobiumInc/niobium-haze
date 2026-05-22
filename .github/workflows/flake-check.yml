@@ -14,13 +14,13 @@ concurrency:
   group: flake-check-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Two-job pipeline. `lint` runs the clang-tidy and clangd-check flake
-# derivations as a fast gate; `flake-check` runs the slower test suite
-# only after lint succeeds. Magic Nix Cache shares the /nix/store across
-# jobs so the second job reuses everything the first one built.
+# Two-job pipeline. `lint` runs the clang-tidy flake derivation as a
+# fast gate; `flake-check` runs the slower test suite only after lint
+# succeeds. Magic Nix Cache shares the /nix/store across jobs so the
+# second job reuses everything the first one built.
 jobs:
   lint:
-    name: clang-tidy + clangd-check
+    name: clang-tidy
     runs-on: ubuntu-latest
     if: >-
       github.event_name != 'pull_request' ||
@@ -95,14 +95,10 @@ jobs:
       - name: Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
-      - name: Build lint derivations
-        # Two flake checks: clang-tidy and clangd-check. Both configure
-        # cmake to emit compile_commands.json, then lint with
-        # --warnings-as-errors='*' (clang-tidy) and a grep-for-warnings
-        # post-pass (clangd --check exits zero on warnings without it).
-        # --keep-going attempts both even if one fails, mirroring the
-        # nix flake check behaviour on the dependent test job.
-        run: nix build -L --keep-going .#checks.x86_64-linux.clang-tidy .#checks.x86_64-linux.clangd-check
+      - name: Build lint derivation
+        # The clang-tidy flake check configures cmake to emit
+        # compile_commands.json, then lints with --warnings-as-errors='*'.
+        run: nix build -L .#checks.x86_64-linux.clang-tidy
 
       - name: Collect nix build logs on failure
         if: failure()

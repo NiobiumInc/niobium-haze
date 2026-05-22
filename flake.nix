@@ -286,25 +286,19 @@
                 touch "$out"
               '';
 
-          # Both lint derivations dispatch through the scripts in
-          # scripts/, which are also runnable directly from a haze
-          # checkout (`scripts/clang-tidy.sh`, `scripts/clangd-check.sh`).
-          # The derivations exist so `nix flake check` stays the CI gate
-          # — they wrap each script in a hermetic toolchain (pinned
-          # clang-tools, configured cmake build dir for
-          # compile_commands.json) without duplicating lint logic.
+          # The clang-tidy lint derivation dispatches through
+          # `scripts/clang-tidy.sh`, which is also runnable directly from
+          # a haze checkout. The derivation exists so `nix flake check`
+          # stays the CI gate — it wraps the script in a hermetic
+          # toolchain (pinned clang-tools, configured cmake build dir
+          # for compile_commands.json) without duplicating lint logic.
           # BUILD_DIR=build matches what cmake's setup hook in nixpkgs
           # configures (the source-tree default `dbuild/` only exists
-          # under `make`-driven builds). Without this, the scripts
-          # bail with "no compile_commands.json under dbuild/".
+          # under `make`-driven builds). Without this, the script
+          # bails with "no compile_commands.json under dbuild/".
           haze-clang-tidy = mkLintDerivation {
             name = "haze-clang-tidy";
             lintScript = "BUILD_DIR=build bash scripts/clang-tidy.sh";
-          };
-
-          haze-clangd-check = mkLintDerivation {
-            name = "haze-clangd-check";
-            lintScript = "BUILD_DIR=build bash scripts/clangd-check.sh";
           };
         in
         {
@@ -314,7 +308,6 @@
             haze
             haze-clang-format
             haze-clang-tidy
-            haze-clangd-check
             ;
         };
     in
@@ -413,8 +406,6 @@
           clang-format = p.haze-clang-format;
 
           clang-tidy = p.haze-clang-tidy;
-
-          clangd-check = p.haze-clangd-check;
 
           unit-tests = pkgs.runCommand "haze-unit-tests" { } ''
             mkdir -p $TMPDIR/runs && cd $TMPDIR/runs

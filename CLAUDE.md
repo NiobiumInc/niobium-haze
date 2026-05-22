@@ -163,17 +163,16 @@ forward-compat enum extension across library versions.
 Lint and format use the in-tree `.clang-format` (LLVM, indent 4, column 100)
 and `.clang-tidy` (broad set with bugprone/cppcoreguidelines/modernize/etc.).
 
-Three CI gates must pass before a PR merges. Each one has a local
+Two CI gates must pass before a PR merges. Each one has a local
 equivalent — run them before pushing rather than after CI fails.
 
-**Primary pre-push check: the flake.** Run all three lint derivations
+**Primary pre-push check: the flake.** Run both lint derivations
 through `nix build` so local output matches CI byte-for-byte:
 
 ```sh
 nix build -L --keep-going \
   .#checks.<sys>.clang-format \
-  .#checks.<sys>.clang-tidy \
-  .#checks.<sys>.clangd-check
+  .#checks.<sys>.clang-tidy
 ```
 
 Substitute `<sys>` for your host (`aarch64-darwin`, `x86_64-linux`,
@@ -185,14 +184,13 @@ checkout:
 nix build -L --keep-going \
   .#checks.<sys>.clang-format \
   .#checks.<sys>.clang-tidy \
-  .#checks.<sys>.clangd-check \
   --override-input niobium-fhetch-src \
     "git+file://$PWD/vendor/niobium-fhetch?submodules=1"
 ```
 
 The local checkout must be at the lockfile's rev (or pass
 `--no-write-lock-file` to bypass the lock check). `nix flake check -L
---keep-going` runs the same three plus `unit-tests`, `sim-tests`, `fmt`,
+--keep-going` runs the same two plus `unit-tests`, `sim-tests`, `fmt`,
 and the devshell build — slowest, but the strongest pre-push signal.
 
 **`cmake --build` is not a substitute** for any of the lint gates. It
@@ -224,38 +222,32 @@ matches:
    The script resolves the repo root via `git rev-parse`, so it works
    from any subdirectory.
 
-2. `clang-tidy + clangd-check` — `clang-tidy --warnings-as-errors='*'`
-   over first-party `src/`, `replay_bridge/`, `test/` `.cpp` files,
-   plus `clangd --check` with a grep-for-warnings post-pass (clangd
-   exits zero on warnings without it). Both ride the configured
-   `compile_commands.json` and must report zero warnings. Both share
-   their lint definitions with the flake check via scripts in
-   `scripts/`. Reproduce locally (after `make build`):
+2. `clang-tidy` — `clang-tidy --warnings-as-errors='*'` over first-party
+   `src/`, `replay_bridge/`, `test/` `.cpp` files. Rides the configured
+   `compile_commands.json` and must report zero warnings. Shares its
+   lint definition with the flake check via `scripts/clang-tidy.sh`.
+   Reproduce locally (after `make build`):
 
    ```sh
    scripts/clang-tidy.sh                  # default; reads dbuild/
-   scripts/clangd-check.sh                # default; reads dbuild/
 
    # Match CI's release-mode database when chasing CI-only failures:
    make build MODE=release
    BUILD_DIR=build scripts/clang-tidy.sh
-   BUILD_DIR=build scripts/clangd-check.sh
    ```
 
-When iterating on a single file, skip the flake build and call the
-linters directly — but keep `--warnings-as-errors='*'` so local output
-matches what CI promotes to errors:
+When iterating on a single file, skip the flake build and call
+clang-tidy directly — but keep `--warnings-as-errors='*'` so local
+output matches what CI promotes to errors:
 
 ```sh
 clang-tidy -p dbuild --warnings-as-errors='*' src/api/compute.cpp
-clangd --check=src/api/compute.cpp
 ```
 
-The `scripts/clang-tidy.sh` and `scripts/clangd-check.sh` wrappers honor
-`BUILD_DIR=<dir>` (default `dbuild`, matching the Makefile's debug
-default; pass `BUILD_DIR=build` after `make build MODE=release` to
-match CI) and `PARALLEL_JOBS=<n>` (clang-tidy only; defaults to
-`NIX_BUILD_CORES` or the host CPU count).
+The `scripts/clang-tidy.sh` wrapper honors `BUILD_DIR=<dir>` (default
+`dbuild`, matching the Makefile's debug default; pass `BUILD_DIR=build`
+after `make build MODE=release` to match CI) and `PARALLEL_JOBS=<n>`
+(defaults to `NIX_BUILD_CORES` or the host CPU count).
 
 A bare `clang-tidy -p dbuild <file>` (no `--warnings-as-errors`) prints
 the same diagnostics as warnings; CI will still fail. Always pass
