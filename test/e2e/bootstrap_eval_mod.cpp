@@ -256,7 +256,7 @@ Ct drop_levels(const OpCtx &ctx, Ct ct, std::size_t levels) {
 
 uint32_t poly_degree(const std::vector<double> &v) {
     for (std::size_t i = v.size(); i-- > 0;)
-        if (std::abs(v[i]) > 1e-14)
+        if (std::abs(v[i]) > 0x1p-44)
             return static_cast<std::uint32_t>(i);
     return 0;
 }
@@ -267,7 +267,7 @@ Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
                             const std::vector<double> &coeffs, std::uint32_t n) {
     std::vector<std::size_t> used;
     for (std::uint32_t i = 0; i < n; ++i)
-        if (std::abs(coeffs[i + 1]) > 1e-14)
+        if (std::abs(coeffs[i + 1]) > 0x1p-44)
             used.push_back(i);
     REQUIRE(!used.empty());
     Ct acc = mult_by_const(ctx, T[used[0]], coeffs[used[0] + 1]);
@@ -446,7 +446,7 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
     if (std::uint32_t n = poly_degree(divcs->q); n >= 1) {
         Ct c = [&]() -> Ct {
             if (n == 1) {
-                if (std::abs(divcs->q[1] - 1.0) > 1e-14)
+                if (std::abs(divcs->q[1] - 1.0) > 0x1p-44)
                     return rescale(ctx, mult_by_const(ctx, T[0], divcs->q[1]));
                 return clone_ct(ctx, T[0]);
             }
@@ -493,7 +493,7 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
 // (matches OpenFHE's cc->EvalMult(Ti, scalar) — auto-rescales NSD=2
 // inputs); plain mult_by_const would diverge byte-for-byte.
 void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &Ti, double scalar) {
-    if (std::abs(scalar) <= 1e-14)
+    if (std::abs(scalar) <= 0x1p-44)
         return;
     Ct tmp = eval_mult_scalar(ctx, Ti, scalar);
     if (acc.has_value())
@@ -604,7 +604,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
         // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar);
         // ModReduceInPlace after that is a no-op in FIXEDAUTO.
         if (nc == 1) {
-            if (std::abs(divcs->q[1] - 1.0) > 1e-14) {
+            if (std::abs(divcs->q[1] - 1.0) > 0x1p-44) {
                 cu = eval_mult_scalar(ctx, T[0], divcs->q[1]);
             } else {
                 cu = clone_ct(ctx, T[0]);
@@ -660,7 +660,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
         if (std::uint32_t n = poly_degree(divcs->q); n >= 1) {
             Ct c = [&]() -> Ct {
                 if (n == 1) {
-                    if (std::abs(divcs->q[1] - 1.0) > 1e-14)
+                    if (std::abs(divcs->q[1] - 1.0) > 0x1p-44)
                         return rescale(ctx, mult_by_const(ctx, T[0], divcs->q[1]));
                     return clone_ct(ctx, T[0]);
                 }
