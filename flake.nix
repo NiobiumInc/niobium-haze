@@ -377,6 +377,10 @@
           #      workflow then substitutes its workspace path at
           #      consume time. /nix/store paths survive untouched
           #      because they don't share the /build/source prefix.
+          #      CI's runner is Linux (ubuntu-latest); on macOS nix
+          #      uses a different sandbox path (/private/var/...).
+          #      If we ever build this derivation on macOS in CI the
+          #      sed pattern needs to be widened.
           haze-compile-commands = stdenv.mkDerivation {
             name = "haze-compile-commands";
             src = hazeBuildSrc;
@@ -399,6 +403,11 @@
               # then bake them into CMAKE_CXX_FLAGS so libclang/
               # clang-tidy consumers outside this sandbox resolve
               # <mutex> and niobium/compiler.h without the wrapper.
+              #
+              # Relies on the nix-store-paths-have-no-spaces invariant
+              # — awk splits on whitespace, which would corrupt any
+              # path containing one. Nix's store hashing forbids spaces
+              # in derivation outputs, so this is sound today.
               effective_flags=$(echo | clang++ -E -v -x c++ - 2>&1 \
                 | sed -n '/^#include <\.\.\.>/,/^End of search/p' \
                 | grep -E "^ /" \
