@@ -295,7 +295,11 @@ uint32_t poly_degree(const std::vector<double> &v) {
 }
 
 // EvalPartialLinearWSum: Σ T[i] * coeffs[i+1] for i in 0..n-1, only
-// non-zero coefficients. Returns a single combined ciphertext.
+// non-zero coefficients. Mirrors OpenFHE's EvalPartialLinearWSum
+// (advancedshe.cpp:143). The key step OpenFHE does that an untracked
+// haze impl misses: if input cts arrive at NSD=2, ModReduceInternalInPlace
+// EACH ONE before the EvalMult/EvalAdd loop (drops a level, brings them
+// to NSD=1). Then per-ct scalar mults bump NSD back to 2.
 Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
                             const std::vector<double> &coeffs, std::uint32_t n) {
     std::vector<std::size_t> used;
@@ -303,11 +307,25 @@ Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
         if (std::abs(coeffs[i + 1]) > 0x1p-44)
             used.push_back(i);
     REQUIRE(!used.empty());
-    Ct acc = mult_by_const(ctx, T[used[0]], coeffs[used[0] + 1]);
+
+    // Stage clones; T[i] are assumed already at the same level after
+    // compute_cheby_tree's alignment loop, so AdjustLevelsAndDepthInPlace
+    // would be a no-op here. Pre-mult ModReduce on NSD=2.
+    std::vector<Ct> cts;
+    cts.reserve(used.size());
+    for (std::size_t i = 0; i < used.size(); ++i)
+        cts.push_back(clone_ct(ctx, T[used[i]]));
+    if (ctx.mode != lbcrypto::FIXEDMANUAL && cts.front().noise_scale_deg() == 2) {
+        for (auto &c : cts)
+            c = rescale(ctx, std::move(c));
+    }
+
+    Ct acc = mult_by_const(ctx, cts[0], coeffs[used[0] + 1]);
     for (std::size_t i = 1; i < used.size(); ++i) {
-        Ct term = mult_by_const(ctx, T[used[i]], coeffs[used[i] + 1]);
+        Ct term = mult_by_const(ctx, cts[i], coeffs[used[i] + 1]);
         acc = add(ctx, acc, term);
     }
+    // Trailing cc->ModReduceInPlace is a no-op in FIXEDAUTO.
     return acc;
 }
 
@@ -668,9 +686,12 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
 
             divqr->q.resize(k);
             if (std::uint32_t n = poly_degree(divqr->q); n > 0) {
+                // OpenFHE: EvalAddInPlace(qu, EvalPartialLinearWSum(...)).
+                // eval_partial_linear_wsum already does the upfront ModReduce
+                // and the trailing rescale is a no-op in FIXEDAUTO; let
+                // adjust_for_add handle any final level alignment.
                 Ct extra = eval_partial_linear_wsum(ctx, T, divqr->q, n);
-                Ct extra_r = rescale(ctx, extra);
-                auto ap = adjust_for_add(ctx, std::move(qu), std::move(extra_r));
+                auto ap = adjust_for_add(ctx, std::move(qu), std::move(extra));
                 qu = add(ctx, ap.a, ap.b);
             }
         }
@@ -682,8 +703,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
             s2.resize(k);
             if (std::uint32_t n = poly_degree(s2); n > 0) {
                 Ct extra = eval_partial_linear_wsum(ctx, T, s2, n);
-                Ct extra_r = rescale(ctx, extra);
-                auto ap = adjust_for_add(ctx, std::move(su), std::move(extra_r));
+                auto ap = adjust_for_add(ctx, std::move(su), std::move(extra));
                 su = add(ctx, ap.a, ap.b);
             }
             su = add_const(ctx, su, s2.front() / 2.0);
@@ -694,11 +714,13 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
         if (std::uint32_t n = poly_degree(divcs->q); n >= 1) {
             Ct c = [&]() -> Ct {
                 if (n == 1) {
+                    // OpenFHE: cu = cc->EvalMult(T[0], divcs->q[1]); ModReduceInPlace(cu);
+                    // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar).
                     if (std::abs(divcs->q[1] - 1.0) > 0x1p-44)
-                        return rescale(ctx, mult_by_const(ctx, T[0], divcs->q[1]));
+                        return eval_mult_scalar(ctx, T[0], divcs->q[1]);
                     return clone_ct(ctx, T[0]);
                 }
-                return rescale(ctx, eval_partial_linear_wsum(ctx, T, divcs->q, n));
+                return eval_partial_linear_wsum(ctx, T, divcs->q, n);
             }();
             c = add_const(ctx, c, divcs->q.front() / 2.0);
             if (ctx.mode == lbcrypto::FIXEDMANUAL && c.towers() > T2[m - 1].towers())
