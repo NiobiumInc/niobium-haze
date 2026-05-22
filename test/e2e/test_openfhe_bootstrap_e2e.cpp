@@ -63,6 +63,28 @@ haze::test::ops::OpCtx make_bootstrap_ctx_tiny(std::uint32_t ring_dim) {
     return ctx;
 }
 
+// Same as ctx_tiny but with deeper multDepth so the full bootstrap pipeline
+// (mod_raise → EvalMult → rescale → CtS → eval_mod → StC → corFactor) has
+// headroom for the intermediate NSD=2 ciphertexts post_recording_hook
+// synthesizes during D2H replay. The byte-parity helpers all fit in depth=25
+// individually; only the e2e composition needs the bump.
+haze::test::ops::OpCtx make_bootstrap_ctx_e2e(std::uint32_t ring_dim) {
+    using namespace lbcrypto;
+    using namespace haze::test::ops;
+    auto ctx = make_ctx({
+        .mode = FIXEDAUTO,
+        .mult_depth = 35,
+        .scaling_mod_size = 50,
+        .batch_size = 8,
+        .with_relin_key = true,
+        .rotate_indices = {},
+        .ring_dim = ring_dim,
+    });
+    ctx.cc->Enable(ADVANCEDSHE);
+    ctx.cc->Enable(FHE);
+    return ctx;
+}
+
 // Compare a haze Ct's per-RNS-limb data against an OpenFHE reference.
 // Asserts towers, NSD, and every uint64 coefficient.
 void assert_rns_equal(const haze::test::ops::OpCtx &ctx, const haze::test::ops::Ct &haze,
@@ -1360,7 +1382,7 @@ TEST_CASE("phase7 full haze ops::bootstrap end-to-end at N=2048",
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     auto t_setup0 = clk::now();
-    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
     constexpr std::uint32_t slots = 8;
     auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
     const double setup_ms =
@@ -1772,7 +1794,7 @@ TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap (N=20
     namespace ops = haze::test::ops;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
 
     constexpr std::uint32_t slots = 8;
     auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
