@@ -35,9 +35,8 @@ Ct partial_sum(const OpCtx &ctx, const BootstrapKeys &bk, Ct ct) {
 Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapVariant variant) {
     switch (variant) {
     case BootstrapVariant::Standard: {
-        // Reduce input to a single tower (q_0). For UNIFORM_TERNARY the
-        // input to ModRaise just needs the q_0 residue; we drop the rest
-        // via metadata (level_reduce) — rescale would underflow NSD.
+        // Reduce input to a single tower for mod_raise. (CKKS-valid: we
+        // only consume tower 0 in mod_raise; the rest are ignored.)
         Ct depleted = clone_ct(ctx, ct);
         if (depleted.towers() > 1)
             depleted = level_reduce(ctx, std::move(depleted), depleted.towers() - 1);
@@ -45,6 +44,12 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
 
         // Mirrors ckksrns-fhe.cpp:666 — scale by pre/(k*N). Without this, the
         // post-mod_raise NSD=1 makes the subsequent rescale underflow to 0.
+        //
+        // NOTE: OpenFHE also has an AdjustCiphertext step (ckksrns-fhe.cpp:590)
+        // BEFORE mod_raise that EvalMults by 2^-correction. Adding it here
+        // consumes one extra level that breaks the precomputed CtS plaintext
+        // matrices' size expectation (they're sized for OpenFHE's exact
+        // pipeline). Reconciling this is part of the e2e gap.
         auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
             ctx.cc->GetCryptoParameters());
         REQUIRE(cp);
@@ -53,8 +58,7 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         const double powP = std::pow(2.0, cp->GetPlaintextModulus());
         const std::int32_t deg =
             static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
-        const double post = std::pow(2.0, static_cast<double>(deg));
-        const double pre = 1.0 / post;
+        const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
         constexpr std::uint32_t K_UNIFORM = 512;
         const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
         const double pre_factor = pre / (static_cast<double>(K_UNIFORM) * N);
