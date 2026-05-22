@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "ctcache-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1756833688,
+        "narHash": "sha256-HjinmEIyFtj99xuI5DahHNNR+Lrghb1IBCpY5lmS08A=",
+        "owner": "matus-chochlik",
+        "repo": "ctcache",
+        "rev": "e33c063ca6e52b48bcefbc45d46d8c150ffa81ca",
+        "type": "github"
+      },
+      "original": {
+        "owner": "matus-chochlik",
+        "ref": "1.2.0",
+        "repo": "ctcache",
+        "type": "github"
+      }
+    },
     "niobium-fhetch-src": {
       "flake": false,
       "locked": {
@@ -36,6 +53,7 @@
     },
     "root": {
       "inputs": {
+        "ctcache-src": "ctcache-src",
         "niobium-fhetch-src": "niobium-fhetch-src",
         "nixpkgs": "nixpkgs"
       }

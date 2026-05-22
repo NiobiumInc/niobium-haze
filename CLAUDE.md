@@ -246,8 +246,54 @@ clang-tidy -p dbuild --warnings-as-errors='*' src/api/compute.cpp
 
 The `scripts/clang-tidy.sh` wrapper honors `BUILD_DIR=<dir>` (default
 `dbuild`, matching the Makefile's debug default; pass `BUILD_DIR=build`
-after `make build MODE=release` to match CI) and `PARALLEL_JOBS=<n>`
-(defaults to `NIX_BUILD_CORES` or the host CPU count).
+after `make build MODE=release` to match CI), `PARALLEL_JOBS=<n>`
+(defaults to `NIX_BUILD_CORES` or the host CPU count), and `CLANG_TIDY=<bin>`
+(the binary to invoke per file; defaults to `clang-tidy`).
+
+### How CI lints faster than `nix build .#checks.<sys>.clang-tidy`
+
+The flake derivation is the local reproducibility anchor, but it
+runs uncached on every invocation. CI bypasses it for the merge gate
+and routes through [matus-chochlik/ctcache] (`clang-tidy-cache`),
+a Python wrapper that hashes the source content + compile command
++ `.clang-tidy` config and returns the previously-recorded verdict
+for unchanged TUs. On a typical PR touching <10% of files, this turns
+the lint step from ~2 min into a handful of seconds.
+
+`clang-tidy-cache` is packaged from the `ctcache-src` flake input
+and shipped in the devshell, so `CLANG_TIDY=clang-tidy-cache
+scripts/clang-tidy.sh` works locally too. To set up a local cache:
+
+```sh
+nix develop --command bash -c '
+  export CTCACHE_DIR="$HOME/.cache/ctcache-haze"
+  export CTCACHE_CLANG_TIDY="$(command -v clang-tidy)"
+  CLANG_TIDY=clang-tidy-cache scripts/clang-tidy.sh
+'
+```
+
+CI's `flake-check.yml` does three things the flake derivation
+can't (because nix sandboxes are hermetic and ctcache needs a
+persistent cache dir):
+
+1. `nix build .#haze-compile-commands` to fetch a configure-only
+   derivation that hands back a self-contained
+   `compile_commands.json` — including the `-isystem` flags the
+   cc-wrapper would inject at runtime, baked in via
+   `CMAKE_CXX_FLAGS` so libclang/clang-tidy resolves headers
+   without the wrapper.
+2. `actions/cache` to persist `~/.ctcache` across runs, keyed by
+   `.clang-tidy` + `flake.lock` + `scripts/clang-tidy.sh`. Any of
+   those changing invalidates the cache cleanly.
+3. `CLANG_TIDY=clang-tidy-cache BUILD_DIR=build scripts/clang-tidy.sh`
+   inside `nix develop` so the wrapper sees the real clang-tidy
+   binary via `CTCACHE_CLANG_TIDY`.
+
+A `nix build .#checks.<sys>.clang-tidy` run remains valid for local
+pre-push validation and produces byte-identical *findings* to CI; only
+the latency differs (uncached, ~2 min, vs CI's <1 min on warm cache).
+
+[matus-chochlik/ctcache]: https://github.com/matus-chochlik/ctcache
 
 A bare `clang-tidy -p dbuild <file>` (no `--warnings-as-errors`) prints
 the same diagnostics as warnings; CI will still fail. Always pass

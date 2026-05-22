@@ -3,9 +3,10 @@
 # first-party .cpp files.
 #
 # Usage:
-#   scripts/clang-tidy.sh             # default; uses dbuild/ for compile_commands.json
+#   scripts/clang-tidy.sh                       # default; uses dbuild/
 #   BUILD_DIR=build scripts/clang-tidy.sh
 #   PARALLEL_JOBS=4 scripts/clang-tidy.sh
+#   CLANG_TIDY=clang-tidy-cache scripts/clang-tidy.sh   # route via ctcache
 #   scripts/clang-tidy.sh --help
 #
 # Resolves the repo root from `git rev-parse` (falls back to the script's
@@ -18,6 +19,11 @@
 # .cpp that includes them. Requires compile_commands.json — run
 # `make build` locally, or rely on the flake derivation's cmake setup
 # hook which configures one before invoking this script.
+#
+# CLANG_TIDY env var: name of the binary to invoke per file (default
+# `clang-tidy`). CI sets this to `clang-tidy-cache` so unchanged TUs
+# return their prior verdict from the ctcache hash database without
+# rerunning checks. Local `make build` users get the plain default.
 
 set -euo pipefail
 
@@ -47,7 +53,8 @@ if [[ ! -f "$build_dir/compile_commands.json" ]]; then
 fi
 
 parallel="${PARALLEL_JOBS:-${NIX_BUILD_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}}"
+clang_tidy="${CLANG_TIDY:-clang-tidy}"
 
 find src replay_bridge test -name '*.cpp' -print0 \
-    | xargs -0 -n4 -P"$parallel" clang-tidy -p "$build_dir" \
+    | xargs -0 -n4 -P"$parallel" "$clang_tidy" -p "$build_dir" \
         --warnings-as-errors='*' --quiet
