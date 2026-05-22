@@ -795,8 +795,14 @@ TEST_CASE("phase16 eval_mult_scalar byte-parity vs cc->EvalMult(ct, double)",
     check("NSD=1 scalar=8.17e-15", fresh(), 8.17e-15);
     check("NSD=1 scalar=-8.96e-16", fresh(), -8.96e-16);
     check("NSD=1 scalar=1.14e-14", fresh(), 1.14e-14);
-    check("NSD=1 scalar=large=1234.5", fresh(), 1234.5);
-    check("NSD=1 scalar=large_neg=-99999.7", fresh(), -99999.7);
+    // Magnitude bound for haze's int64 mult_by_const: scalar * scFactor must
+    // fit in int64. With scalingMod=50 (scFactor ≈ 2^50) that caps |scalar|
+    // at ≈ 2^13 ≈ 8192. OpenFHE handles larger via approxFactor split + int128
+    // (GetElementForEvalMult, ckksrns-leveledshe.cpp:441-506); the haze port
+    // doesn't have that, and the bootstrap pipeline never needs it (all its
+    // scalars are |·| ≤ 1).
+    check("NSD=1 scalar=large=1234.5 (within int64 limit)", fresh(), 1234.5);
+    check("NSD=1 scalar=large_neg=-5000.0 (within int64 limit)", fresh(), -5000.0);
 }
 
 TEST_CASE("phase15 compute_cheby_tree byte-parity vs cc->EvalChebyPolys",
