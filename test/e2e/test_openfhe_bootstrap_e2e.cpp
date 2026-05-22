@@ -335,6 +335,63 @@ TEST_CASE("phase23 compute_cheby_tree on a conjugate-add input",
     }
 }
 
+TEST_CASE("phase24 Chebyshev byte-parity on fresh ct with g_coefficientsUniform",
+          "[integration][e2e]") {
+    // Phase 22 degree=84 fails on a conjugate-add input but degree=5/12 pass
+    // there. Phase 14 degree=84 passes on a fresh ct but uses synthetic
+    // alternating coefs all above 0x1p-44. Phase 24 isolates the variable:
+    // fresh ct + the real g_coefficientsUniform list (which contains many
+    // coefs near 0x1p-44). If this fails, the divergence is coefficient-
+    // driven; the conjugate-add framing in phase 22 is incidental.
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_tiny(1u << 11);
+
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    // g_coefficientsUniform — same list as phase 18/22.
+    static const std::vector<double> coefficients{
+        0.15421426400235561,    -0.0037671538417132409,  0.16032011744533031,
+        -0.0034539657223742453, 0.17711481926851286,     -0.0027619720033372291,
+        0.19949802549604084,    -0.0015928034845171929,  0.21756948616367638,
+        0.00010729951647566607, 0.21600427371240055,     0.0022171399198851363,
+        0.17647500259573556,    0.0042856217194480991,   0.086174491919472254,
+        0.0054640252312780444,  -0.046667988130649173,   0.0047346914623733714,
+        -0.17712686172280406,   0.0016205080004247200,   -0.22703114241338604,
+        -0.0028145845916205865, -0.13123089730288540,    -0.0056345646688793190,
+        0.078818395388692147,   -0.0037868875028868542,  0.23226434602675575,
+        0.0021116338645426574,  0.13985510526186795,     0.0059365649669377071,
+        -0.13918475289368595,   0.0018580676740836374,   -0.23254376365752788,
+        -0.0054103844866927788, 0.056840618403875359,    -0.0035227192748552472,
+        0.25667909012207590,    0.0055029673963982112,   -0.073334392714092062,
+        0.0027810273357488265,  -0.24912792167850559,    -0.0069524866497120566,
+        0.21288810409948347,    0.0017810057298691725,   0.088760951809475269,
+        0.0055957188940032095,  -0.31937177676259115,    -0.0087539416335935556,
+        0.34748800245527145,    0.0075378299617709235,   -0.25116537379803394,
+        -0.0047285674679876204, 0.13970502851683486,     0.0023672533925155220,
+        -0.063649401080083698,  -0.00098993213448982727, 0.024597838934816905,
+        0.00035553235917057483, -0.0082485030307578155,  -0.00011176184313622549,
+        0.0024390574829093264,  0.000031180384864488629, -0.00064373524734389861,
+        -7.8036008952377965e-6, 0.00015310015145922058,  1.7670804180220134e-6,
+        -0.000033066844379476900, -3.6460909134279425e-7, 6.5276969021754105e-6,
+        6.8957843666189918e-8,  -1.1842811187642386e-6,  -1.2015133285307312e-8,
+        1.9839339947648331e-7,  1.9372045971100854e-9,   -3.0815418032523593e-8,
+        -2.9013806338735810e-10, 4.4540904298173700e-9,  4.0505136697916078e-11,
+        -6.0104912807134771e-10, -5.2873323696828491e-12, 7.5943206779351725e-11,
+        6.4679566322060472e-13, -9.0081200925539902e-12, -7.4396949275292252e-14,
+        1.0057423059167244e-12, 8.1701187638005194e-15,  -1.0611736208855373e-13,
+        -8.9597492970451533e-16, 1.1421575296031385e-14};
+
+    auto ref = ctx.cc->EvalChebyshevSeries(ct, coefficients, -1.0, 1.0);
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto out = ops::eval_chebyshev_series_for_test(ctx, haze_ct, coefficients);
+    assert_rns_equal(ctx, out, ref, "phase24 degree=84 g_coefficientsUniform on fresh ct");
+}
+
 TEST_CASE("phase22 Chebyshev byte-parity on a conjugate-add input",
           "[integration][e2e]") {
     // Phase 14 validated eval_chebyshev_series on a fresh ct input.
