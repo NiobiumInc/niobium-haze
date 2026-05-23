@@ -364,8 +364,15 @@ Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
 // equalize depths via mult_by_const(_, 1.0), then if both NSD=2 ModReduce
 // both. Output: a and b at the same level, both at NSD=1.
 AdjustedPair adjust_for_mult(const OpCtx &ctx, Ct a, Ct b) {
-    if (ctx.mode == lbcrypto::FIXEDMANUAL)
+    if (ctx.mode == lbcrypto::FIXEDMANUAL) {
+        // FIXEDMANUAL: AdjustLevelsInPlace — drop towers from the higher
+        // one to match the lower one. No scale-factor adjustment.
+        if (a.towers() > b.towers())
+            a = level_reduce(ctx, std::move(a), a.towers() - b.towers());
+        else if (b.towers() > a.towers())
+            b = level_reduce(ctx, std::move(b), b.towers() - a.towers());
         return {std::move(a), std::move(b)};
+    }
     if (a.towers() > b.towers())
         a = adjust_one_to_other(ctx, std::move(a), b);
     else if (b.towers() > a.towers())
@@ -390,8 +397,17 @@ AdjustedPair adjust_for_mult(const OpCtx &ctx, Ct a, Ct b) {
 // variant, just without the To-One ModReduce-both wrap. Used by EvalAdd
 // and EvalSub.
 AdjustedPair adjust_for_add(const OpCtx &ctx, Ct a, Ct b) {
-    if (ctx.mode == lbcrypto::FIXEDMANUAL)
+    if (ctx.mode == lbcrypto::FIXEDMANUAL) {
+        // FIXEDMANUAL: AdjustForAddOrSubInPlace calls AdjustLevelsInPlace,
+        // then optionally encodes a powP plaintext for depth mismatch — but
+        // the depth-mismatch branch only fires when one operand is a
+        // plaintext, not the ct-ct case. So just level-align.
+        if (a.towers() > b.towers())
+            a = level_reduce(ctx, std::move(a), a.towers() - b.towers());
+        else if (b.towers() > a.towers())
+            b = level_reduce(ctx, std::move(b), b.towers() - a.towers());
         return {std::move(a), std::move(b)};
+    }
     if (a.towers() > b.towers())
         a = adjust_one_to_other(ctx, std::move(a), b);
     else if (b.towers() > a.towers())
@@ -491,16 +507,22 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
             T.push_back(add_const(ctx, rescaled, -1.0));
         }
     }
-    // Mirror OpenFHE: bring each T[i] to T[k-1]'s level/depth via the
-    // real AdjustLevelsAndDepthInPlace dance (mult-by-factor + rescale +
-    // level_reduce). Doing this with metadata-only level_reduce produces
-    // outputs that diverge from OpenFHE byte-for-byte and underconsumes
-    // levels relative to what StC expects.
-    for (std::uint32_t i = 0; i + 1 < k; ++i) {
-        if (T[i].towers() > T.back().towers())
-            T[i] = adjust_one_to_other(ctx, std::move(T[i]), T.back());
-        if (T[i].noise_scale_deg() < T.back().noise_scale_deg())
-            T[i] = mult_by_const(ctx, T[i], 1.0);
+    // Mirror OpenFHE: bring each T[i] to T[k-1]'s level/depth.
+    // FIXEDMANUAL: plain LevelReduceInPlace (ckksrns-advancedshe.cpp:1013-1016).
+    // Other modes: AdjustLevelsAndDepthInPlace via adjust_one_to_other.
+    if (ctx.mode == lbcrypto::FIXEDMANUAL) {
+        for (std::uint32_t i = 0; i + 1 < k; ++i) {
+            if (T[i].towers() > T.back().towers())
+                T[i] = level_reduce(ctx, std::move(T[i]),
+                                    T[i].towers() - T.back().towers());
+        }
+    } else {
+        for (std::uint32_t i = 0; i + 1 < k; ++i) {
+            if (T[i].towers() > T.back().towers())
+                T[i] = adjust_one_to_other(ctx, std::move(T[i]), T.back());
+            if (T[i].noise_scale_deg() < T.back().noise_scale_deg())
+                T[i] = mult_by_const(ctx, T[i], 1.0);
+        }
     }
 
     std::vector<Ct> T2;
