@@ -189,60 +189,172 @@ Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
 
 Ct square_ct(const OpCtx &ctx, const Ct &ct) { return mult(ctx, ct, ct); }
 
-// Bring `high` (more towers, lower level) down to `low`'s level shape.
-// Mirrors the c1lvl < c2lvl branch of LeveledSHECKKSRNS::
-// AdjustLevelsAndDepthInPlace (ckksrns-leveledshe.cpp:603-733).
+// Port of LeveledSHECKKSRNS::AdjustLevelsAndDepthInPlace
+// (ckksrns-leveledshe.cpp:603-737). Aligns c1 and c2 to the same level and
+// depth (NSD), modifying whichever needs to be brought into line. Composite
+// degree always 1 here. Uses both ct's tracked SF (set via Ct's
+// scaling_factor field) and the cryptoparameters' level-indexed SF
+// (GetScalingFactorReal / GetScalingFactorRealBig / GetModReduceFactor).
 //
-// MODE COVERAGE: currently FIXEDAUTO only. compositeDegree=1.
-// FLEXIBLEAUTO/EXT and COMPOSITESCALING* need per-level scaling-factor
-// tracking on Ct + the full formula; out of scope.
-//
-// Scaling-factor adjustment factor by case (FIXEDAUTO, scf = m_approxSF):
-//   A: h_depth=2,l_depth=2  →  scf2/scf1 * q1/scf = (sf²/sf²)*(sf/sf) = 1
-//   B: h_depth=2,l_depth=1  →  (sf/sf²)*(sf/sf)   = 1/sf
-//   C: h_depth=1,l_depth=2  →  (sf²/sf)/sf        = 1
-//   D: h_depth=1,l_depth=1  →  (sf/sf)/sf         = 1/sf
-// Earlier I lazily assumed all four collapse to 1.0; that's only true
-// for A and C. Phase 11 caught it on case D.
-Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
-    REQUIRE(ctx.mode == lbcrypto::FIXEDAUTO);
-    REQUIRE(high.towers() > low.towers());
-    const std::size_t towers_diff = high.towers() - low.towers();
-    const std::uint32_t h_depth = high.noise_scale_deg();
-    const std::uint32_t l_depth = low.noise_scale_deg();
-    constexpr std::size_t cd = 1;
-
-    auto crypto_params = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+// Returns the aligned pair. For the c1lvl < c2lvl branch, c1 is brought up
+// to c2 (the original `adjust_one_to_other(high, low)` helper had `high`
+// as the over-towered one — note that in OpenFHE, c1lvl < c2lvl means
+// c1's CRT chain is LONGER (fewer levels dropped), so c1 is the one with
+// MORE towers).
+[[maybe_unused]] void adjust_levels_and_depth_in_place(const OpCtx &ctx, Ct &c1, Ct &c2) {
+    const std::uint32_t c1lvl = c1.level();
+    const std::uint32_t c2lvl = c2.level();
+    const std::uint32_t c1depth = c1.noise_scale_deg();
+    const std::uint32_t c2depth = c2.noise_scale_deg();
+    const std::uint32_t sizeQl1 = static_cast<std::uint32_t>(c1.towers());
+    const std::uint32_t sizeQl2 = static_cast<std::uint32_t>(c2.towers());
+    auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
         ctx.cc->GetCryptoParameters());
-    REQUIRE(crypto_params);
-    const double scf = crypto_params->GetScalingFactorReal(0);
-    const double inv_scf = 1.0 / scf;
+    REQUIRE(cp);
+    constexpr std::uint32_t compositeDegree = 1;
 
-    if (h_depth == 2 && l_depth == 2) {
-        high = mult_by_const(ctx, high, 1.0);
-        high = rescale(ctx, std::move(high));
-        if (towers_diff > cd)
-            high = level_reduce(ctx, std::move(high), towers_diff - cd);
-    } else if (h_depth == 2 && l_depth != 2) {
-        if (towers_diff == cd) {
-            high = rescale(ctx, std::move(high));
+    auto adjust_lower = [&](Ct &lower, const Ct &higher,
+                            std::uint32_t lowerLvl, std::uint32_t higherLvl,
+                            std::uint32_t lowerDepth, std::uint32_t higherDepth,
+                            std::uint32_t sizeQlLower) {
+        if (lowerDepth == 2) {
+            if (higherDepth == 2) {
+                const double scf1 = lower.scaling_factor();
+                const double scf2 = higher.scaling_factor();
+                const double scf = cp->GetScalingFactorReal(lowerLvl);
+                const double q1 =
+                    cp->GetModReduceFactor(sizeQlLower - 1);
+                lower = mult_by_const(ctx, lower, scf2 / scf1 * q1 / scf);
+                lower = rescale(ctx, std::move(lower));
+                if (lowerLvl + compositeDegree < higherLvl)
+                    lower = level_reduce(ctx, std::move(lower),
+                                         higherLvl - lowerLvl - compositeDegree);
+                lower.set_scaling_factor(higher.scaling_factor());
+            } else {
+                if (lowerLvl + compositeDegree == higherLvl) {
+                    lower = rescale(ctx, std::move(lower));
+                } else {
+                    const double scf1 = lower.scaling_factor();
+                    const double scf2 = cp->GetScalingFactorRealBig(
+                        higherLvl - compositeDegree);
+                    const double scf = cp->GetScalingFactorReal(lowerLvl);
+                    const double q1 =
+                        cp->GetModReduceFactor(sizeQlLower - 1);
+                    lower = mult_by_const(ctx, lower, scf2 / scf1 * q1 / scf);
+                    lower = rescale(ctx, std::move(lower));
+                    if (lowerLvl + 2 * compositeDegree < higherLvl)
+                        lower = level_reduce(
+                            ctx, std::move(lower),
+                            higherLvl - lowerLvl - 2 * compositeDegree);
+                    lower = rescale(ctx, std::move(lower));
+                    lower.set_scaling_factor(higher.scaling_factor());
+                }
+            }
         } else {
-            high = mult_by_const(ctx, high, inv_scf);
-            high = rescale(ctx, std::move(high));
-            if (towers_diff > 2 * cd)
-                high = level_reduce(ctx, std::move(high), towers_diff - 2 * cd);
-            high = rescale(ctx, std::move(high));
+            if (higherDepth == 2) {
+                const double scf1 = lower.scaling_factor();
+                const double scf2 = higher.scaling_factor();
+                const double scf = cp->GetScalingFactorReal(lowerLvl);
+                lower = mult_by_const(ctx, lower, scf2 / scf1 / scf);
+                lower = level_reduce(ctx, std::move(lower),
+                                     higherLvl - lowerLvl);
+                lower.set_scaling_factor(scf2);
+            } else {
+                const double scf1 = lower.scaling_factor();
+                const double scf2 = cp->GetScalingFactorRealBig(
+                    higherLvl - compositeDegree);
+                const double scf = cp->GetScalingFactorReal(lowerLvl);
+                lower = mult_by_const(ctx, lower, scf2 / scf1 / scf);
+                if (lowerLvl + compositeDegree < higherLvl)
+                    lower = level_reduce(ctx, std::move(lower),
+                                         higherLvl - lowerLvl - compositeDegree);
+                lower = rescale(ctx, std::move(lower));
+                lower.set_scaling_factor(higher.scaling_factor());
+            }
         }
-    } else if (h_depth != 2 && l_depth == 2) {
-        high = mult_by_const(ctx, high, 1.0);
-        if (towers_diff > 0)
-            high = level_reduce(ctx, std::move(high), towers_diff);
+    };
+
+    if (c1lvl < c2lvl) {
+        adjust_lower(c1, c2, c1lvl, c2lvl, c1depth, c2depth, sizeQl1);
+    } else if (c1lvl > c2lvl) {
+        adjust_lower(c2, c1, c2lvl, c1lvl, c2depth, c1depth, sizeQl2);
     } else {
-        // both depth 1
-        high = mult_by_const(ctx, high, inv_scf);
-        if (towers_diff > cd)
-            high = level_reduce(ctx, std::move(high), towers_diff - cd);
-        high = rescale(ctx, std::move(high));
+        if (c1depth < c2depth)
+            c1 = mult_by_const(ctx, c1, 1.0);
+        else if (c2depth < c1depth)
+            c2 = mult_by_const(ctx, c2, 1.0);
+    }
+}
+
+// Compat shim: brings `high` down to `low`'s level shape. Always takes
+// the c1lvl < c2lvl branch of adjust_levels_and_depth_in_place (i.e.
+// adjust the higher-tower one down), without needing to mutate `low`.
+// Inlined to avoid emitting a clone_ct op that the old implementation
+// didn't.
+Ct adjust_one_to_other(const OpCtx &ctx, Ct high, const Ct &low) {
+    REQUIRE(high.towers() > low.towers());
+    auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    REQUIRE(cp);
+    constexpr std::uint32_t compositeDegree = 1;
+    const std::uint32_t lowerLvl = high.level();
+    const std::uint32_t higherLvl = low.level();
+    const std::uint32_t lowerDepth = high.noise_scale_deg();
+    const std::uint32_t higherDepth = low.noise_scale_deg();
+    const std::uint32_t sizeQlLower = static_cast<std::uint32_t>(high.towers());
+
+    if (lowerDepth == 2) {
+        if (higherDepth == 2) {
+            const double scf1 = high.scaling_factor();
+            const double scf2 = low.scaling_factor();
+            const double scf = cp->GetScalingFactorReal(lowerLvl);
+            const double q1 = cp->GetModReduceFactor(sizeQlLower - 1);
+            high = mult_by_const(ctx, high, scf2 / scf1 * q1 / scf);
+            high = rescale(ctx, std::move(high));
+            if (lowerLvl + compositeDegree < higherLvl)
+                high = level_reduce(ctx, std::move(high),
+                                    higherLvl - lowerLvl - compositeDegree);
+            high.set_scaling_factor(low.scaling_factor());
+        } else {
+            if (lowerLvl + compositeDegree == higherLvl) {
+                high = rescale(ctx, std::move(high));
+            } else {
+                const double scf1 = high.scaling_factor();
+                const double scf2 = cp->GetScalingFactorRealBig(
+                    higherLvl - compositeDegree);
+                const double scf = cp->GetScalingFactorReal(lowerLvl);
+                const double q1 = cp->GetModReduceFactor(sizeQlLower - 1);
+                high = mult_by_const(ctx, high, scf2 / scf1 * q1 / scf);
+                high = rescale(ctx, std::move(high));
+                if (lowerLvl + 2 * compositeDegree < higherLvl)
+                    high = level_reduce(
+                        ctx, std::move(high),
+                        higherLvl - lowerLvl - 2 * compositeDegree);
+                high = rescale(ctx, std::move(high));
+                high.set_scaling_factor(low.scaling_factor());
+            }
+        }
+    } else {
+        if (higherDepth == 2) {
+            const double scf1 = high.scaling_factor();
+            const double scf2 = low.scaling_factor();
+            const double scf = cp->GetScalingFactorReal(lowerLvl);
+            high = mult_by_const(ctx, high, scf2 / scf1 / scf);
+            high = level_reduce(ctx, std::move(high),
+                                higherLvl - lowerLvl);
+            high.set_scaling_factor(scf2);
+        } else {
+            const double scf1 = high.scaling_factor();
+            const double scf2 =
+                cp->GetScalingFactorRealBig(higherLvl - compositeDegree);
+            const double scf = cp->GetScalingFactorReal(lowerLvl);
+            high = mult_by_const(ctx, high, scf2 / scf1 / scf);
+            if (lowerLvl + compositeDegree < higherLvl)
+                high = level_reduce(ctx, std::move(high),
+                                    higherLvl - lowerLvl - compositeDegree);
+            high = rescale(ctx, std::move(high));
+            high.set_scaling_factor(low.scaling_factor());
+        }
     }
     return high;
 }

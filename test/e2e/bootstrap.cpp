@@ -36,10 +36,12 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
     switch (variant) {
     case BootstrapVariant::Standard: {
         // Mirror OpenFHE's bootstrap pipeline (ckksrns-fhe.cpp:586-805).
-        // AdjustCiphertext (line 590) has modReduce=true as default — it's
-        // EvalMult(2^-correction) FOLLOWED BY ModReduceInternalInPlace.
-        // EvalMult(pre/(k*N)) at line 666 then operates on NSD=1 input
-        // (post-AdjustCiphertext-rescale), so no auto-rescale fires there.
+        // AdjustCiphertext (line 590) has modReduce=true as default. Per-mode:
+        //  - FIXEDMANUAL / FIXEDAUTO: EvalMult(ct, 2^-correction) + ModReduce.
+        //  - FLEXIBLEAUTO / FLEXIBLEAUTOEXT: EvalMult by adjustmentFactor =
+        //    (targetSF/sourceSF)*(modToDrop/sourceSF)*2^-correction, then
+        //    ModReduce, then SetScalingFactor(targetSF). `lvl` arg is 1 for
+        //    FLEXIBLEAUTOEXT, 0 for the others.
         auto cp = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
             ctx.cc->GetCryptoParameters());
         REQUIRE(cp);
@@ -53,10 +55,40 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
         constexpr std::uint32_t K_UNIFORM = 512;
         const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+        const std::uint32_t lvl =
+            (ctx.mode == lbcrypto::FLEXIBLEAUTOEXT) ? 1u : 0u;
+        const bool flexible = (ctx.mode == lbcrypto::FLEXIBLEAUTO ||
+                               ctx.mode == lbcrypto::FLEXIBLEAUTOEXT);
 
-        Ct adjusted =
-            eval_mult_scalar_for_test(ctx, ct, std::pow(2.0, -correction));
-        adjusted = rescale(ctx, std::move(adjusted));
+        // Mirror OpenFHE EvalBootstrap (ckksrns-fhe.cpp:586-590):
+        // pre-ModReduce to NSD=1, then AdjustCiphertext (with modReduce=true
+        // default). AdjustCiphertext reads sourceSF / numTowers AFTER the
+        // pre-ModReduce, so the rescale here must happen first.
+        Ct adjusted = [&]() {
+            Ct r = clone_ct(ctx, ct);
+            while (r.noise_scale_deg() > 1)
+                r = rescale(ctx, std::move(r));
+            if (flexible) {
+                const double targetSF = cp->GetScalingFactorReal(lvl);
+                const double sourceSF = r.scaling_factor();
+                const std::uint32_t numTowers =
+                    static_cast<std::uint32_t>(r.towers());
+                const double modToDrop = cp->GetElementParams()
+                    ->GetParams()[numTowers - 1]
+                    ->GetModulus()
+                    .ConvertToDouble();
+                const double adjustmentFactor = (targetSF / sourceSF) *
+                                                (modToDrop / sourceSF) *
+                                                std::pow(2.0, -correction);
+                r = mult_by_const_for_test(ctx, r, adjustmentFactor);
+                r = rescale(ctx, std::move(r));
+                r.set_scaling_factor(targetSF);
+                return r;
+            }
+            r = mult_by_const_for_test(ctx, r, std::pow(2.0, -correction));
+            r = rescale(ctx, std::move(r));
+            return r;
+        }();
         Ct depleted = clone_ct(ctx, adjusted);
         if (depleted.towers() > 1)
             depleted = level_reduce(ctx, std::move(depleted),
