@@ -3216,3 +3216,69 @@ TEST_CASE("ckks bootstrap haze ops::bootstrap slot parity vs EvalBootstrap (N=20
                      Catch::Matchers::WithinAbs(v[i], kBootstrapTolerance));
     }
 }
+
+// Measure record vs replay split for a full haze ops::bootstrap. The
+// haze record-and-replay model: every compute API call appends to the
+// FHETCH trace (no math), and the first D2H flush triggers the backend
+// to replay the trace and compute the actual polynomial values. d2h_ct
+// is the implicit D2H call, so timing it isolates the replay cost.
+TEST_CASE("bench bootstrap record vs replay timing", "[integration][e2e][.bench]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+
+    for (auto mode : {FIXEDAUTO, FIXEDMANUAL, FLEXIBLEAUTO, FLEXIBLEAUTOEXT}) {
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+        auto ctx = ops::make_ctx({
+            .mode = mode,
+            .mult_depth = 35,
+            .scaling_mod_size = 50,
+            .batch_size = 8,
+            .with_relin_key = true,
+            .rotate_indices = {},
+            .ring_dim = 1u << 11,
+        });
+        ctx.cc->Enable(ADVANCEDSHE);
+        ctx.cc->Enable(FHE);
+        constexpr std::uint32_t slots = 8;
+        auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+
+        const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+        auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+        auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+        while (ct->GetElements()[0].GetNumOfElements() > 6) {
+            if (mode == FIXEDMANUAL) {
+                ctx.cc->EvalMultInPlace(ct, 1.0);
+                ctx.cc->ModReduceInPlace(ct);
+            } else {
+                ctx.cc->EvalMultInPlace(ct, 1.0);
+            }
+        }
+
+        auto haze_ct = ops::h2d_ct(ctx, ct);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct,
+                                             ops::BootstrapVariant::Standard);
+        const auto t1 = std::chrono::steady_clock::now();
+        auto bytes = ops::d2h_ct(ctx, haze_refreshed);
+        const auto t2 = std::chrono::steady_clock::now();
+
+        const auto record_ms =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()) / 1000.0;
+        const auto replay_ms =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()) / 1000.0;
+        const char *name = "?";
+        switch (mode) {
+        case FIXEDAUTO:        name = "FIXEDAUTO";        break;
+        case FIXEDMANUAL:      name = "FIXEDMANUAL";      break;
+        case FLEXIBLEAUTO:     name = "FLEXIBLEAUTO";     break;
+        case FLEXIBLEAUTOEXT:  name = "FLEXIBLEAUTOEXT";  break;
+        default: break;
+        }
+        std::cerr << "  [bench " << name << "] record=" << record_ms
+                  << "ms replay=" << replay_ms
+                  << "ms ratio=" << (replay_ms / record_ms) << "x\n";
+        // sink so the call isn't DCE'd
+        REQUIRE(bytes.c0.size() == haze_refreshed.towers());
+    }
+}
