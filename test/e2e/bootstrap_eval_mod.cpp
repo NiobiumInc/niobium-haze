@@ -189,6 +189,17 @@ Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
 
 Ct square_ct(const OpCtx &ctx, const Ct &ct) { return mult(ctx, ct, ct); }
 
+// Mirror cc->ModReduceInPlace: real rescale under FIXEDMANUAL, no-op for
+// every other scaling technique (LeveledSHERNS::ModReduceInPlace returns
+// early when GetScalingTechnique() != FIXEDMANUAL — see
+// rns-leveledshe.cpp:335-340). Use this anywhere OpenFHE has
+// cc->ModReduceInPlace; use plain rescale() for algo->ModReduceInternal.
+Ct manual_rescale(const OpCtx &ctx, Ct ct) {
+    if (ctx.mode == lbcrypto::FIXEDMANUAL)
+        return rescale(ctx, std::move(ct));
+    return ct;
+}
+
 // Port of LeveledSHECKKSRNS::AdjustLevelsAndDepthInPlace
 // (ckksrns-leveledshe.cpp:603-737). Aligns c1 and c2 to the same level and
 // depth (NSD), modifying whichever needs to be brought into line. Composite
@@ -459,7 +470,9 @@ Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
         Ct term = mult_by_const(ctx, cts[i], coeffs[i + 1]);
         acc = add(ctx, acc, term);
     }
-    return acc;
+    // OpenFHE EvalPartialLinearWSum ends with cc->ModReduceInPlace(acc) —
+    // real rescale under FIXEDMANUAL, no-op otherwise.
+    return manual_rescale(ctx, std::move(acc));
 }
 
 // Compute the Chebyshev power tree T[0..k-1] and T2[0..m-1] from input ct.
@@ -770,17 +783,18 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 accum_baby_step(ctx, acc_c, T[i], divcs->q[i + 1]);
         }
 
-        // OpenFHE's pattern is `ModReduceInPlace(acc_q); EvalAddInPlace(qu,
-        // acc_q)`. In FIXEDAUTO, ModReduceInPlace is a no-op — the rescale
-        // happens implicitly inside EvalAddInPlace as part of its level
-        // alignment. Mirroring: skip the explicit rescale, let
-        // adjust_for_add + add handle the level/NSD mismatch.
+        // OpenFHE: `cc->ModReduceInPlace(acc_q); cc->EvalAddInPlace(qu, acc_q);`
+        // For non-FIXEDMANUAL, ModReduceInPlace is a no-op and the implicit
+        // level alignment in EvalAddInPlace handles things. For FIXEDMANUAL
+        // it's a real rescale that must fire here.
         if (acc_q.has_value()) {
-            auto ap = adjust_for_add(ctx, std::move(qu), std::move(*acc_q));
+            Ct r = manual_rescale(ctx, std::move(*acc_q));
+            auto ap = adjust_for_add(ctx, std::move(qu), std::move(r));
             qu = add(ctx, ap.a, ap.b);
         }
         if (acc_s.has_value()) {
-            auto ap = adjust_for_add(ctx, std::move(su), std::move(*acc_s));
+            Ct r = manual_rescale(ctx, std::move(*acc_s));
+            auto ap = adjust_for_add(ctx, std::move(su), std::move(r));
             su = add(ctx, ap.a, ap.b);
         }
 
@@ -793,16 +807,19 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
             su = level_reduce(ctx, std::move(su), 1);
 
         // OpenFHE: `cu = cc->EvalMult(T.front(), divcs->q[1]); ModReduceInPlace(cu)`.
-        // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar);
-        // ModReduceInPlace after that is a no-op in FIXEDAUTO.
+        // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar) which
+        // is a no-op rescale-wise in FIXEDMANUAL; the trailing ModReduceInPlace
+        // is the FIXEDMANUAL rescale. For the nc>1 branch OpenFHE does
+        // `ModReduceInPlace(acc_c); cu = acc_c` — again, FIXEDMANUAL only.
         if (nc == 1) {
             if (std::abs(divcs->q[1] - 1.0) > 0x1p-44) {
-                cu = eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                Ct r = eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                cu = manual_rescale(ctx, std::move(r));
             } else {
                 cu = clone_ct(ctx, T[0]);
             }
         } else if (acc_c.has_value()) {
-            cu = std::move(*acc_c);
+            cu = manual_rescale(ctx, std::move(*acc_c));
         }
 
         if (cu.has_value()) {
@@ -854,11 +871,13 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
             Ct c = [&]() -> Ct {
                 if (n == 1) {
                     // OpenFHE: cu = cc->EvalMult(T[0], divcs->q[1]); ModReduceInPlace(cu);
-                    // cc->EvalMult is the auto-rescale wrapper (eval_mult_scalar).
-                    if (std::abs(divcs->q[1] - 1.0) > 0x1p-44)
-                        return eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                    if (std::abs(divcs->q[1] - 1.0) > 0x1p-44) {
+                        Ct r = eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                        return manual_rescale(ctx, std::move(r));
+                    }
                     return clone_ct(ctx, T[0]);
                 }
+                // eval_partial_linear_wsum already trails manual_rescale.
                 return eval_partial_linear_wsum(ctx, T, divcs->q, n);
             }();
             c = add_const(ctx, c, divcs->q.front() / 2.0);
@@ -933,9 +952,9 @@ void apply_double_angle_iterations(const OpCtx &ctx, Ct &ct, std::uint32_t num_i
         // divergence).
         Ct doubled = mult_int_scalar(ctx, ct, 2);
         ct = add_const(ctx, doubled, scalar);
-        // OpenFHE's trailing cc->ModReduceInPlace is a no-op in FIXEDAUTO
-        // (line 733 of ckksrns-fhe.cpp). Level drops come from the NEXT
-        // iter's EvalSquareInPlace via AdjustLevelsAndDepthToOneInPlace.
+        // OpenFHE trails each iter with cc->ModReduceInPlace (real for
+        // FIXEDMANUAL, no-op otherwise).
+        ct = manual_rescale(ctx, std::move(ct));
     }
 }
 
@@ -1082,9 +1101,15 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
     // StC input lines up with the precomputed StC plaintext level.
     // Mirrors ckksrns-fhe.cpp:786-842.
     Ct ctEnc = add(ctx, ct, conjugate(ctx, ct, bk.conjugation_key));
-    // NSD-gated to mirror OpenFHE line 797 — never drop NSD below 1.
-    if (ctx.mode != lbcrypto::FIXEDMANUAL && ctEnc.noise_scale_deg() == 2)
+    // OpenFHE ckksrns-fhe.cpp:791-799:
+    //   FIXEDMANUAL: while (NSD > 1) cc->ModReduceInPlace(ctxtEnc);
+    //   else:        if (NSD == 2) ModReduceInternalInPlace(ctxtEnc, cd);
+    if (ctx.mode == lbcrypto::FIXEDMANUAL) {
+        while (ctEnc.noise_scale_deg() > 1)
+            ctEnc = rescale(ctx, ctEnc);
+    } else if (ctEnc.noise_scale_deg() == 2) {
         ctEnc = rescale(ctx, ctEnc);
+    }
 
     ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
 
