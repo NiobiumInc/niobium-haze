@@ -110,12 +110,6 @@ Allocs rescale_chain_one_tower(const OpCtx &ctx, const Allocs &src, std::size_t 
     return ntt;
 }
 
-Ct pre_rescale_ct(const OpCtx &ctx, const Ct &a) {
-    Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
-    Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
-    return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};
-}
-
 Allocs mul_chain(const OpCtx &ctx, const Allocs &x, const Allocs &y,
                  const std::vector<uint64_t> &base) {
     Allocs out(base.size(), ctx.poly_bytes);
@@ -645,22 +639,6 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
 Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
     REQUIRE(ctx.with_relin_key);
     REQUIRE(!ctx.relin_key.a_limbs.empty());
-
-    if (ctx.mode == lbcrypto::FLEXIBLEAUTOEXT) {
-        Ct a_rescaled = pre_rescale_ct(ctx, a);
-        Ct b_rescaled = pre_rescale_ct(ctx, b);
-        TensorResult tp = tensor_product(ctx, a_rescaled, b_rescaled);
-        KsContribution ks = hybrid_keyswitch(ctx, tp.d2, a_rescaled.towers(), ctx.relin_key);
-
-        std::vector<uint64_t> base(ctx.q_base.begin(),
-                                   ctx.q_base.begin() +
-                                       static_cast<std::ptrdiff_t>(a_rescaled.towers()));
-        Allocs out_c0 = add_chain(ctx, tp.d0, ks.b_contrib, base);
-        Allocs out_c1 = add_chain(ctx, tp.d1, ks.a_contrib, base);
-        return {std::move(out_c0), std::move(out_c1), a_rescaled.towers(), 2,
-                a_rescaled.scaling_factor() * b_rescaled.scaling_factor(),
-                a_rescaled.level()};
-    }
 
     REQUIRE(a.towers() == b.towers());
     TensorResult tp = tensor_product(ctx, a, b);

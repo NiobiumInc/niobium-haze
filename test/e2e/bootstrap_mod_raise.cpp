@@ -39,9 +39,17 @@ Ct mod_raise(const OpCtx &ctx, const BootstrapKeys & /*bk*/, const Ct &ct) {
     // Input contract for the simple UNIFORM_TERNARY path: ct is at a
     // single Q-tower (q_0) in EVALUATION form. INTT, extend the single
     // residue to the full Q chain, NTT back.
+    //
+    // FLEXIBLEAUTOEXT pops the last param off the raised element params
+    // (ckksrns-fhe.cpp builds elementParamsRaised by dropping the last
+    // entry of the full Q chain for this mode). Mirror by extending to
+    // ctx.q_base[0..L0-1] instead of the full chain.
     REQUIRE(ct.towers() == 1);
 
-    const std::vector<uint64_t> q_full = ctx.q_base;
+    const bool flexible_ext = (ctx.mode == lbcrypto::FLEXIBLEAUTOEXT);
+    std::vector<uint64_t> q_full(
+        ctx.q_base.begin(),
+        ctx.q_base.end() - (flexible_ext ? 1 : 0));
     std::vector<uint64_t> q0_base = {ctx.q_base[0]};
 
     Allocs c0_coeff(1, ctx.poly_bytes);
@@ -63,9 +71,13 @@ Ct mod_raise(const OpCtx &ctx, const BootstrapKeys & /*bk*/, const Ct &ct) {
 
     // Mirrors OpenFHE mod-raise (ckksrns-fhe.cpp:620-628 + SetLevel at 628):
     // SF preserved (re-embed is value-preserving across the new chain),
-    // level = L0 - new_tower_count = 0 since we re-embed into the full chain.
+    // level = L0 - new_tower_count. For FLEXIBLEAUTOEXT, new_tower_count
+    // is L0-1 so level=1; otherwise level=0.
+    const std::uint32_t L0 = static_cast<std::uint32_t>(ctx.q_base.size());
+    const std::uint32_t new_level =
+        L0 - static_cast<std::uint32_t>(q_full.size());
     return Ct{std::move(c0_eval), std::move(c1_eval), q_full.size(),
-              ct.noise_scale_deg(), ct.scaling_factor(), 0u};
+              ct.noise_scale_deg(), ct.scaling_factor(), new_level};
 }
 
 } // namespace haze::test::ops
