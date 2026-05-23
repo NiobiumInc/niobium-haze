@@ -61,7 +61,11 @@ Ct mod_raise(const OpCtx &ctx, const BootstrapKeys & /*bk*/, const Ct &ct) {
     REQUIRE(hazeNTTMrp(c1_eval.data(), c1_extended.as_const().data(), q_full.data(), q_full.size(),
                        nullptr) == HAZE_SUCCESS);
 
-    return Ct{std::move(c0_eval), std::move(c1_eval), q_full.size(), ct.noise_scale_deg()};
+    // Mirrors OpenFHE mod-raise (ckksrns-fhe.cpp:620-628 + SetLevel at 628):
+    // SF preserved (re-embed is value-preserving across the new chain),
+    // level = L0 - new_tower_count = 0 since we re-embed into the full chain.
+    return Ct{std::move(c0_eval), std::move(c1_eval), q_full.size(),
+              ct.noise_scale_deg(), ct.scaling_factor(), 0u};
 }
 
 } // namespace haze::test::ops

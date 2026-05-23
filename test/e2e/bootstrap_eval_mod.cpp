@@ -92,8 +92,10 @@ Ct mult_by_const(const OpCtx &ctx, const Ct &ct, double scalar) {
     REQUIRE(hazeMulScalarMrp(out_c1.data(), ct.c1().as_const().data(),
                              factors.data(), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
+    // Mirrors LeveledSHECKKSRNS::EvalMultCoreInPlace: SF *= scFactor at level.
     return Ct{std::move(out_c0), std::move(out_c1), towers,
-              ct.noise_scale_deg() + 1};
+              ct.noise_scale_deg() + 1,
+              ct.scaling_factor() * scFactor, ct.level()};
 }
 
 // Mirror cc->EvalMult(ct, double) — the user-facing wrapper. For
@@ -125,7 +127,9 @@ Ct add_const(const OpCtx &ctx, const Ct &ct, double scalar) {
     Allocs out_c1(ct.towers(), ctx.poly_bytes);
     REQUIRE(hazeMulScalarMrp(out_c1.data(), ct.c1().as_const().data(), ones.data(),
                              base.data(), base.size(), nullptr) == HAZE_SUCCESS);
-    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg()};
+    // EvalAddInPlace by plaintext doesn't change SF/level.
+    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg(),
+              ct.scaling_factor(), ct.level()};
 }
 
 // Multiply each tower by a fixed uint64 scalar broadcast across all slots.
@@ -139,7 +143,9 @@ Ct mult_int_scalar(const OpCtx &ctx, const Ct &ct, std::uint64_t scalar) {
                              base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeMulScalarMrp(out_c1.data(), ct.c1().as_const().data(), scalars.data(),
                              base.data(), base.size(), nullptr) == HAZE_SUCCESS);
-    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg()};
+    // MultByIntegerInPlace: SF/NSD/level preserved (integer scalar).
+    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg(),
+              ct.scaling_factor(), ct.level()};
 }
 
 // OpenFHE's MultByMonomialInPlace.
@@ -176,8 +182,9 @@ Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
     REQUIRE(hazeMulMrp(out_c1.data(), ct.c1().as_const().data(), mono_chain.as_const().data(),
                        base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     // Monomial is a literal x^power with coefficient 1 (or -1 for power>=N),
-    // NOT a CKKS-encoded plaintext, so NSD is preserved.
-    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg()};
+    // NOT a CKKS-encoded plaintext, so NSD/SF/level are preserved.
+    return Ct{std::move(out_c0), std::move(out_c1), ct.towers(), ct.noise_scale_deg(),
+              ct.scaling_factor(), ct.level()};
 }
 
 Ct square_ct(const OpCtx &ctx, const Ct &ct) { return mult(ctx, ct, ct); }

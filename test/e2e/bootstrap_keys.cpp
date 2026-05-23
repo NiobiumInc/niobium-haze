@@ -107,6 +107,10 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
     bk.stc_matrices.reserve(precom.m_U0Pre.size());
     for (const auto &pt : precom.m_U0Pre)
         bk.stc_matrices.push_back(upload_pt_chain(ctx, pt));
+    bk.cts_pt_sf = precom.m_U0hatTPre.front()->GetScalingFactor();
+    bk.stc_pt_sf = precom.m_U0Pre.front()->GetScalingFactor();
+    bk.cts_pt_level = static_cast<std::uint32_t>(precom.m_U0hatTPre.front()->GetLevel());
+    bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0Pre.front()->GetLevel());
 
     auto rns_params = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(cc->GetCryptoParameters());
     REQUIRE(rns_params);

@@ -464,7 +464,9 @@ Ct h2d_ct(const OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &src)
     Allocs c0_alloc(c0_data);
     Allocs c1_alloc(c1_data);
     return {std::move(c0_alloc), std::move(c1_alloc), towers,
-            static_cast<std::uint32_t>(src->GetNoiseScaleDeg())};
+            static_cast<std::uint32_t>(src->GetNoiseScaleDeg()),
+            src->GetScalingFactor(),
+            static_cast<std::uint32_t>(src->GetLevel())};
 }
 
 CtBytes d2h_ct(const OpCtx &ctx, const Ct &src) {
@@ -518,7 +520,11 @@ Ct level_reduce(const OpCtx & /*ctx*/, Ct ct, std::size_t levels) {
     Allocs c1 = std::move(ct.c1());
     c0.truncate(new_towers);
     c1.truncate(new_towers);
-    return Ct{std::move(c0), std::move(c1), new_towers, ct.noise_scale_deg()};
+    // Mirrors LeveledSHECKKSRNS::LevelReduceInternalInPlace: SF preserved,
+    // level += dropped towers.
+    return Ct{std::move(c0), std::move(c1), new_towers, ct.noise_scale_deg(),
+              ct.scaling_factor(),
+              ct.level() + static_cast<std::uint32_t>(levels)};
 }
 
 Ct clone_ct(const OpCtx &ctx, const Ct &src) {
@@ -537,7 +543,8 @@ Ct clone_ct(const OpCtx &ctx, const Ct &src) {
                              nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeAutomorphMrp(c1.data(), src.c1().as_const().data(), 1, base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
-    return Ct{std::move(c0), std::move(c1), src.towers(), src.noise_scale_deg()};
+    return Ct{std::move(c0), std::move(c1), src.towers(), src.noise_scale_deg(),
+              src.scaling_factor(), src.level()};
 }
 
 Ct add(const OpCtx &ctx, const Ct &a, const Ct &b) {
@@ -547,7 +554,8 @@ Ct add(const OpCtx &ctx, const Ct &a, const Ct &b) {
     Allocs out_c0 = add_chain(ctx, a.c0(), b.c0(), base);
     Allocs out_c1 = add_chain(ctx, a.c1(), b.c1(), base);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
-            std::max(a.noise_scale_deg(), b.noise_scale_deg())};
+            std::max(a.noise_scale_deg(), b.noise_scale_deg()),
+            a.scaling_factor(), a.level()};
 }
 
 Ct sub(const OpCtx &ctx, const Ct &a, const Ct &b) {
@@ -561,7 +569,8 @@ Ct sub(const OpCtx &ctx, const Ct &a, const Ct &b) {
     REQUIRE(hazeSubMrp(out_c1.data(), a.c1().as_const().data(), b.c1().as_const().data(),
                        base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
-            std::max(a.noise_scale_deg(), b.noise_scale_deg())};
+            std::max(a.noise_scale_deg(), b.noise_scale_deg()),
+            a.scaling_factor(), a.level()};
 }
 
 Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
@@ -608,7 +617,16 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
         REQUIRE(hazeMulScalarMrp(out_c1.data(), rescaled_c1.as_const().data(),
                                  rescaled_scalars.data(), dst_base.data(), dst_base.size(),
                                  nullptr) == HAZE_SUCCESS);
-        return {std::move(out_c0), std::move(out_c1), out_towers, 1};
+        // FLEXIBLEAUTOEXT pre-rescale path: SF /= modReduceFactor, level+=1,
+        // then mult bumps SF by pt.SF.
+        auto rns_params = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+            ctx.cc->GetCryptoParameters());
+        const double modReduceFactor =
+            rns_params->GetModReduceFactor(static_cast<std::uint32_t>(a.towers() - 1));
+        const double sf_after_rescale = a.scaling_factor() / modReduceFactor;
+        const double sf_out = sf_after_rescale * pt->GetScalingFactor();
+        return {std::move(out_c0), std::move(out_c1), out_towers, 1,
+                sf_out, a.level() + 1};
     }
 
     std::vector<uint64_t> base(ctx.q_base.begin(),
@@ -620,7 +638,8 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
     REQUIRE(hazeMulScalarMrp(out_c1.data(), a.c1().as_const().data(), scalars.data(), base.data(),
                              base.size(), nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
-            static_cast<std::uint32_t>(a.noise_scale_deg() + pt->GetNoiseScaleDeg())};
+            static_cast<std::uint32_t>(a.noise_scale_deg() + pt->GetNoiseScaleDeg()),
+            a.scaling_factor() * pt->GetScalingFactor(), a.level()};
 }
 
 Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
@@ -638,7 +657,9 @@ Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
                                        static_cast<std::ptrdiff_t>(a_rescaled.towers()));
         Allocs out_c0 = add_chain(ctx, tp.d0, ks.b_contrib, base);
         Allocs out_c1 = add_chain(ctx, tp.d1, ks.a_contrib, base);
-        return {std::move(out_c0), std::move(out_c1), a_rescaled.towers(), 2};
+        return {std::move(out_c0), std::move(out_c1), a_rescaled.towers(), 2,
+                a_rescaled.scaling_factor() * b_rescaled.scaling_factor(),
+                a_rescaled.level()};
     }
 
     REQUIRE(a.towers() == b.towers());
@@ -650,7 +671,8 @@ Ct mult(const OpCtx &ctx, const Ct &a, const Ct &b) {
     Allocs out_c0 = add_chain(ctx, tp.d0, ks.b_contrib, base);
     Allocs out_c1 = add_chain(ctx, tp.d1, ks.a_contrib, base);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
-            a.noise_scale_deg() + b.noise_scale_deg()};
+            a.noise_scale_deg() + b.noise_scale_deg(),
+            a.scaling_factor() * b.scaling_factor(), a.level()};
 }
 
 Ct rescale(const OpCtx &ctx, const Ct &a) {
@@ -663,7 +685,15 @@ Ct rescale(const OpCtx &ctx, const Ct &a) {
     REQUIRE(a.noise_scale_deg() >= 1);
     Allocs out_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
     Allocs out_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
-    return {std::move(out_c0), std::move(out_c1), a.towers() - 1, a.noise_scale_deg() - 1};
+    // Mirrors LeveledSHECKKSRNS::ModReduceInternalInPlace: SF /= modReduceFactor,
+    // level += 1.
+    auto rns_params = std::dynamic_pointer_cast<lbcrypto::CryptoParametersCKKSRNS>(
+        ctx.cc->GetCryptoParameters());
+    const double modReduceFactor = rns_params->GetModReduceFactor(
+        static_cast<std::uint32_t>(a.towers() - 1));
+    return {std::move(out_c0), std::move(out_c1), a.towers() - 1,
+            a.noise_scale_deg() - 1,
+            a.scaling_factor() / modReduceFactor, a.level() + 1};
 }
 
 Ct rotate_with_key(const OpCtx &ctx, const Ct &a, const RotationKeyEntry &entry) {
@@ -682,7 +712,8 @@ Ct rotate_with_key(const OpCtx &ctx, const Ct &a, const RotationKeyEntry &entry)
     REQUIRE(hazeAutomorphMrp(out_c1.data(), ks_c1.as_const().data(),
                              static_cast<std::uint64_t>(entry.auto_index), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
-    return {std::move(out_c0), std::move(out_c1), a.towers(), a.noise_scale_deg()};
+    return {std::move(out_c0), std::move(out_c1), a.towers(), a.noise_scale_deg(),
+            a.scaling_factor(), a.level()};
 }
 
 Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index) {

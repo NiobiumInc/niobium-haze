@@ -46,6 +46,15 @@ struct BootstrapKeys {
     std::map<std::uint32_t, RotationKeyEntry> rotation_keys;
     std::vector<Allocs> cts_matrices; // U0hatT rows per BSGS level
     std::vector<Allocs> stc_matrices; // U0 rows per BSGS level
+    // Per-plaintext SF (== precom.m_U0hatTPre[i]->GetScalingFactor()) and
+    // encoded level. Required to propagate SF through linear_transform in
+    // FLEXIBLEAUTO/FLEXIBLEAUTOEXT, where downstream AdjustLevelsAndDepthInPlace
+    // formulas consume ct.SF and the matrix's SF is part of the EvalMultExt
+    // product semantics.
+    double cts_pt_sf{};
+    double stc_pt_sf{};
+    std::uint32_t cts_pt_level{};
+    std::uint32_t stc_pt_level{};
     std::vector<Allocs> eval_mod_coeffs;
     // PModq[t] = (product of P-moduli) mod q_t. Needed by KeySwitchExt
     // to multiply c0/c1 by P before zero-extending the P-portion.

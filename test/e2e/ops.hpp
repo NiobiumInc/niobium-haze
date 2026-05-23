@@ -50,11 +50,20 @@ class Allocs {
 };
 
 // RAII move-only degree-1 ciphertext (c0, c1) at a known tower count.
+//
+// scaling_factor mirrors OpenFHE's Ciphertext::GetScalingFactor() — needed
+// for byte-equivalence in FLEXIBLEAUTO/FLEXIBLEAUTOEXT where the per-level
+// scaling factor evolves through the pipeline and AdjustLevelsAndDepthInPlace
+// formulas depend on it. For FIXEDMANUAL/FIXEDAUTO the SF is effectively
+// constant (= scalingFactorReal(level)) and the field carries no extra
+// information; left in for uniformity.
 class Ct {
   public:
-    Ct(Allocs c0, Allocs c1, std::size_t towers, std::uint32_t noise_scale_deg)
+    Ct(Allocs c0, Allocs c1, std::size_t towers, std::uint32_t noise_scale_deg,
+       double scaling_factor = 0.0, std::uint32_t level = 0)
         : c0_(std::move(c0)), c1_(std::move(c1)), towers_(towers),
-          noise_scale_deg_(noise_scale_deg) {}
+          noise_scale_deg_(noise_scale_deg),
+          scaling_factor_(scaling_factor), level_(level) {}
 
     Ct(Ct &&) noexcept = default;
     Ct &operator=(Ct &&) noexcept = default;
@@ -67,6 +76,10 @@ class Ct {
     Allocs &c1() noexcept { return c1_; }
     std::size_t towers() const noexcept { return towers_; }
     std::uint32_t noise_scale_deg() const noexcept { return noise_scale_deg_; }
+    double scaling_factor() const noexcept { return scaling_factor_; }
+    std::uint32_t level() const noexcept { return level_; }
+    void set_scaling_factor(double sf) noexcept { scaling_factor_ = sf; }
+    void set_level(std::uint32_t l) noexcept { level_ = l; }
 
     // OpenFHE-style level — cross-check against ct->GetLevel().
     std::uint32_t openfhe_level(std::size_t q_full) const noexcept {
@@ -78,6 +91,8 @@ class Ct {
     Allocs c1_;
     std::size_t towers_;
     std::uint32_t noise_scale_deg_;
+    double scaling_factor_;
+    std::uint32_t level_;
 };
 
 struct RotationKeyEntry {

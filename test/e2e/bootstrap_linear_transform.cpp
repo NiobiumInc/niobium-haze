@@ -230,7 +230,8 @@ void add_ext_inplace(const OpCtx & /*ctx*/, CtExt &dst, const CtExt &src, const 
 // KeySwitchDown: ModDown Q∥P → Q. Drops the P-portion via INTT, ModDown,
 // NTT back. Returns (b_q, a_q) at q_towers in EVALUATION form.
 // NSD argument is the noise scale degree of the input ext ciphertext.
-Ct keyswitch_down(const OpCtx &ctx, const CtExt &c, const ExtLayout &L, std::uint32_t nsd) {
+Ct keyswitch_down(const OpCtx &ctx, const CtExt &c, const ExtLayout &L, std::uint32_t nsd,
+                  double sf, std::uint32_t level) {
     Allocs b_coeff(L.qp_total, ctx.poly_bytes);
     Allocs a_coeff(L.qp_total, ctx.poly_bytes);
     REQUIRE(hazeINTTMrp(b_coeff.data(), c.b.as_const().data(), L.qp_base.data(), L.qp_base.size(),
@@ -255,7 +256,7 @@ Ct keyswitch_down(const OpCtx &ctx, const CtExt &c, const ExtLayout &L, std::uin
                        L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeNTTMrp(a_out.data(), a_md.as_const().data(), L.q_subbase.data(),
                        L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
-    return Ct{std::move(b_out), std::move(a_out), c.q_towers, nsd};
+    return Ct{std::move(b_out), std::move(a_out), c.q_towers, nsd, sf, level};
 }
 
 const RotationKeyEntry &lookup_rotation_key(const OpCtx &ctx, const BootstrapKeys &bk,
@@ -321,7 +322,15 @@ Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
             add_ext_inplace(ctx, inner, prod, L);
         }
         // After mult_ext_pt the NSD bumps by 1 from the input ct.
-        Ct inner_q = keyswitch_down(ctx, inner, L, ct.noise_scale_deg() + 1);
+        // SF *= matrix.SF; level preserved (EvalLinearTransform's internal
+        // KeySwitchDown doesn't ModReduce). Picking the matrix SF from bk —
+        // CtS uses bk.cts_pt_sf, StC uses bk.stc_pt_sf. Both have the same SF
+        // value for the test setup; differentiating callers via the matrices
+        // pointer is the cleanest disambiguation.
+        const bool is_stc = (&matrices == &bk.stc_matrices);
+        const double matrix_sf = is_stc ? bk.stc_pt_sf : bk.cts_pt_sf;
+        Ct inner_q = keyswitch_down(ctx, inner, L, ct.noise_scale_deg() + 1,
+                                    ct.scaling_factor() * matrix_sf, ct.level());
         if (j > 0) {
             inner_q = rotate_with_key(ctx, inner_q,
                                       lookup_rotation_key(ctx, bk,
