@@ -65,9 +65,27 @@ ExtLayout build_ext_layout(const OpCtx &ctx, std::size_t q_towers,
     return L;
 }
 
+// Per-digit own-base Q-row span [start, end). ModUp leaves these rows as the
+// identity copy of the input coefficients, so their eval form equals the
+// keyswitch input c1 — precompute_digits skips NTT-ing them and keyswitch_ext
+// reads c1 there instead.
+void digit_own_ranges(const ExtLayout &L, std::vector<std::size_t> &start,
+                      std::vector<std::size_t> &end) {
+    start.assign(L.num_digits, 0);
+    end.assign(L.num_digits, 0);
+    std::size_t acc = 0;
+    for (std::size_t d = 0; d < L.num_digits; ++d) {
+        start[d] = acc;
+        acc += L.digit_base_lens[d];
+        end[d] = acc;
+    }
+}
+
 // EvalFastRotationPrecompute: ModUp(INTT(c1)) → digits, then NTT each
 // digit back to EVALUATION form. Output: flat Allocs of size
-// num_digits * qp_total, in EVALUATION form at Q∥P.
+// num_digits * qp_total, in EVALUATION form at Q∥P. Each digit's own-base Q
+// rows are left unwritten — their eval form is exactly c1, which keyswitch_ext
+// substitutes directly, so the NTT on them is elided.
 Allocs precompute_digits(const OpCtx &ctx, const Allocs &c1, std::size_t q_towers,
                          const ExtLayout &L) {
     Allocs c1_coeff(q_towers, ctx.poly_bytes);
@@ -88,16 +106,27 @@ Allocs precompute_digits(const OpCtx &ctx, const Allocs &c1, std::size_t q_tower
     REQUIRE(hazeModUp(digits_coeff.data(), c1_coeff.as_const().data(), &modup_params, nullptr) ==
             HAZE_SUCCESS);
 
+    std::vector<std::size_t> own_start;
+    std::vector<std::size_t> own_end;
+    digit_own_ranges(L, own_start, own_end);
+
     Allocs digits_eval(L.num_digits * L.qp_total, ctx.poly_bytes);
-    for (std::size_t d = 0; d < L.num_digits; ++d) {
-        std::vector<const void *> in(L.qp_total);
-        std::vector<void *> out(L.qp_total);
-        for (std::size_t t = 0; t < L.qp_total; ++t) {
-            in[t] = digits_coeff.data()[(d * L.qp_total) + t];
-            out[t] = digits_eval.data()[(d * L.qp_total) + t];
+    auto ntt_range = [&](std::size_t d, std::size_t lo, std::size_t hi) {
+        if (lo >= hi)
+            return;
+        const std::size_t n = hi - lo;
+        std::vector<const void *> in(n);
+        std::vector<void *> out(n);
+        for (std::size_t j = 0; j < n; ++j) {
+            in[j] = digits_coeff.data()[(d * L.qp_total) + lo + j];
+            out[j] = digits_eval.data()[(d * L.qp_total) + lo + j];
         }
-        REQUIRE(hazeNTTMrp(out.data(), in.data(), L.qp_base.data(), L.qp_base.size(), nullptr) ==
+        REQUIRE(hazeNTTMrp(out.data(), in.data(), L.qp_base.data() + lo, n, nullptr) ==
                 HAZE_SUCCESS);
+    };
+    for (std::size_t d = 0; d < L.num_digits; ++d) {
+        ntt_range(d, 0, own_start[d]);
+        ntt_range(d, own_end[d], L.qp_total);
     }
     return digits_eval;
 }
@@ -136,14 +165,21 @@ TrimmedKey trim_key(const OpCtx &ctx, const haze::HybridKeyswitchLimbs &key,
 // in EVALUATION form. Does NOT ModDown — keeps the result in the
 // extended basis so multiple rotations can be summed before a final
 // ModDown.
-CtExt keyswitch_ext(const OpCtx &ctx, const Allocs &digits_eval, const TrimmedKey &key,
-                    std::size_t q_towers, const ExtLayout &L) {
+CtExt keyswitch_ext(const OpCtx &ctx, const Allocs &digits_eval, const Allocs &c1,
+                    const TrimmedKey &key, std::size_t q_towers, const ExtLayout &L) {
+    std::vector<std::size_t> own_start;
+    std::vector<std::size_t> own_end;
+    digit_own_ranges(L, own_start, own_end);
+    const std::vector<const void *> c1_ptrs = c1.as_const();
+
     Allocs accum_a(L.qp_total, ctx.poly_bytes);
     Allocs accum_b(L.qp_total, ctx.poly_bytes);
     for (std::size_t d = 0; d < L.num_digits; ++d) {
         std::vector<const void *> dig(L.qp_total);
         for (std::size_t t = 0; t < L.qp_total; ++t)
-            dig[t] = digits_eval.data()[(d * L.qp_total) + t];
+            dig[t] = (t >= own_start[d] && t < own_end[d])
+                         ? c1_ptrs[t]
+                         : digits_eval.data()[(d * L.qp_total) + t];
         if (d == 0) {
             REQUIRE(hazeMulMrp(accum_b.data(), dig.data(),
                                key.b_per_digit[d].as_const().data(), L.qp_base.data(),
@@ -301,7 +337,7 @@ Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
     for (std::size_t i = 1; i < bStep; ++i) {
         const auto &entry = lookup_rotation_key(ctx, bk, static_cast<std::int32_t>(i));
         TrimmedKey tk = trim_key(ctx, entry.limbs, q_towers, L);
-        CtExt rot = keyswitch_ext(ctx, digits, tk, q_towers, L);
+        CtExt rot = keyswitch_ext(ctx, digits, ct.c1(), tk, q_towers, L);
         // Add c0 to b (KeySwitchExt's "true" flag).
         Allocs c0_ext = extend_to_qp(ctx, ct.c0(), q_towers, L, bk.p_mod_q);
         REQUIRE(hazeAddMrp(rot.b.data(), rot.b.as_const().data(), c0_ext.as_const().data(),
