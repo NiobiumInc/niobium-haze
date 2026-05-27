@@ -199,17 +199,36 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
     REQUIRE(hazeModUp(digits_flat.data(), src_coeff.as_const().data(), &modup_params, nullptr) ==
             HAZE_SUCCESS);
 
-    Allocs digits_eval(num_digits * qp_towers, ctx.poly_bytes);
-    for (std::size_t d = 0; d < num_digits; ++d) {
-        std::vector<const void *> in(qp_towers);
-        std::vector<void *> out(qp_towers);
-        for (std::size_t t = 0; t < qp_towers; ++t) {
-            in[t] = digits_flat.data()[(d * qp_towers) + t];
-            out[t] = digits_eval.data()[(d * qp_towers) + t];
-        }
-        REQUIRE(hazeNTTMrp(out.data(), in.data(), qp_base.data(), qp_base.size(), nullptr) ==
-                HAZE_SUCCESS);
+    // ModUp leaves digit d's own-base Q rows as the identity copy of the
+    // input's coefficient form, so their eval form is exactly `src` (already
+    // available, in eval, as the keyswitch input). Skip the NTT on those rows
+    // and feed `src` straight into the MAC below; only the cross-base Q rows
+    // and the P rows are genuinely new and need transforming.
+    std::vector<std::size_t> own_start(num_digits);
+    std::vector<std::size_t> own_end(num_digits);
+    for (std::size_t d = 0, acc = 0; d < num_digits; ++d) {
+        own_start[d] = acc;
+        acc += digit_base_lens[d];
+        own_end[d] = acc;
     }
+    Allocs digits_eval(num_digits * qp_towers, ctx.poly_bytes);
+    auto ntt_digit_range = [&](std::size_t d, std::size_t lo, std::size_t hi) {
+        if (lo >= hi)
+            return;
+        const std::size_t n = hi - lo;
+        std::vector<const void *> in(n);
+        std::vector<void *> out(n);
+        for (std::size_t j = 0; j < n; ++j) {
+            in[j] = digits_flat.data()[(d * qp_towers) + lo + j];
+            out[j] = digits_eval.data()[(d * qp_towers) + lo + j];
+        }
+        REQUIRE(hazeNTTMrp(out.data(), in.data(), qp_base.data() + lo, n, nullptr) == HAZE_SUCCESS);
+    };
+    for (std::size_t d = 0; d < num_digits; ++d) {
+        ntt_digit_range(d, 0, own_start[d]);
+        ntt_digit_range(d, own_end[d], qp_towers);
+    }
+    const std::vector<const void *> src_ptrs = src.as_const();
 
     // Trim the full-Q∥P key to (first `towers` Q-rows, all P-rows) — matters
     // only when towers < |Q|.
@@ -238,7 +257,9 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
     for (std::size_t d = 0; d < num_digits; ++d) {
         std::vector<const void *> dig(qp_towers);
         for (std::size_t t = 0; t < qp_towers; ++t)
-            dig[t] = digits_eval.data()[(d * qp_towers) + t];
+            dig[t] = (t >= own_start[d] && t < own_end[d])
+                         ? src_ptrs[t]
+                         : digits_eval.data()[(d * qp_towers) + t];
         if (d == 0) {
             REQUIRE(hazeMulMrp(accum_b.data(), dig.data(), b_dev_per_digit[d].as_const().data(),
                                qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
