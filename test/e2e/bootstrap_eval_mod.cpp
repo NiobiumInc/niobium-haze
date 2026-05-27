@@ -583,6 +583,12 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
                 T[i] = adjust_one_to_other(ctx, std::move(T[i]), T.back());
             if (T[i].noise_scale_deg() < T.back().noise_scale_deg())
                 T[i] = mult_by_const(ctx, T[i], 1.0);
+            // The shared rescaled-tree hoist (RescaledTree) gates rescale on a
+            // per-power NSD check; that matches OpenFHE's per-front-NSD gate in
+            // EvalPartialLinearWSum only because every power lands at the same
+            // NSD here. Enforce that invariant so a future parameter regime
+            // that breaks it fails loudly instead of diverging silently.
+            REQUIRE(T[i].noise_scale_deg() == T.back().noise_scale_deg());
         }
     }
 
