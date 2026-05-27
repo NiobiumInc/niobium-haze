@@ -692,13 +692,14 @@ Ct inner_eval_chebyshev_ps(const OpCtx &ctx, const Ct &x, const std::vector<doub
 }
 
 // Mirror of niobium::AccumBabyStep (advancedshe.cpp:654): if scalar is
-// non-zero, mult Ti by it and accumulate into `acc`. Uses eval_mult_scalar
-// (matches OpenFHE's cc->EvalMult(Ti, scalar) — auto-rescales NSD=2
-// inputs); plain mult_by_const would diverge byte-for-byte.
-void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &Ti, double scalar) {
+// non-zero, mult `prepared` by it and accumulate into `acc`. `prepared` is
+// the eval_mult_scalar-equivalent operand (already rescaled when the source
+// T[i] was at NSD=2) — see the fused base case, which rescales each T[i]
+// once and reuses it across the acc_q / acc_s / acc_c sweeps.
+void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &prepared, double scalar) {
     if (std::abs(scalar) <= 0x1p-44)
         return;
-    Ct tmp = eval_mult_scalar(ctx, Ti, scalar);
+    Ct tmp = mult_by_const(ctx, prepared, scalar);
     if (acc.has_value())
         *acc = add(ctx, *acc, tmp);
     else
@@ -774,13 +775,27 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
 
         const std::uint32_t max_deg = std::max({nq, ns, (nc > 1) ? nc : 0u});
         std::optional<Ct> acc_q, acc_s, acc_c;
+        // eval_mult_scalar rescales an NSD=2 input before mult_by_const. The
+        // same T[i] feeds up to three accumulators here, so rescale it once
+        // and reuse — value-identical (rescale is a pure function of T[i]),
+        // but it elides the duplicate INTT/ModDown/NTT round-trips. Lazy so a
+        // T[i] used only by zero coefficients is never rescaled.
+        std::vector<std::optional<Ct>> rescaled(max_deg);
+        auto operand = [&](std::uint32_t i) -> const Ct & {
+            if (ctx.mode != lbcrypto::FIXEDMANUAL && T[i].noise_scale_deg() == 2) {
+                if (!rescaled[i].has_value())
+                    rescaled[i] = rescale(ctx, T[i]);
+                return *rescaled[i];
+            }
+            return T[i];
+        };
         for (std::uint32_t i = 0; i < max_deg; ++i) {
-            if (i < nq)
-                accum_baby_step(ctx, acc_q, T[i], divqr->q[i + 1]);
-            if (i < ns)
-                accum_baby_step(ctx, acc_s, T[i], s2[i + 1]);
-            if (nc > 1 && i < nc)
-                accum_baby_step(ctx, acc_c, T[i], divcs->q[i + 1]);
+            if (i < nq && std::abs(divqr->q[i + 1]) > 0x1p-44)
+                accum_baby_step(ctx, acc_q, operand(i), divqr->q[i + 1]);
+            if (i < ns && std::abs(s2[i + 1]) > 0x1p-44)
+                accum_baby_step(ctx, acc_s, operand(i), s2[i + 1]);
+            if (nc > 1 && i < nc && std::abs(divcs->q[i + 1]) > 0x1p-44)
+                accum_baby_step(ctx, acc_c, operand(i), divcs->q[i + 1]);
         }
 
         // OpenFHE: `cc->ModReduceInPlace(acc_q); cc->EvalAddInPlace(qu, acc_q);`
