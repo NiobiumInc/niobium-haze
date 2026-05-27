@@ -22,6 +22,22 @@ namespace haze::test::ops {
 
 namespace {
 
+uint64_t mulmod_u64(uint64_t a, uint64_t b, uint64_t q) {
+    return static_cast<uint64_t>((static_cast<__uint128_t>(a) * b) % q);
+}
+uint64_t powmod_u64(uint64_t a, uint64_t e, uint64_t q) {
+    uint64_t r = 1 % q;
+    a %= q;
+    while (e > 0) {
+        if (e & 1ULL)
+            r = mulmod_u64(r, a, q);
+        a = mulmod_u64(a, a, q);
+        e >>= 1;
+    }
+    return r;
+}
+uint64_t invmod_prime(uint64_t a, uint64_t q) { return powmod_u64(a, q - 2, q); }
+
 // Extended-basis ciphertext: (b, a) each represented over `towers` Q-rows
 // followed by all P-rows, in EVALUATION form.
 struct CtExt {
@@ -268,30 +284,48 @@ void add_ext_inplace(const OpCtx & /*ctx*/, CtExt &dst, const CtExt &src, const 
 // NSD argument is the noise scale degree of the input ext ciphertext.
 Ct keyswitch_down(const OpCtx &ctx, const CtExt &c, const ExtLayout &L, std::uint32_t nsd,
                   double sf, std::uint32_t level) {
-    Allocs b_coeff(L.qp_total, ctx.poly_bytes);
-    Allocs a_coeff(L.qp_total, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(b_coeff.data(), c.b.as_const().data(), L.qp_base.data(), L.qp_base.size(),
-                        nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTTMrp(a_coeff.data(), c.a.as_const().data(), L.qp_base.data(), L.qp_base.size(),
-                        nullptr) == HAZE_SUCCESS);
-
-    const hazeModDownParams md = {
-        .src_base = L.qp_base.data(),
-        .src_base_len = L.qp_base.size(),
-        .rescale_base = ctx.p_base.data(),
-        .rescale_base_len = ctx.p_base.size(),
+    // Eval-form ModDown (see hybrid_keyswitch): the (b, a) ext ciphertext is
+    // already in eval form, so INTT only the P-part, convert P->Q, NTT that,
+    // and do (ext_q - convert) * P^{-1} in eval form on the Q towers. INTTs
+    // |P| towers instead of |Q|+|P|. Byte-identical to rescale_fbc(ext, P).
+    std::vector<uint64_t> p_inv(c.q_towers);
+    for (std::size_t t = 0; t < c.q_towers; ++t) {
+        uint64_t prod = 1 % L.q_subbase[t];
+        for (uint64_t p : ctx.p_base)
+            prod = mulmod_u64(prod, p % L.q_subbase[t], L.q_subbase[t]);
+        p_inv[t] = invmod_prime(prod, L.q_subbase[t]);
+    }
+    const hazeBasisConvertParams bc = {
+        .src_base = ctx.p_base.data(),
+        .src_base_len = ctx.p_base.size(),
+        .dst_base = L.q_subbase.data(),
+        .dst_base_len = L.q_subbase.size(),
     };
-    Allocs b_md(c.q_towers, ctx.poly_bytes);
-    Allocs a_md(c.q_towers, ctx.poly_bytes);
-    REQUIRE(hazeModDown(b_md.data(), b_coeff.as_const().data(), &md, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeModDown(a_md.data(), a_coeff.as_const().data(), &md, nullptr) == HAZE_SUCCESS);
-
-    Allocs b_out(c.q_towers, ctx.poly_bytes);
-    Allocs a_out(c.q_towers, ctx.poly_bytes);
-    REQUIRE(hazeNTTMrp(b_out.data(), b_md.as_const().data(), L.q_subbase.data(),
-                       L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTTMrp(a_out.data(), a_md.as_const().data(), L.q_subbase.data(),
-                       L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    auto md_eval = [&](const Allocs &ext) -> Allocs {
+        const auto ext_ptrs = ext.as_const();
+        std::vector<const void *> p_part(
+            ext_ptrs.begin() + static_cast<std::ptrdiff_t>(c.q_towers), ext_ptrs.end());
+        Allocs p_coeff(ctx.p_base.size(), ctx.poly_bytes);
+        REQUIRE(hazeINTTMrp(p_coeff.data(), p_part.data(), ctx.p_base.data(), ctx.p_base.size(),
+                            nullptr) == HAZE_SUCCESS);
+        Allocs y_coeff(c.q_towers, ctx.poly_bytes);
+        REQUIRE(hazeBasisConvert(y_coeff.data(), p_coeff.as_const().data(), &bc, nullptr) ==
+                HAZE_SUCCESS);
+        Allocs y_eval(c.q_towers, ctx.poly_bytes);
+        REQUIRE(hazeNTTMrp(y_eval.data(), y_coeff.as_const().data(), L.q_subbase.data(),
+                           L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        std::vector<const void *> q_part(
+            ext_ptrs.begin(), ext_ptrs.begin() + static_cast<std::ptrdiff_t>(c.q_towers));
+        Allocs diff(c.q_towers, ctx.poly_bytes);
+        REQUIRE(hazeSubMrp(diff.data(), q_part.data(), y_eval.as_const().data(),
+                           L.q_subbase.data(), L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        Allocs out(c.q_towers, ctx.poly_bytes);
+        REQUIRE(hazeMulScalarMrp(out.data(), diff.as_const().data(), p_inv.data(),
+                                 L.q_subbase.data(), L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        return out;
+    };
+    Allocs b_out = md_eval(c.b);
+    Allocs a_out = md_eval(c.a);
     return Ct{std::move(b_out), std::move(a_out), c.q_towers, nsd, sf, level};
 }
 
