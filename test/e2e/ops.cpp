@@ -81,8 +81,17 @@ std::vector<uint64_t> rescale_scalars(const std::vector<uint64_t> &scalars_full,
     return rescaled;
 }
 
-// INTT;ModDown;NTT a single chain dropping the trailing Q-prime;
-// input at `src_towers`, output at `src_towers - 1`.
+// Rescale dropping the trailing Q-prime; eval-form input at `src_towers`,
+// eval-form output at `src_towers - 1`.
+//
+// OpenFHE's ModReduce stays in evaluation form and only INTTs the single
+// dropped tower; the rest of the rescale is linear:
+//   z_t = (x_t - convert_{q_L -> q_t}(x_{q_L})) * q_L^{-1}   (mod q_t).
+// The subtraction and the per-tower scalar mul commute with the NTT, so doing
+// them in eval form is byte-identical to the coefficient-domain rescale_fbc
+// (a full INTT(all)->ModDown->NTT round-trip) but transforms only the dropped
+// tower instead of every tower. This is the dominant INTT source, and nothing
+// in haze pins the kept towers to coefficient form — they stay in eval.
 Allocs rescale_chain_one_tower(const OpCtx &ctx, const Allocs &src, std::size_t src_towers) {
     REQUIRE(src_towers >= 2);
     const std::size_t dst_towers = src_towers - 1;
@@ -90,24 +99,45 @@ Allocs rescale_chain_one_tower(const OpCtx &ctx, const Allocs &src, std::size_t 
                                    ctx.q_base.begin() + static_cast<std::ptrdiff_t>(src_towers));
     std::vector<uint64_t> dst_base(src_base.begin(),
                                    src_base.begin() + static_cast<std::ptrdiff_t>(dst_towers));
-    const std::vector<uint64_t> rescale_b = {src_base.back()};
+    const uint64_t q_L = src_base.back();
+    const std::vector<uint64_t> qL_base = {q_L};
 
-    const hazeModDownParams md_params = {
-        .src_base = src_base.data(),
-        .src_base_len = src_base.size(),
-        .rescale_base = rescale_b.data(),
-        .rescale_base_len = rescale_b.size(),
-    };
+    const auto src_ptrs = src.as_const();
 
-    Allocs intt(src_towers, ctx.poly_bytes);
-    Allocs md(dst_towers, ctx.poly_bytes);
-    Allocs ntt(dst_towers, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(intt.data(), src.as_const().data(), src_base.data(), src_base.size(),
+    // INTT only the dropped tower (q_L), then fast-base-convert it into the
+    // kept towers' coefficient form — exactly rescale_fbc's y term.
+    std::vector<const void *> dropped_in = {src_ptrs[src_towers - 1]};
+    Allocs dropped_coeff(1, ctx.poly_bytes);
+    REQUIRE(hazeINTTMrp(dropped_coeff.data(), dropped_in.data(), qL_base.data(), qL_base.size(),
                         nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeModDown(md.data(), intt.as_const().data(), &md_params, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTTMrp(ntt.data(), md.as_const().data(), dst_base.data(), dst_base.size(),
+
+    const hazeBasisConvertParams bc_params = {
+        .src_base = qL_base.data(),
+        .src_base_len = qL_base.size(),
+        .dst_base = dst_base.data(),
+        .dst_base_len = dst_base.size(),
+    };
+    Allocs y_coeff(dst_towers, ctx.poly_bytes);
+    REQUIRE(hazeBasisConvert(y_coeff.data(), dropped_coeff.as_const().data(), &bc_params,
+                             nullptr) == HAZE_SUCCESS);
+    Allocs y_eval(dst_towers, ctx.poly_bytes);
+    REQUIRE(hazeNTTMrp(y_eval.data(), y_coeff.as_const().data(), dst_base.data(), dst_base.size(),
                        nullptr) == HAZE_SUCCESS);
-    return ntt;
+
+    // z_t = (x_t - y_t) * q_L^{-1}, in eval form over the kept towers.
+    std::vector<const void *> src_kept(src_ptrs.begin(),
+                                       src_ptrs.begin() + static_cast<std::ptrdiff_t>(dst_towers));
+    Allocs diff(dst_towers, ctx.poly_bytes);
+    REQUIRE(hazeSubMrp(diff.data(), src_kept.data(), y_eval.as_const().data(), dst_base.data(),
+                       dst_base.size(), nullptr) == HAZE_SUCCESS);
+
+    std::vector<uint64_t> qL_inv(dst_towers);
+    for (std::size_t t = 0; t < dst_towers; ++t)
+        qL_inv[t] = invmod_prime(q_L % dst_base[t], dst_base[t]);
+    Allocs out(dst_towers, ctx.poly_bytes);
+    REQUIRE(hazeMulScalarMrp(out.data(), diff.as_const().data(), qL_inv.data(), dst_base.data(),
+                             dst_base.size(), nullptr) == HAZE_SUCCESS);
+    return out;
 }
 
 Allocs mul_chain(const OpCtx &ctx, const Allocs &x, const Allocs &y,
