@@ -309,32 +309,50 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
         }
     }
 
-    Allocs accum_a_coeff(qp_towers, ctx.poly_bytes);
-    Allocs accum_b_coeff(qp_towers, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(accum_a_coeff.data(), accum_a.as_const().data(), qp_base.data(),
-                        qp_base.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTTMrp(accum_b_coeff.data(), accum_b.as_const().data(), qp_base.data(),
-                        qp_base.size(), nullptr) == HAZE_SUCCESS);
-
-    const hazeModDownParams ks_md_params = {
-        .src_base = qp_base.data(),
-        .src_base_len = qp_base.size(),
-        .rescale_base = ctx.p_base.data(),
-        .rescale_base_len = ctx.p_base.size(),
+    // ModDown(accum over Q∥P -> Q), eval-form: the accumulator is already in
+    // eval form, and ModDown is linear in the Q part:
+    //   out_q = (accum_q - convert_{P->q}(accum_P)) * P^{-1}   (mod q).
+    // So INTT only the P-part (the moduli being dropped), convert P->Q, NTT
+    // that, and do the subtract + P^{-1} scale in eval form. Byte-identical to
+    // rescale_fbc(accum, p_base) but transforms |P| towers instead of |Q|+|P|.
+    std::vector<uint64_t> p_inv(towers);
+    for (std::size_t t = 0; t < towers; ++t) {
+        uint64_t prod = 1 % q_subbase[t];
+        for (uint64_t p : ctx.p_base)
+            prod = mulmod_u64(prod, p % q_subbase[t], q_subbase[t]);
+        p_inv[t] = invmod_prime(prod, q_subbase[t]);
+    }
+    const hazeBasisConvertParams ks_bc = {
+        .src_base = ctx.p_base.data(),
+        .src_base_len = ctx.p_base.size(),
+        .dst_base = q_subbase.data(),
+        .dst_base_len = q_subbase.size(),
     };
-    Allocs md_a(towers, ctx.poly_bytes);
-    Allocs md_b(towers, ctx.poly_bytes);
-    REQUIRE(hazeModDown(md_a.data(), accum_a_coeff.as_const().data(), &ks_md_params, nullptr) ==
-            HAZE_SUCCESS);
-    REQUIRE(hazeModDown(md_b.data(), accum_b_coeff.as_const().data(), &ks_md_params, nullptr) ==
-            HAZE_SUCCESS);
-
-    Allocs out_a(towers, ctx.poly_bytes);
-    Allocs out_b(towers, ctx.poly_bytes);
-    REQUIRE(hazeNTTMrp(out_a.data(), md_a.as_const().data(), q_subbase.data(), q_subbase.size(),
-                       nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTTMrp(out_b.data(), md_b.as_const().data(), q_subbase.data(), q_subbase.size(),
-                       nullptr) == HAZE_SUCCESS);
+    auto mod_down_eval = [&](const Allocs &accum) -> Allocs {
+        const auto accum_ptrs = accum.as_const();
+        std::vector<const void *> p_part(
+            accum_ptrs.begin() + static_cast<std::ptrdiff_t>(towers), accum_ptrs.end());
+        Allocs p_coeff(ctx.p_base.size(), ctx.poly_bytes);
+        REQUIRE(hazeINTTMrp(p_coeff.data(), p_part.data(), ctx.p_base.data(), ctx.p_base.size(),
+                            nullptr) == HAZE_SUCCESS);
+        Allocs y_coeff(towers, ctx.poly_bytes);
+        REQUIRE(hazeBasisConvert(y_coeff.data(), p_coeff.as_const().data(), &ks_bc, nullptr) ==
+                HAZE_SUCCESS);
+        Allocs y_eval(towers, ctx.poly_bytes);
+        REQUIRE(hazeNTTMrp(y_eval.data(), y_coeff.as_const().data(), q_subbase.data(),
+                           q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        std::vector<const void *> q_part(
+            accum_ptrs.begin(), accum_ptrs.begin() + static_cast<std::ptrdiff_t>(towers));
+        Allocs diff(towers, ctx.poly_bytes);
+        REQUIRE(hazeSubMrp(diff.data(), q_part.data(), y_eval.as_const().data(), q_subbase.data(),
+                           q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        Allocs out(towers, ctx.poly_bytes);
+        REQUIRE(hazeMulScalarMrp(out.data(), diff.as_const().data(), p_inv.data(),
+                                 q_subbase.data(), q_subbase.size(), nullptr) == HAZE_SUCCESS);
+        return out;
+    };
+    Allocs out_a = mod_down_eval(accum_a);
+    Allocs out_b = mod_down_eval(accum_b);
 
     return KsContribution{.b_contrib = std::move(out_b), .a_contrib = std::move(out_a)};
 }
