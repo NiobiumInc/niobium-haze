@@ -403,6 +403,18 @@ AdjustedPair adjust_for_mult(const OpCtx &ctx, Ct a, Ct b) {
     return {std::move(a), std::move(b)};
 }
 
+// EvalSquare's adjust: AdjustLevelsAndDepthToOneInPlace on a single
+// ciphertext (OpenFHE runs it with both args aliasing the same ct). With
+// equal towers/depth the level and depth alignment is a no-op, so this
+// reduces to "rescale once if NSD==2" — exactly what adjust_for_mult(x, x)
+// computes for its .a, but without the duplicate .b rescale that the square
+// callers discard. Returns the single adjusted operand to square.
+Ct adjust_for_square(const OpCtx &ctx, Ct x) {
+    if (ctx.mode != lbcrypto::FIXEDMANUAL && x.noise_scale_deg() == 2)
+        return rescale(ctx, std::move(x));
+    return x;
+}
+
 // Mirror OpenFHE's LeveledSHECKKSRNS::AdjustLevelsAndDepthInPlace
 // (ckksrns-leveledshe.cpp:603) — same level alignment as the mult
 // variant, just without the To-One ModReduce-both wrap. Used by EvalAdd
@@ -511,10 +523,9 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
             auto s = adjust_for_add(ctx, std::move(rescaled), clone_ct(ctx, T[0]));
             T.push_back(sub(ctx, s.a, s.b));
         } else {
-            // T[2j] = 2*T[j]² - 1. adjustForMult(T[j], T[j]) — both args same.
-            auto mp = adjust_for_mult(ctx, clone_ct(ctx, T[i / 2 - 1]),
-                                     clone_ct(ctx, T[i / 2 - 1]));
-            Ct sq = square_ct(ctx, mp.a);
+            // T[2j] = 2*T[j]² - 1. EvalSquare adjusts the single operand once.
+            Ct adj = adjust_for_square(ctx, clone_ct(ctx, T[i / 2 - 1]));
+            Ct sq = square_ct(ctx, adj);
             Ct doubled = mult_int_scalar(ctx, sq, 2);
             Ct rescaled = maybe_rescale(std::move(doubled));
             T.push_back(add_const(ctx, rescaled, -1.0));
@@ -543,9 +554,8 @@ ChebyTree compute_cheby_tree(const OpCtx &ctx, const Ct &x, std::uint32_t k, std
     T2.push_back(clone_ct(ctx, T.back()));
     Ct T2km1 = clone_ct(ctx, T.back());
     for (std::uint32_t i = 1; i < m; ++i) {
-        auto sq_in = adjust_for_mult(ctx, clone_ct(ctx, T2[i - 1]),
-                                     clone_ct(ctx, T2[i - 1]));
-        Ct sq = square_ct(ctx, sq_in.a);
+        Ct sq_adj = adjust_for_square(ctx, clone_ct(ctx, T2[i - 1]));
+        Ct sq = square_ct(ctx, sq_adj);
         Ct doubled = mult_int_scalar(ctx, sq, 2);
         Ct rescaled = maybe_rescale(std::move(doubled));
         T2.push_back(add_const(ctx, rescaled, -1.0));
@@ -961,8 +971,8 @@ void apply_double_angle_iterations(const OpCtx &ctx, Ct &ct, std::uint32_t num_i
         // on its single input pair first — drops the level when NSD=2 — so
         // we must mirror that here. My ops::mult doesn't auto-adjust, so do
         // it explicitly before squaring.
-        auto sq_in = adjust_for_mult(ctx, clone_ct(ctx, ct), clone_ct(ctx, ct));
-        ct = mult(ctx, sq_in.a, sq_in.b);
+        Ct sq_in = adjust_for_square(ctx, clone_ct(ctx, ct));
+        ct = square_ct(ctx, sq_in);
         // 2*ct + scalar — avoid add(ct, ct) self-add (trace-output replay
         // divergence).
         Ct doubled = mult_int_scalar(ctx, ct, 2);
