@@ -460,14 +460,51 @@ uint32_t poly_degree(const std::vector<double> &v) {
     return 0;
 }
 
+// Lazily-cached, shared rescaled view of the Chebyshev power tree. Every
+// consumer of T[i] in the PS evaluation that auto-rescales an NSD=2 power
+// before mult_by_const (eval_mult_scalar in the baby-step accumulators,
+// EvalPartialLinearWSum, the cu term) reads operand(i) here instead. rescale
+// is a pure function of T[i], so one rescale per power is shared across every
+// sweep, every EvalPartialLinearWSum term, and the whole recursion —
+// value-identical, but it elides the duplicate INTT/ModDown/NTT round-trips.
+// operand(i) returns the raw T[i] when no rescale applies (FIXEDMANUAL, or
+// NSD!=2), matching eval_mult_scalar's own branch.
+struct RescaledTree {
+    const OpCtx &ctx;
+    const std::vector<Ct> &T;
+    bool active;
+    mutable std::vector<std::optional<Ct>> cache;
+    RescaledTree(const OpCtx &c, const std::vector<Ct> &t)
+        : ctx(c), T(t), active(c.mode != lbcrypto::FIXEDMANUAL), cache(t.size()) {}
+    const Ct &operand(std::size_t i) const {
+        if (active && T[i].noise_scale_deg() == 2) {
+            if (!cache[i].has_value())
+                cache[i] = rescale(ctx, T[i]);
+            return *cache[i];
+        }
+        return T[i];
+    }
+};
+
 // EvalPartialLinearWSum: Σ T[i] * coeffs[i+1] for i in 0..n-1. Mirrors
 // OpenFHE's EvalPartialLinearWSum (advancedshe.cpp:143). Important byte
 // invariant: OpenFHE multiplies by EVERY coefficient including ones below
 // the IsNotEqualZero threshold — must not skip tiny coefs or the IR
-// sequence diverges from OpenFHE's.
+// sequence diverges from OpenFHE's. When `rt` is supplied, the (possibly
+// rescaled) operands come from the shared tree so each power is rescaled at
+// most once across the entire PS evaluation.
 Ct eval_partial_linear_wsum(const OpCtx &ctx, const std::vector<Ct> &T,
-                            const std::vector<double> &coeffs, std::uint32_t n) {
+                            const std::vector<double> &coeffs, std::uint32_t n,
+                            const RescaledTree *rt = nullptr) {
     REQUIRE(n > 0);
+    if (rt != nullptr) {
+        Ct acc = mult_by_const(ctx, rt->operand(0), coeffs[1]);
+        for (std::uint32_t i = 1; i < n; ++i) {
+            Ct term = mult_by_const(ctx, rt->operand(i), coeffs[i + 1]);
+            acc = add(ctx, acc, term);
+        }
+        return manual_rescale(ctx, std::move(acc));
+    }
     std::vector<Ct> cts;
     cts.reserve(n);
     for (std::uint32_t i = 0; i < n; ++i)
@@ -734,7 +771,8 @@ void accum_baby_step(const OpCtx &ctx, std::optional<Ct> &acc, const Ct &prepare
 Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                               const std::vector<double> &coefficients,
                               std::uint32_t k, std::uint32_t m,
-                              const std::vector<Ct> &T, const std::vector<Ct> &T2) {
+                              const std::vector<Ct> &T, const std::vector<Ct> &T2,
+                              const RescaledTree &rt) {
     using namespace lbcrypto;
     const std::uint32_t k2m2k = k * (1u << (m - 1)) - k;
 
@@ -785,27 +823,16 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
 
         const std::uint32_t max_deg = std::max({nq, ns, (nc > 1) ? nc : 0u});
         std::optional<Ct> acc_q, acc_s, acc_c;
-        // eval_mult_scalar rescales an NSD=2 input before mult_by_const. The
-        // same T[i] feeds up to three accumulators here, so rescale it once
-        // and reuse — value-identical (rescale is a pure function of T[i]),
-        // but it elides the duplicate INTT/ModDown/NTT round-trips. Lazy so a
-        // T[i] used only by zero coefficients is never rescaled.
-        std::vector<std::optional<Ct>> rescaled(max_deg);
-        auto operand = [&](std::uint32_t i) -> const Ct & {
-            if (ctx.mode != lbcrypto::FIXEDMANUAL && T[i].noise_scale_deg() == 2) {
-                if (!rescaled[i].has_value())
-                    rescaled[i] = rescale(ctx, T[i]);
-                return *rescaled[i];
-            }
-            return T[i];
-        };
+        // The same baby-step power feeds up to three accumulators; rt.operand
+        // hands back its shared (once-)rescaled form, so the duplicate
+        // INTT/ModDown/NTT round-trips never get emitted.
         for (std::uint32_t i = 0; i < max_deg; ++i) {
             if (i < nq && std::abs(divqr->q[i + 1]) > 0x1p-44)
-                accum_baby_step(ctx, acc_q, operand(i), divqr->q[i + 1]);
+                accum_baby_step(ctx, acc_q, rt.operand(i), divqr->q[i + 1]);
             if (i < ns && std::abs(s2[i + 1]) > 0x1p-44)
-                accum_baby_step(ctx, acc_s, operand(i), s2[i + 1]);
+                accum_baby_step(ctx, acc_s, rt.operand(i), s2[i + 1]);
             if (nc > 1 && i < nc && std::abs(divcs->q[i + 1]) > 0x1p-44)
-                accum_baby_step(ctx, acc_c, operand(i), divcs->q[i + 1]);
+                accum_baby_step(ctx, acc_c, rt.operand(i), divcs->q[i + 1]);
         }
 
         // OpenFHE: `cc->ModReduceInPlace(acc_q); cc->EvalAddInPlace(qu, acc_q);`
@@ -838,7 +865,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
         // `ModReduceInPlace(acc_c); cu = acc_c` — again, FIXEDMANUAL only.
         if (nc == 1) {
             if (std::abs(divcs->q[1] - 1.0) > 0x1p-44) {
-                Ct r = eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                Ct r = mult_by_const(ctx, rt.operand(0), divcs->q[1]);
                 cu = manual_rescale(ctx, std::move(r));
             } else {
                 cu = clone_ct(ctx, T[0]);
@@ -856,7 +883,7 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
     } else {
         // Original recursive path (mirrors OpenFHE 783-836).
         if (poly_degree(divqr->q) > k) {
-            qu = inner_eval_chebyshev_ps_nb(ctx, x, divqr->q, k, m - 1, T, T2);
+            qu = inner_eval_chebyshev_ps_nb(ctx, x, divqr->q, k, m - 1, T, T2, rt);
         } else {
             qu = clone_ct(ctx, T[k - 1]);
             const std::uint32_t limit =
@@ -871,19 +898,19 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 // eval_partial_linear_wsum already does the upfront ModReduce
                 // and the trailing rescale is a no-op in FIXEDAUTO; let
                 // adjust_for_add handle any final level alignment.
-                Ct extra = eval_partial_linear_wsum(ctx, T, divqr->q, n);
+                Ct extra = eval_partial_linear_wsum(ctx, T, divqr->q, n, &rt);
                 auto ap = adjust_for_add(ctx, std::move(qu), std::move(extra));
                 qu = add(ctx, ap.a, ap.b);
             }
         }
 
         if (poly_degree(s2) > k) {
-            su = inner_eval_chebyshev_ps_nb(ctx, x, s2, k, m - 1, T, T2);
+            su = inner_eval_chebyshev_ps_nb(ctx, x, s2, k, m - 1, T, T2, rt);
         } else {
             su = clone_ct(ctx, T[k - 1]);
             s2.resize(k);
             if (std::uint32_t n = poly_degree(s2); n > 0) {
-                Ct extra = eval_partial_linear_wsum(ctx, T, s2, n);
+                Ct extra = eval_partial_linear_wsum(ctx, T, s2, n, &rt);
                 auto ap = adjust_for_add(ctx, std::move(su), std::move(extra));
                 su = add(ctx, ap.a, ap.b);
             }
@@ -897,13 +924,13 @@ Ct inner_eval_chebyshev_ps_nb(const OpCtx &ctx, const Ct &x,
                 if (n == 1) {
                     // OpenFHE: cu = cc->EvalMult(T[0], divcs->q[1]); ModReduceInPlace(cu);
                     if (std::abs(divcs->q[1] - 1.0) > 0x1p-44) {
-                        Ct r = eval_mult_scalar(ctx, T[0], divcs->q[1]);
+                        Ct r = mult_by_const(ctx, rt.operand(0), divcs->q[1]);
                         return manual_rescale(ctx, std::move(r));
                     }
                     return clone_ct(ctx, T[0]);
                 }
                 // eval_partial_linear_wsum already trails manual_rescale.
-                return eval_partial_linear_wsum(ctx, T, divcs->q, n);
+                return eval_partial_linear_wsum(ctx, T, divcs->q, n, &rt);
             }();
             c = add_const(ctx, c, divcs->q.front() / 2.0);
             if (ctx.mode == lbcrypto::FIXEDMANUAL && c.towers() > T2[m - 1].towers())
@@ -953,7 +980,10 @@ Ct eval_chebyshev_series(const OpCtx &ctx, const Ct &x,
     // Dispatch to the NB-fused variant — that's what cc->EvalChebyshevSeries
     // resolves to under WITH_CPROBES=ON. The upstream non-fused variant
     // (inner_eval_chebyshev_ps) remains in this file for reference.
-    Ct inner = inner_eval_chebyshev_ps_nb(ctx, x, f2, k, m, tree.T, tree.T2);
+    // The shared rescaled-tree view rescales each baby-step power at most once
+    // across the entire (recursive) PS evaluation.
+    RescaledTree rt(ctx, tree.T);
+    Ct inner = inner_eval_chebyshev_ps_nb(ctx, x, f2, k, m, tree.T, tree.T2, rt);
 
     // result = inner - T2km1, mirroring cc->EvalSub which routes through
     // AdjustForAddOrSubInPlace = AdjustLevelsAndDepthInPlace for FIXEDAUTO.
