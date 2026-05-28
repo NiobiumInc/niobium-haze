@@ -1127,12 +1127,11 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
 
     if (fully_packed) {
         // Fully-packed path (slots == N/2): conjugate-split into real+imag,
-        // two Chebyshevs, recombine. Mirror OpenFHE's SUB-then-ADD order
-        // (ckksrns-fhe.cpp:701-702) — phasefs07 step C1/C2 follow this
-        // sequence byte-exact to cc->EvalBootstrap.
+        // two Chebyshevs, recombine. Not exercised by phase 5/7 (slots=8,
+        // N=2048 falls into sparsely-packed) but kept for completeness.
         Ct conj = conjugate(ctx, ct, bk.conjugation_key);
-        Ct ctEncI = sub(ctx, ct, conj);
         Ct ctEnc = add(ctx, ct, conj);
+        Ct ctEncI = sub(ctx, ct, conj);
         ctEncI = mult_monomial(ctx, ctEncI, 3 * bk.params.slots);
         if (ctEnc.noise_scale_deg() == 2) {
             ctEnc = rescale(ctx, ctEnc);
