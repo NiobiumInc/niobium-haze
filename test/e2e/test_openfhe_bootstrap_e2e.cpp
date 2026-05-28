@@ -3319,11 +3319,26 @@ TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[integration][e2e]"
     const auto &precom = *fhe_ckks->GetBootPrecomMap().at(slots);
     auto algo = ctx.cc->GetScheme();
 
-    // -- OpenFHE side: build raised_ref through the bootstrap pre-CtS pipeline.
+    // -- OpenFHE side: replicate cc->EvalBootstrap pre-CtS. AdjustCiphertext is
+    //    private, so inline its FLEXIBLEAUTO body (matches bootstrap.cpp).
     auto raised_ref = ct->Clone();
-    algo->ModReduceInternalInPlace(raised_ref, 0);
-    ctx.cc->EvalMultInPlace(raised_ref, std::pow(2.0,-correction));
+    while (raised_ref->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised_ref, 1);
     {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised_ref->GetScalingFactor();
+        const std::uint32_t numTowers = raised_ref->GetElements()[0].GetNumOfElements();
+        const double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        ctx.cc->EvalMultInPlace(raised_ref, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised_ref, 1);
+        raised_ref->SetScalingFactor(targetSF);
+    }
+    {
+        // Mod-raise: re-embed tower 0 into the full Q chain (mirrors lines
+        // ckksrns-fhe.cpp:619-628 of EvalBootstrap).
         auto ep = cp->GetElementParams();
         auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(ctx.cc->GetCyclotomicOrder(),
             [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
@@ -3335,17 +3350,33 @@ TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[integration][e2e]"
         raised_ref->SetLevel(L0-raised_ref->GetElements()[0].GetNumOfElements());
     }
     ctx.cc->EvalMultInPlace(raised_ref, pre/((double)K_UNIFORM*N));
-    // partial_sum loop is skipped for full slots (limit = N/(2*slots) = 1).
+    // Full slots: partial_sum is empty. OpenFHE's pre-CtS ModReduce
+    // (ckksrns-fhe.cpp:689, compositeDegree=1) is the one explicit rescale here.
     algo->ModReduceInternalInPlace(raised_ref, 1);
     std::cerr << "  [phasefs01] OpenFHE raised: towers="
               << raised_ref->GetElements()[0].GetNumOfElements()
               << " level=" << raised_ref->GetLevel()
               << " nsd=" << raised_ref->GetNoiseScaleDeg() << "\n";
 
-    // -- haze side: same pipeline via ops::.
+    // -- haze side: mirror bootstrap.cpp's pre-CtS exactly (including the full
+    //    adjusted block — depletion while-loop + FLEXIBLEAUTO adjustmentFactor).
     auto haze_ct = ops::h2d_ct(ctx, ct);
-    auto adj = ops::eval_mult_scalar_for_test(ctx, haze_ct, std::pow(2.0,-correction));
-    auto dep = ops::clone_ct(ctx, adj);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(ctx, r, adjustmentFactor);
+        r = ops::rescale(ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(ctx, adjusted);
     if (dep.towers()>1) dep = ops::level_reduce(ctx, std::move(dep), dep.towers()-1);
     auto hr = ops::mod_raise(ctx, bk, dep);
     hr = ops::eval_mult_scalar_for_test(ctx, hr, pre/((double)K_UNIFORM*N));
@@ -3353,12 +3384,35 @@ TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[integration][e2e]"
     std::cerr << "  [phasefs01] haze raised: towers=" << hr.towers()
               << " nsd=" << hr.noise_scale_deg() << "\n";
 
-    // -- Inject haze bytes into raised_ref so BOTH sides see identical input.
+    std::cerr << "  [phasefs01] cts_pt_level=" << bk.cts_pt_level
+              << " cts_pt_sf=" << bk.cts_pt_sf
+              << " precom.m_U0hatTPre size=" << precom.m_U0hatTPre.size() << "\n";
     REQUIRE(raised_ref->GetElements()[0].GetNumOfElements() == hr.towers());
-    auto haze_bytes = ops::d2h_ct(ctx, hr);
-    ops::inject_ct(ctx, haze_bytes, raised_ref);
 
-    // -- CtS on both sides.
+    // -- Bisection step A: do the haze and OpenFHE pre-CtS pipelines produce
+    //    byte-identical `raised`? (Independent of any inject.)
+    {
+        auto hbpre = ops::d2h_ct(ctx, hr);
+        std::size_t pre_bad = 0;
+        for (std::size_t elem = 0; elem < 2; ++elem) {
+            const auto &rd = raised_ref->GetElements()[elem];
+            const auto &hc = (elem == 0) ? hbpre.c0 : hbpre.c1;
+            for (std::size_t t = 0; t < hr.towers(); ++t) {
+                const auto &rv = rd.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+                std::size_t mism = 0;
+                for (std::size_t i = 0; i < hc[t].size(); ++i)
+                    if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+                if (mism) { ++pre_bad;
+                    if (pre_bad <= 4)
+                        std::cerr << "  [phasefs01] PRE-DIVERGE elem=" << elem << " t=" << t
+                                  << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+            }
+        }
+        std::cerr << "  [phasefs01] pre-CtS divergence: " << pre_bad
+                  << " of " << (2*hr.towers()) << " towers\n";
+    }
+
+    // -- CtS on both sides (without inject; both pipelines run independently).
     auto ctxtEnc_ref = fhe_ckks->EvalLinearTransform(precom.m_U0hatTPre, raised_ref);
     auto haze_cts = ops::linear_transform(ctx, bk, bk.cts_matrices, hr);
     std::cerr << "  [phasefs01] CtS ref towers="
