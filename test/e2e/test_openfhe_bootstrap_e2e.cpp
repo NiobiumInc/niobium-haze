@@ -4629,6 +4629,134 @@ TEST_CASE("phasefs09 fs07-prefix + Cheby on fresh-level5 input",
     REQUIRE(bad == 0);
 }
 
+// phasefs11: minimal fs07-prefix that triggers Cheby failure. Run only the
+// pre-CtS haze pipeline + d2h flush + refresh, then Cheby. If this passes,
+// the failure requires CtS (or downstream) on haze. If this fails, just the
+// pre-CtS work + d2h is enough.
+TEST_CASE("phasefs11 fs07-pre-CtS-only + Cheby",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+    auto algo = n.ctx.cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t compositeDegree = cp->GetCompositeDegree();
+    const double qDouble = cp->GetElementParams()->GetParams()[0]
+        ->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(n.ctx.ring_dim);
+
+    auto ct = make_nio_depleted_ct(n, 6);
+
+    // OpenFHE pre-CtS + CtS + Conj + Add + Rescale (mirrors fs07 OpenFHE side).
+    auto raised = ct->Clone();
+    while (raised->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+    {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised->GetScalingFactor();
+        const std::uint32_t numTowers = raised->GetElements()[0].GetNumOfElements();
+        const double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        n.ctx.cc->EvalMultInPlace(raised, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+        raised->SetScalingFactor(targetSF);
+    }
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            n.ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0 = static_cast<std::uint32_t>(ep->GetParams().size());
+        auto elements = raised->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), epp);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised->SetElements(std::move(elements));
+        raised->SetLevel(L0 - raised->GetElements()[0].GetNumOfElements());
+    }
+    n.ctx.cc->EvalMultInPlace(raised, pre / (static_cast<double>(K_UNIFORM) * N));
+    algo->ModReduceInternalInPlace(raised, compositeDegree);
+    auto ctxtEnc = fhe_ckks->EvalCoeffsToSlots(precom.m_U0hatTPreFFT, raised);
+    const auto &evalKeyMap = n.ctx.cc->GetEvalAutomorphismKeyMap(ctxtEnc->GetKeyTag());
+    auto conj = FHECKKSRNS::Conjugate(ctxtEnc, evalKeyMap);
+    n.ctx.cc->EvalAddInPlace(ctxtEnc, conj);
+    if (ctxtEnc->GetNoiseScaleDeg() == 2)
+        algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+    for (auto &elem : ctxtEnc->GetElements()) elem.SetFormat(Format::EVALUATION);
+
+    // HAZE side: ONLY do pre-CtS work (no CtS, no conj, etc.). Then d2h-flush.
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(n.ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(n.ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(n.ctx, r, adjustmentFactor);
+        r = ops::rescale(n.ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(n.ctx, adjusted);
+    if (dep.towers() > 1) dep = ops::level_reduce(n.ctx, std::move(dep), dep.towers() - 1);
+    auto hr = ops::mod_raise(n.ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(n.ctx, hr, pre/(static_cast<double>(K_UNIFORM) * N));
+    hr = ops::rescale(n.ctx, hr);
+    (void)ops::d2h_ct(n.ctx, hr);
+    hr = ops::h2d_ct(n.ctx, raised);  // refresh
+    auto h_ctxtEnc_haze = ops::eval_coeffs_to_slots(n.ctx, bk, bk.cts_matrices_fft, hr);
+    (void)ops::d2h_ct(n.ctx, h_ctxtEnc_haze);
+    // ADD: ops::conjugate
+    auto h_pre_cts = ops::h2d_ct(n.ctx, ctxtEnc);
+    auto h_conj = ops::conjugate(n.ctx, h_pre_cts, bk.conjugation_key);
+    (void)ops::d2h_ct(n.ctx, h_conj);
+    // ADD: ops::sub (mimics fs07 step C1)
+    h_pre_cts = ops::h2d_ct(n.ctx, ctxtEnc);
+    h_conj = ops::h2d_ct(n.ctx, ctxtEnc);  // dummy conj
+    auto h_ei = ops::sub(n.ctx, h_pre_cts, h_conj);
+    (void)ops::d2h_ct(n.ctx, h_ei);
+    // ADD: ops::add (mimics fs07 step C2)
+    h_pre_cts = ops::h2d_ct(n.ctx, ctxtEnc);
+    h_conj = ops::h2d_ct(n.ctx, ctxtEnc);
+    h_pre_cts = ops::add(n.ctx, h_pre_cts, h_conj);
+    (void)ops::d2h_ct(n.ctx, h_pre_cts);
+    // ADD: ops::mult_monomial_for_test (mimics fs07 step D)
+    h_ei = ops::h2d_ct(n.ctx, ctxtEnc);  // dummy ei
+    h_ei = ops::mult_monomial_for_test(n.ctx, h_ei, 3 * n.slots);
+    (void)ops::d2h_ct(n.ctx, h_ei);
+    // ADD: ops::rescale (mimics fs07 step E)
+    h_pre_cts = ops::h2d_ct(n.ctx, ctxtEnc);
+    if (h_pre_cts.noise_scale_deg() == 2) h_pre_cts = ops::rescale(n.ctx, h_pre_cts);
+    (void)ops::d2h_ct(n.ctx, h_pre_cts);
+
+    // Now Cheby on a fresh upload of OpenFHE's post-pipeline ctxtEnc.
+    auto ref = n.ctx.cc->EvalChebyshevSeries(ctxtEnc, nio_g_coefficientsUniform, -1.0, 1.0);
+    auto haze_for_cheby = ops::h2d_ct(n.ctx, ctxtEnc);
+    auto out = ops::eval_chebyshev_series_for_test(n.ctx, haze_for_cheby, nio_g_coefficientsUniform);
+    REQUIRE(haze_vs_openfhe(n.ctx, out, ref, "fs11") == 0);
+}
+
 // phasefs10: do the ENTIRE pre-Cheby pipeline ONLY on OpenFHE (no haze).
 // Then upload OpenFHE's resulting ctxtEnc into a fresh haze context and run
 // Cheby. If this fails, the bug is data-dependent on ctxtEnc's byte pattern.
