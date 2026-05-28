@@ -101,7 +101,7 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             raised = partial_sum(ctx, bk, std::move(raised));
 
         raised = rescale(ctx, raised);
-        Ct in_slots = linear_transform(ctx, bk, bk.cts_matrices, raised);
+        Ct in_slots = linear_transform_v2(ctx, bk, bk.cts_matrices, raised);
         Ct modded = eval_mod(ctx, bk, in_slots);
         // Defensive: with the right double_angle_iterations count for the
         // secret-key dist (set in make_bootstrap_keys), modded.towers should
@@ -113,7 +113,7 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             bk.stc_matrices.front().size() - ctx.p_base.size();
         if (modded.towers() > stc_q_towers)
             modded = level_reduce(ctx, std::move(modded), modded.towers() - stc_q_towers);
-        Ct out = linear_transform(ctx, bk, bk.stc_matrices, modded);
+        Ct out = linear_transform_v2(ctx, bk, bk.stc_matrices, modded);
 
         // SPARSELY PACKED post-StC: ctxtDec += rot(ctxtDec, slots), then
         // multiply by corFactor = 2^11. Mirrors ckksrns-fhe.cpp:846, 852.
@@ -132,9 +132,9 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         return out;
     }
     case BootstrapVariant::StCFirst: {
-        Ct in_coeffs = linear_transform(ctx, bk, bk.stc_matrices, ct);
+        Ct in_coeffs = linear_transform_v2(ctx, bk, bk.stc_matrices, ct);
         Ct raised = mod_raise(ctx, bk, in_coeffs);
-        Ct in_slots = linear_transform(ctx, bk, bk.cts_matrices, raised);
+        Ct in_slots = linear_transform_v2(ctx, bk, bk.cts_matrices, raised);
         return eval_mod(ctx, bk, in_slots);
     }
     }

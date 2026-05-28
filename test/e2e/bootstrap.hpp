@@ -81,6 +81,14 @@ Ct mod_raise(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
 Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
                     const std::vector<Allocs> &matrices, const Ct &ct);
 
+// OpenFHE-mirroring single-stage linear transform (ckksrns-fhe.cpp:1860
+// EvalLinearTransform). Same interface as linear_transform; canonical
+// algorithm with extended-basis accumulation + first c0 tracking + single
+// final KSD. Replaces linear_transform once byte-validated for all slot
+// counts.
+Ct linear_transform_v2(const OpCtx &ctx, const BootstrapKeys &bk,
+                       const std::vector<Allocs> &matrices, const Ct &ct);
+
 // Chebyshev approximation of sin(2πKx)/(2πK) followed by `r` double-angle iterations.
 Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
 

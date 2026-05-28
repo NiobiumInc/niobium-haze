@@ -3739,3 +3739,261 @@ TEST_CASE("nio02 manual cc->-replication of EvalBootstrap", "[.nio][e2e]") {
               << " manual towers=" << manual->GetElements()[0].GetNumOfElements() << "\n";
     rns_equal_or_report("nio02", manual, ref);
 }
+
+// phasefs02: full-slot CtS using linear_transform_v2, vs fhe_ckks->EvalLinearTransform.
+// Both fed byte-identical raised input. Hidden under [.nio] / [.fsladder].
+TEST_CASE("phasefs02 linear_transform_v2 full-slot CtS == EvalLinearTransform",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+
+    // Use the existing make_ctx-based fixture (same as phasefs01) so we can
+    // reuse make_bootstrap_keys (which currently supports {1,1}). The OpenFHE
+    // EvalLinearTransform path is what {1,1} dispatches to (isLTBootstrap).
+    auto ctx = ops::make_ctx({.mode = FLEXIBLEAUTO, .mult_depth = 35,
+        .scaling_mod_size = 50, .batch_size = 0, .with_relin_key = true,
+        .rotate_indices = {}, .ring_dim = 1u << 11});
+    ctx.cc->Enable(ADVANCEDSHE); ctx.cc->Enable(FHE);
+    const std::uint32_t slots = static_cast<std::uint32_t>(ctx.ring_dim / 2);
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    std::vector<double> v(slots); for (std::uint32_t i=0;i<slots;++i) v[i]=0.1+0.0003*i;
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, slots);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > 6)
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(ctx.cc->GetCryptoParameters());
+    const double qDouble = cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble/powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0/std::pow(2.0,(double)deg);
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(ctx.cc->GetScheme()->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(slots);
+    auto algo = ctx.cc->GetScheme();
+
+    // OpenFHE manual pre-CtS (validated identical to haze pre-CtS in phasefs01).
+    auto raised_ref = ct->Clone();
+    while (raised_ref->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised_ref, 1);
+    {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised_ref->GetScalingFactor();
+        const std::uint32_t numTowers = raised_ref->GetElements()[0].GetNumOfElements();
+        const double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        ctx.cc->EvalMultInPlace(raised_ref, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised_ref, 1);
+        raised_ref->SetScalingFactor(targetSF);
+    }
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0=(std::uint32_t)ep->GetParams().size();
+        auto elements=raised_ref->GetElements();
+        for(auto&dcrt:elements){dcrt.SetFormat(Format::COEFFICIENT);DCRTPoly tmp(dcrt.GetElementAtIndex(0),epp);tmp.SetFormat(Format::EVALUATION);dcrt=std::move(tmp);}
+        raised_ref->SetElements(std::move(elements));
+        raised_ref->SetLevel(L0-raised_ref->GetElements()[0].GetNumOfElements());
+    }
+    ctx.cc->EvalMultInPlace(raised_ref, pre/((double)K_UNIFORM*N));
+    algo->ModReduceInternalInPlace(raised_ref, 1);
+
+    // Haze pre-CtS.
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(ctx, r, adjustmentFactor);
+        r = ops::rescale(ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(ctx, adjusted);
+    if (dep.towers()>1) dep = ops::level_reduce(ctx, std::move(dep), dep.towers()-1);
+    auto hr = ops::mod_raise(ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(ctx, hr, pre/((double)K_UNIFORM*N));
+    hr = ops::rescale(ctx, hr);
+
+    // CtS on both sides.
+    auto ctxtEnc_ref = fhe_ckks->EvalLinearTransform(precom.m_U0hatTPre, raised_ref);
+    auto haze_v2 = ops::linear_transform_v2(ctx, bk, bk.cts_matrices, hr);
+    std::cerr << "  [phasefs02] CtS ref towers="
+              << ctxtEnc_ref->GetElements()[0].GetNumOfElements()
+              << " haze_v2 towers=" << haze_v2.towers() << "\n";
+
+    const auto hb = ops::d2h_ct(ctx, haze_v2);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ctxtEnc_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < haze_v2.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [phasefs02] BAD elem=" << elem << " t=" << t
+                              << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs02] bad_towers=" << bad << " of " << (2*haze_v2.towers()) << "\n";
+    REQUIRE(bad == 0);
+}
+
+// phasefs03: SPARSE {1,1} slots=8, v2 vs EvalLinearTransform. If this passes,
+// v2's algorithm is correct and any full-slot divergence is data-specific.
+TEST_CASE("phasefs03 linear_transform_v2 SPARSE CtS == EvalLinearTransform",
+          "[.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_bootstrap_ctx_e2e(1u << 11);
+    constexpr std::uint32_t slots = 8;
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    const std::vector<double> v = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8};
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(ctx.cc->GetCryptoParameters());
+    const double qDouble = cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble/powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0/std::pow(2.0,(double)deg);
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(ctx.cc->GetScheme()->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(slots);
+    auto algo = ctx.cc->GetScheme();
+
+    // OpenFHE side, sparse pipeline (with partial_sum).
+    auto raised_ref = ct->Clone();
+    algo->ModReduceInternalInPlace(raised_ref, 0);
+    ctx.cc->EvalMultInPlace(raised_ref, std::pow(2.0,-correction));
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0=(std::uint32_t)ep->GetParams().size();
+        auto elements=raised_ref->GetElements();
+        for(auto&dcrt:elements){dcrt.SetFormat(Format::COEFFICIENT);DCRTPoly tmp(dcrt.GetElementAtIndex(0),epp);tmp.SetFormat(Format::EVALUATION);dcrt=std::move(tmp);}
+        raised_ref->SetElements(std::move(elements));
+        raised_ref->SetLevel(L0-raised_ref->GetElements()[0].GetNumOfElements());
+    }
+    ctx.cc->EvalMultInPlace(raised_ref, pre/((double)K_UNIFORM*N));
+    {
+        const auto limit = N / (2 * slots);
+        for (std::uint32_t j = 1; j < limit; j <<= 1)
+            ctx.cc->EvalAddInPlace(raised_ref,
+                                   ctx.cc->EvalRotate(raised_ref, static_cast<int>(j*slots)));
+    }
+    algo->ModReduceInternalInPlace(raised_ref, 1);
+
+    // Haze side.
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto adj = ops::eval_mult_scalar_for_test(ctx, haze_ct, std::pow(2.0,-correction));
+    auto dep = ops::clone_ct(ctx, adj);
+    if (dep.towers()>1) dep = ops::level_reduce(ctx, std::move(dep), dep.towers()-1);
+    auto hr = ops::mod_raise(ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(ctx, hr, pre/((double)K_UNIFORM*N));
+    {
+        const std::uint32_t limit = N / (2 * slots);
+        for (std::uint32_t j = 1; j < limit; j <<= 1) {
+            const std::uint32_t aidx = ctx.cc->FindAutomorphismIndex(j*slots);
+            auto it = bk.rotation_keys.find(aidx);
+            REQUIRE(it != bk.rotation_keys.end());
+            auto rotated = ops::rotate_with_key(ctx, hr, it->second);
+            hr = ops::add(ctx, hr, rotated);
+        }
+    }
+    hr = ops::rescale(ctx, hr);
+
+    auto ctxtEnc_ref = fhe_ckks->EvalLinearTransform(precom.m_U0hatTPre, raised_ref);
+    auto haze_v2 = ops::linear_transform_v2(ctx, bk, bk.cts_matrices, hr);
+    std::cerr << "  [phasefs03] CtS ref towers="
+              << ctxtEnc_ref->GetElements()[0].GetNumOfElements()
+              << " haze_v2 towers=" << haze_v2.towers() << "\n";
+
+    const auto hb = ops::d2h_ct(ctx, haze_v2);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ctxtEnc_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < haze_v2.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [phasefs03] BAD elem=" << elem << " t=" << t
+                              << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs03] bad_towers=" << bad << " of " << (2*haze_v2.towers()) << "\n";
+    REQUIRE(bad == 0);
+}
+
+// phasefs04 (e2e): full-slot {1,1} ops::bootstrap vs cc->EvalBootstrap.
+// With linear_transform_v2 in place, this exercises the full-slot bootstrap
+// end-to-end at levelBudget {1,1} (the dispatch path haze currently supports).
+TEST_CASE("phasefs04 full-slot {1,1} ops::bootstrap byte-equal e2e",
+          "[.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = ops::make_ctx({.mode = FLEXIBLEAUTO, .mult_depth = 35,
+        .scaling_mod_size = 50, .batch_size = 0, .with_relin_key = true,
+        .rotate_indices = {}, .ring_dim = 1u << 11});
+    ctx.cc->Enable(ADVANCEDSHE); ctx.cc->Enable(FHE);
+    const std::uint32_t slots = static_cast<std::uint32_t>(ctx.ring_dim / 2);
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    std::vector<double> v(slots);
+    for (std::uint32_t i = 0; i < slots; ++i) v[i] = 0.1 + 0.0003 * i;
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, slots);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > 6)
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+
+    auto ct_ref = ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto haze_refreshed = ops::bootstrap(ctx, bk, haze_ct, ops::BootstrapVariant::Standard);
+    std::cerr << "  [phasefs04] ref towers="
+              << ct_ref->GetElements()[0].GetNumOfElements()
+              << " haze towers=" << haze_refreshed.towers() << "\n";
+    const auto hb = ops::d2h_ct(ctx, haze_refreshed);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ct_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < haze_refreshed.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [phasefs04] BAD elem=" << elem << " t=" << t
+                              << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs04] bad_towers=" << bad << " of "
+              << (2 * haze_refreshed.towers()) << "\n";
+    REQUIRE(bad == 0);
+}

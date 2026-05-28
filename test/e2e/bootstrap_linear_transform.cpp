@@ -329,6 +329,113 @@ Ct keyswitch_down(const OpCtx &ctx, const CtExt &c, const ExtLayout &L, std::uin
     return Ct{std::move(b_out), std::move(a_out), c.q_towers, nsd, sf, level};
 }
 
+// Eval-form ModDown applied to a single extended polynomial (b or a). Mirrors
+// the per-poly body of keyswitch_down — INTTs only the P-part, basis-converts
+// P->Q, NTTs, and does (ext_q - convert)*P^{-1} in eval form on Q towers.
+// Used both by keyswitch_down (b and a) and by KeySwitchDownFirstElement
+// (just b).
+Allocs ksd_single(const OpCtx &ctx, const Allocs &ext, std::size_t q_towers,
+                  const ExtLayout &L) {
+    std::vector<uint64_t> p_inv(q_towers);
+    for (std::size_t t = 0; t < q_towers; ++t) {
+        uint64_t prod = 1 % L.q_subbase[t];
+        for (uint64_t p : ctx.p_base)
+            prod = mulmod_u64(prod, p % L.q_subbase[t], L.q_subbase[t]);
+        p_inv[t] = invmod_prime(prod, L.q_subbase[t]);
+    }
+    const hazeBasisConvertParams bc = {
+        .src_base = ctx.p_base.data(),
+        .src_base_len = ctx.p_base.size(),
+        .dst_base = L.q_subbase.data(),
+        .dst_base_len = L.q_subbase.size(),
+    };
+    const auto ext_ptrs = ext.as_const();
+    std::vector<const void *> p_part(
+        ext_ptrs.begin() + static_cast<std::ptrdiff_t>(q_towers), ext_ptrs.end());
+    Allocs p_coeff(ctx.p_base.size(), ctx.poly_bytes);
+    REQUIRE(hazeINTTMrp(p_coeff.data(), p_part.data(), ctx.p_base.data(), ctx.p_base.size(),
+                        nullptr) == HAZE_SUCCESS);
+    Allocs y_coeff(q_towers, ctx.poly_bytes);
+    REQUIRE(hazeBasisConvert(y_coeff.data(), p_coeff.as_const().data(), &bc, nullptr) ==
+            HAZE_SUCCESS);
+    Allocs y_eval(q_towers, ctx.poly_bytes);
+    REQUIRE(hazeNTTMrp(y_eval.data(), y_coeff.as_const().data(), L.q_subbase.data(),
+                       L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    std::vector<const void *> q_part(
+        ext_ptrs.begin(), ext_ptrs.begin() + static_cast<std::ptrdiff_t>(q_towers));
+    Allocs diff(q_towers, ctx.poly_bytes);
+    REQUIRE(hazeSubMrp(diff.data(), q_part.data(), y_eval.as_const().data(),
+                       L.q_subbase.data(), L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    Allocs out(q_towers, ctx.poly_bytes);
+    REQUIRE(hazeMulScalarMrp(out.data(), diff.as_const().data(), p_inv.data(),
+                             L.q_subbase.data(), L.q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    return out;
+}
+
+// Zero an extended (qp_total) Allocs in place.
+void zero_ext_inplace(const OpCtx &ctx, Allocs &ext, const ExtLayout &L) {
+    for (std::size_t t = 0; t < L.qp_total; ++t)
+        REQUIRE(hazeMemset(ext.data()[t], 0, ctx.poly_bytes) == HAZE_SUCCESS);
+}
+
+// Pure automorphism on a Q-only chain (no keyswitch).
+Allocs automorph_q(const OpCtx &ctx, const Allocs &c, std::uint32_t auto_index,
+                   const std::vector<uint64_t> &q_subbase) {
+    Allocs out(q_subbase.size(), ctx.poly_bytes);
+    REQUIRE(hazeAutomorphMrp(out.data(), c.as_const().data(),
+                             static_cast<std::uint64_t>(auto_index), q_subbase.data(),
+                             q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    return out;
+}
+
+void add_q_inplace(const OpCtx & /*ctx*/, Allocs &dst, const Allocs &src,
+                   const std::vector<uint64_t> &q_subbase) {
+    REQUIRE(hazeAddMrp(dst.data(), dst.as_const().data(), src.as_const().data(),
+                       q_subbase.data(), q_subbase.size(), nullptr) == HAZE_SUCCESS);
+}
+
+// Mirror cc->KeySwitchExt(ct, addFirst): extends ct to Q∥P via multiplication
+// by PModq on the Q rows; P rows are zero. When addFirst=false, the c0 (b)
+// component is fully zero (Q rows too).
+CtExt key_switch_ext(const OpCtx &ctx, const Ct &ct, const ExtLayout &L,
+                     const std::vector<std::uint64_t> &p_mod_q, bool addFirst) {
+    const std::size_t q_towers = ct.towers();
+    Allocs a_ext = extend_to_qp(ctx, ct.c1(), q_towers, L, p_mod_q);
+    Allocs b_ext;
+    if (addFirst) {
+        b_ext = extend_to_qp(ctx, ct.c0(), q_towers, L, p_mod_q);
+    } else {
+        b_ext = Allocs(L.qp_total, ctx.poly_bytes);
+        zero_ext_inplace(ctx, b_ext, L);
+    }
+    return CtExt{.b = std::move(b_ext), .a = std::move(a_ext), .q_towers = q_towers};
+}
+
+// Mirror cc->EvalFastRotationExt(ct, k, digits, addFirst). k != 0 applies the
+// rotation key at slot index k to the precomputed digits, optionally adds the
+// extended c0, then automorphs. k == 0 reduces to KeySwitchExt.
+CtExt fast_rotation_ext(const OpCtx &ctx, const Ct &ct, const Allocs &digits,
+                        const BootstrapKeys &bk, std::int32_t k, bool addFirst,
+                        const ExtLayout &L) {
+    const std::size_t q_towers = ct.towers();
+    if (k == 0)
+        return key_switch_ext(ctx, ct, L, bk.p_mod_q, addFirst);
+    const std::uint32_t auto_index =
+        ctx.cc->FindAutomorphismIndex(static_cast<std::uint32_t>(k));
+    auto it = bk.rotation_keys.find(auto_index);
+    REQUIRE(it != bk.rotation_keys.end());
+    TrimmedKey tk = trim_key(ctx, it->second.limbs, q_towers, L);
+    CtExt rot = keyswitch_ext(ctx, digits, ct.c1(), tk, q_towers, L);
+    if (addFirst) {
+        Allocs c0_ext = extend_to_qp(ctx, ct.c0(), q_towers, L, bk.p_mod_q);
+        REQUIRE(hazeAddMrp(rot.b.data(), rot.b.as_const().data(),
+                           c0_ext.as_const().data(), L.qp_base.data(), L.qp_base.size(),
+                           nullptr) == HAZE_SUCCESS);
+    }
+    automorph_ext_inplace(ctx, rot, auto_index, L);
+    return rot;
+}
+
 const RotationKeyEntry &lookup_rotation_key(const OpCtx &ctx, const BootstrapKeys &bk,
                                             std::int32_t slot_idx) {
     const std::uint32_t auto_index =
@@ -412,6 +519,104 @@ Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
             *result = add(ctx, *result, inner_q);
     }
     return std::move(*result);
+}
+
+// OpenFHE-mirroring single-stage linear transform (ckksrns-fhe.cpp:1860
+// EvalLinearTransform). Accumulates `result` in the extended (Q∥P) basis
+// across all giant steps, tracks the c0 element in a separate `first` (Q
+// form), and does ONE final KeySwitchDown with result.c0 += first. Mirrors
+// the canonical algorithm op-for-op; works for any slot count (sparse and
+// fully-packed) at levelBudget {1,1}.
+Ct linear_transform_v2(const OpCtx &ctx, const BootstrapKeys &bk,
+                       const std::vector<Allocs> &matrices, const Ct &ct) {
+    REQUIRE(!matrices.empty());
+    const std::size_t slots = matrices.size();
+    const std::uint32_t g = bk.params.chebyshev_degree;
+    const std::size_t bStep = (g == 0)
+                                  ? static_cast<std::size_t>(std::ceil(std::sqrt(slots)))
+                                  : g;
+    const std::size_t gStep = (slots + bStep - 1) / bStep;
+
+    const std::size_t q_towers = ct.towers();
+    const std::size_t num_part_q = bk.relin_key.a_limbs.size();
+    REQUIRE(num_part_q > 0);
+    const ExtLayout L = build_ext_layout(ctx, q_towers, num_part_q);
+
+    // Hoist ModUp on ct.c1 for the baby-step loop.
+    Allocs digits = precompute_digits(ctx, ct.c1(), q_towers, L);
+
+    // Precompute baby rotations 1..bStep-1: fastRotation[j-1] = FastRotExt(ct, j, addFirst=true).
+    std::vector<CtExt> fastRotation;
+    fastRotation.reserve(bStep > 0 ? bStep - 1 : 0);
+    for (std::size_t j = 1; j < bStep; ++j) {
+        fastRotation.push_back(fast_rotation_ext(ctx, ct, digits, bk,
+                                                  static_cast<std::int32_t>(j), true, L));
+    }
+
+    // Output metadata for the final ciphertext.
+    const bool is_stc = (&matrices == &bk.stc_matrices);
+    const double matrix_sf = is_stc ? bk.stc_pt_sf : bk.cts_pt_sf;
+    const std::uint32_t out_nsd = ct.noise_scale_deg() + 1;
+    const double out_sf = ct.scaling_factor() * matrix_sf;
+    const std::uint32_t out_level = ct.level();
+
+    CtExt result_ext;
+    Allocs first;
+    bool initialized = false;
+
+    for (std::size_t j = 0; j < gStep; ++j) {
+        // inner = sum_i mult_ext_pt(<KSExt(ct,true) if i==0 else fastRotation[i-1]>, A[bStep*j+i]).
+        CtExt inner;
+        bool inner_init = false;
+        for (std::size_t i = 0; i < bStep; ++i) {
+            const std::size_t idx = (bStep * j) + i;
+            if (idx >= slots) break;
+            CtExt ks_first;  // storage for the i==0 KSExt; lives across the mult.
+            const CtExt *src;
+            if (i == 0) {
+                ks_first = key_switch_ext(ctx, ct, L, bk.p_mod_q, true);
+                src = &ks_first;
+            } else {
+                src = &fastRotation[i - 1];
+            }
+            CtExt prod = mult_ext_pt(ctx, *src, matrices[idx], L);
+            if (!inner_init) {
+                inner = std::move(prod);
+                inner_init = true;
+            } else {
+                add_ext_inplace(ctx, inner, prod, L);
+            }
+        }
+        REQUIRE(inner_init);
+
+        if (j == 0) {
+            // first = KSDFirstElement(inner) (just the c0/b component of KSD).
+            first = ksd_single(ctx, inner.b, q_towers, L);
+            // Zero inner.b → result_ext (the c0 is tracked separately).
+            zero_ext_inplace(ctx, inner.b, L);
+            result_ext = std::move(inner);
+            initialized = true;
+        } else {
+            // KSD inner → Q, accumulate c0 into first, FastRotExt the result
+            // back into the extended basis, accumulate into result_ext.
+            Ct inner_q = keyswitch_down(ctx, inner, L, out_nsd, out_sf, out_level);
+            const std::uint32_t auto_index =
+                ctx.cc->FindAutomorphismIndex(static_cast<std::uint32_t>(bStep * j));
+            Allocs c0_rot = automorph_q(ctx, inner_q.c0(), auto_index, L.q_subbase);
+            add_q_inplace(ctx, first, c0_rot, L.q_subbase);
+            Allocs inner_digits = precompute_digits(ctx, inner_q.c1(), q_towers, L);
+            CtExt rotated_ext =
+                fast_rotation_ext(ctx, inner_q, inner_digits, bk,
+                                  static_cast<std::int32_t>(bStep * j), false, L);
+            add_ext_inplace(ctx, result_ext, rotated_ext, L);
+        }
+    }
+    REQUIRE(initialized);
+
+    // Final: KSD result_ext → Q, then result.c0 += first.
+    Ct result_q = keyswitch_down(ctx, result_ext, L, out_nsd, out_sf, out_level);
+    add_q_inplace(ctx, result_q.c0(), first, L.q_subbase);
+    return result_q;
 }
 
 } // namespace haze::test::ops
