@@ -1153,12 +1153,9 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         flush_pair(ctEnc, ctEncI);
 
         ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
-        // Flush between the two Chebys — they're independent (different
-        // inputs and outputs) so each can run in its own recording. This
-        // mirrors phasefs07's d2h between F1 and F2 and avoids any
-        // single-recording 2-Cheby state interaction.
-        flush_pair(ctEnc, ctEncI);
         ctEncI = eval_chebyshev_series(ctx, ctEncI, coefficients);
+        // Safe boundary: ctEnc and ctEncI are next read exactly once by
+        // rescale, then DA, then mono/add. Each read consumes one shadow.
         flush_pair(ctEnc, ctEncI);
 
     // OpenFHE FIXEDAUTO: unconditional ModReduce after Chebyshev
