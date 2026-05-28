@@ -3446,3 +3446,120 @@ TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[.fsladder][e2e]") 
     std::cerr << "  [phasefs01] bad_towers=" << bad << " of " << total << "\n";
     REQUIRE(bad == 0);
 }
+
+// =====================================================================
+// Niobium full-slot {4,4} phase ladder
+// =====================================================================
+//
+// Target: byte parity vs cc->EvalBootstrap at the niobium-fhetch test config
+// (deps/niobium-fhetch/tests/bootstrap/client.cpp):
+//   ringDim 2048, FLEXIBLEAUTO, ScalingModSize=59, FirstModSize=60,
+//   UNIFORM_TERNARY, HEStd_NotSet, levelBudget {4,4}, levelsAfterBootstrap=10,
+//   depth = 10 + GetBootstrapDepth({4,4}, UNIFORM_TERNARY),
+//   numSlots = ringDim/2 = 1024.
+//
+// Hidden under [.nio] so default test runs aren't broken while the ladder is
+// in progress. Opt-in via name or [.nio]. Run with HAZE_TARGET=local.
+// =====================================================================
+
+namespace {
+struct NiobCtx {
+    haze::test::ops::OpCtx ctx;
+    std::uint32_t slots{};
+    std::uint32_t depth{};
+};
+
+NiobCtx make_nio_ctx() {
+    using namespace lbcrypto;
+    NiobCtx out;
+    const std::vector<std::uint32_t> levelBudget = {4, 4};
+    const std::uint32_t levelsAfterBootstrap = 10;
+    out.depth = levelsAfterBootstrap +
+                FHECKKSRNS::GetBootstrapDepth(levelBudget, UNIFORM_TERNARY);
+    CCParams<CryptoContextCKKSRNS> params;
+    params.SetSecretKeyDist(UNIFORM_TERNARY);
+    params.SetSecurityLevel(HEStd_NotSet);
+    params.SetRingDim(2048);
+    params.SetScalingModSize(59);
+    params.SetScalingTechnique(FLEXIBLEAUTO);
+    params.SetFirstModSize(60);
+    params.SetMultiplicativeDepth(out.depth);
+    out.ctx.cc = GenCryptoContext(params);
+    REQUIRE(out.ctx.cc);
+    out.ctx.cc->Enable(PKE);
+    out.ctx.cc->Enable(KEYSWITCH);
+    out.ctx.cc->Enable(LEVELEDSHE);
+    out.ctx.cc->Enable(ADVANCEDSHE);
+    out.ctx.cc->Enable(FHE);
+    out.ctx.keys = out.ctx.cc->KeyGen();
+    out.ctx.cc->EvalMultKeyGen(out.ctx.keys.secretKey);
+    out.ctx.ring_dim = out.ctx.cc->GetRingDimension();
+    out.ctx.poly_bytes = static_cast<std::size_t>(out.ctx.ring_dim) * sizeof(std::uint64_t);
+    out.ctx.mode = FLEXIBLEAUTO;
+    out.slots = static_cast<std::uint32_t>(out.ctx.ring_dim / 2);
+    out.ctx.cc->EvalBootstrapSetup(levelBudget, {0, 0}, out.slots, 11);
+    out.ctx.cc->EvalBootstrapKeyGen(out.ctx.keys.secretKey, out.slots);
+    return out;
+}
+
+lbcrypto::Ciphertext<lbcrypto::DCRTPoly>
+make_nio_depleted_ct(const NiobCtx &n, std::uint32_t leave_towers = 6) {
+    std::vector<double> v(n.slots);
+    for (std::uint32_t i = 0; i < n.slots; ++i) v[i] = 0.1 + 0.0003 * i;
+    auto pt = n.ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, n.slots);
+    auto ct = n.ctx.cc->Encrypt(n.ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > leave_towers)
+        n.ctx.cc->EvalMultInPlace(ct, 1.0);
+    return ct;
+}
+
+[[maybe_unused]] void rns_equal_or_report(const std::string &label,
+                         const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &a,
+                         const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &b) {
+    REQUIRE(a->GetElements()[0].GetNumOfElements() ==
+            b->GetElements()[0].GetNumOfElements());
+    const auto towers = a->GetElements()[0].GetNumOfElements();
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        for (std::size_t t = 0; t < towers; ++t) {
+            const auto &av = a->GetElements()[elem]
+                                 .GetElementAtIndex(static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            const auto &bv = b->GetElements()[elem]
+                                 .GetElementAtIndex(static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            REQUIRE(av.GetLength() == bv.GetLength());
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < av.GetLength(); ++i)
+                if (av[i].ConvertToInt<std::uint64_t>() !=
+                    bv[i].ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) {
+                ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [" << label << "] BAD elem=" << elem
+                              << " t=" << t << " mism=" << mism
+                              << "/" << av.GetLength() << "\n";
+            }
+        }
+    }
+    std::cerr << "  [" << label << "] bad_towers=" << bad << " of "
+              << (2 * towers) << "\n";
+    REQUIRE(bad == 0);
+}
+} // namespace
+
+// Rung 1: verify cc->EvalBootstrap runs at the niobium config (baseline truth).
+TEST_CASE("nio01 cc->EvalBootstrap runs at niobium config", "[.nio][e2e]") {
+    using namespace lbcrypto;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    std::cerr << "  [nio01] depth=" << n.depth << " slots=" << n.slots << "\n";
+    auto ct = make_nio_depleted_ct(n, 6);
+    std::cerr << "  [nio01] input towers="
+              << ct->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct->GetNoiseScaleDeg() << "\n";
+    auto out = n.ctx.cc->EvalBootstrap(ct);
+    REQUIRE(out);
+    std::cerr << "  [nio01] output towers="
+              << out->GetElements()[0].GetNumOfElements()
+              << " nsd=" << out->GetNoiseScaleDeg()
+              << " level=" << out->GetLevel() << "\n";
+}
