@@ -1124,8 +1124,13 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         ctEncI = rescale(ctx, ctEncI);
     }
 
-    // Double-angle iterations (3 for UNIFORM_TERNARY, K=16).
-    constexpr std::uint32_t numIter = 3;
+    // Double-angle iterations: R_UNIFORM=6 for UNIFORM_TERNARY, R_SPARSE=3
+    // otherwise — same source as the sparse path (ckksrns-fhe.cpp:727-731).
+    // The previous hardcoded 3 silently diverged for UNIFORM_TERNARY (the
+    // niobium full-slot config).
+    const std::uint32_t numIter = bk.params.double_angle_iterations > 0
+                                      ? bk.params.double_angle_iterations
+                                      : 3;
     apply_double_angle_iterations(ctx, ctEnc, numIter);
     apply_double_angle_iterations(ctx, ctEncI, numIter);
 
