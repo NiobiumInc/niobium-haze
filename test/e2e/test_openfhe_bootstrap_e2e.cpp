@@ -3563,3 +3563,179 @@ TEST_CASE("nio01 cc->EvalBootstrap runs at niobium config", "[.nio][e2e]") {
               << " nsd=" << out->GetNoiseScaleDeg()
               << " level=" << out->GetLevel() << "\n";
 }
+
+namespace {
+// Local copy of OpenFHE's g_coefficientsUniform (ckksrns-fhe.h:469 — private).
+static const std::vector<double> nio_g_coefficientsUniform{
+    0.15421426400235561,    -0.0037671538417132409,  0.16032011744533031,
+    -0.0034539657223742453, 0.17711481926851286,     -0.0027619720033372291,
+    0.19949802549604084,    -0.0015928034845171929,  0.21756948616367638,
+    0.00010729951647566607, 0.21600427371240055,     0.0022171399198851363,
+    0.17647500259573556,    0.0042856217194480991,   0.086174491919472254,
+    0.0054640252312780444,  -0.046667988130649173,   0.0047346914623733714,
+    -0.17712686172280406,   0.0016205080004247200,   -0.22703114241338604,
+    -0.0028145845916205865, -0.13123089730288540,    -0.0056345646688793190,
+    0.078818395388692147,   -0.0037868875028868542,  0.23226434602675575,
+    0.0021116338645426574,  0.13985510526186795,     0.0059365649669377071,
+    -0.13918475289368595,   0.0018580676740836374,   -0.23254376365752788,
+    -0.0054103844866927788, 0.056840618403875359,    -0.0035227192748552472,
+    0.25667909012207590,    0.0055029673963982112,   -0.073334392714092062,
+    0.0027810273357488265,  -0.24912792167850559,    -0.0069524866497120566,
+    0.21288810409948347,    0.0017810057298691725,   0.088760951809475269,
+    0.0055957188940032095,  -0.31937177676259115,    -0.0087539416335935556,
+    0.34748800245527145,    0.0075378299617709235,   -0.25116537379803394,
+    -0.0047285674679876204, 0.13970502851683486,     0.0023672533925155220,
+    -0.063649401080083698,  -0.00098993213448982727, 0.024597838934816905,
+    0.00035553235917057483, -0.0082485030307578155,  -0.00011176184313622549,
+    0.0024390574829093264,  0.000031180384864488629, -0.00064373524734389861,
+    -7.8036008952377965e-6, 0.00015310015145922058,  1.7670804180220134e-6,
+    -0.000033066844379476900, -3.6460909134279425e-7, 6.5276969021754105e-6,
+    6.8957843666189918e-8,  -1.1842811187642386e-6,  -1.2015133285307312e-8,
+    1.9839339947648331e-7,  1.9372045971100854e-9,   -3.0815418032523593e-8,
+    -2.9013806338735810e-10, 4.4540904298173700e-9,  4.0505136697916078e-11,
+    -6.0104912807134771e-10, -5.2873323696828491e-12, 7.5943206779351725e-11,
+    6.4679566322060472e-13, -9.0081200925539902e-12, -7.4396949275292252e-14,
+    1.0057423059167244e-12, 8.1701187638005194e-15,  -1.0611736208855373e-13,
+    -8.9597492970451533e-16, 1.1421575296031385e-14};
+
+// Apply OpenFHE's ApplyDoubleAngleIterations body (private symbol; inlined).
+void nio_apply_double_angle(lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct, std::uint32_t numIter) {
+    constexpr double twoPi = 2.0 * M_PI;
+    auto cc = ct->GetCryptoContext();
+    for (std::int32_t i = 1 - static_cast<std::int32_t>(numIter); i <= 0; ++i) {
+        const double scalar = -std::pow(twoPi, -std::pow(2.0, i));
+        cc->EvalSquareInPlace(ct);
+        cc->EvalAddInPlace(ct, cc->EvalAdd(ct, scalar));
+        cc->ModReduceInPlace(ct);
+    }
+}
+
+// Manual OpenFHE-side replication of cc->EvalBootstrap (FLEXIBLEAUTO + full-slot
+// + {4,4} path). Builds the entire bootstrap from public cc->/fhe_ckks->/algo->
+// primitives. AdjustCiphertext, ApplyDoubleAngleIterations, and the coefficient
+// list are private so they're inlined above.
+lbcrypto::Ciphertext<lbcrypto::DCRTPoly>
+nio_manual_bootstrap(const NiobCtx &n,
+                     const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct_in) {
+    using namespace lbcrypto;
+    const auto cc = n.ctx.cc;
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(cc->GetCryptoParameters());
+    auto algo = cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    REQUIRE(fhe_ckks);
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t compositeDegree = cp->GetCompositeDegree();
+    const std::uint32_t lvl = 0; // FLEXIBLEAUTO
+
+    // Correction / pre-scalars (mirrors ckksrns-fhe.cpp:586-666 derivation).
+    const double qDouble = cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    constexpr std::int32_t correction_factor = 11;
+    const std::int32_t correction = correction_factor - deg;
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    constexpr double K_UNIFORM = 512.0;
+    const std::uint32_t N = static_cast<std::uint32_t>(cc->GetRingDimension());
+
+    auto raised = ct_in->Clone();
+
+    // ---- AdjustCiphertext (inlined FLEXIBLEAUTO body, ckksrns-fhe.cpp:2256) ----
+    while (raised->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+    {
+        const double targetSF = cp->GetScalingFactorReal(lvl);
+        const double sourceSF = raised->GetScalingFactor();
+        const std::uint32_t numTowers = raised->GetElements()[0].GetNumOfElements();
+        double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        for (std::uint32_t j = 2; j <= compositeDegree; ++j)
+            modToDrop *= cp->GetElementParams()->GetParams()[numTowers-j]
+                ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF / sourceSF) * (modToDrop / sourceSF)
+                                        * std::pow(2.0, -correction);
+        cc->EvalMultInPlace(raised, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+        raised->SetScalingFactor(targetSF);
+    }
+
+    // ---- ModRaise: re-embed tower 0 into full Q chain (ckksrns-fhe.cpp:619-628) ----
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0 = static_cast<std::uint32_t>(ep->GetParams().size());
+        auto elements = raised->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), epp);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised->SetElements(std::move(elements));
+        raised->SetLevel(L0 - raised->GetElements()[0].GetNumOfElements());
+    }
+
+    // ---- Scale and pre-CtS ModReduce (ckksrns-fhe.cpp:666-689) ----
+    cc->EvalMultInPlace(raised, pre * (1.0 / (K_UNIFORM * static_cast<double>(N))));
+    // partial_sum loop is empty for full slots (limit = N/(2*slots) = 1).
+    algo->ModReduceInternalInPlace(raised, compositeDegree);
+
+    // ---- CoeffsToSlots ({4,4} uses the FFT path) ----
+    auto ctxtEnc = fhe_ckks->EvalCoeffsToSlots(precom.m_U0hatTPreFFT, raised);
+
+    // ---- Conjugate + real/imag split (ckksrns-fhe.cpp:695-712) ----
+    const auto &evalKeyMap = cc->GetEvalAutomorphismKeyMap(ctxtEnc->GetKeyTag());
+    auto conj = FHECKKSRNS::Conjugate(ctxtEnc, evalKeyMap);
+    auto ctxtEncI = cc->EvalSub(ctxtEnc, conj);
+    cc->EvalAddInPlace(ctxtEnc, conj);
+    algo->MultByMonomialInPlace(ctxtEncI, 3 * n.slots);
+    if (ctxtEnc->GetNoiseScaleDeg() == 2) {
+        algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+        algo->ModReduceInternalInPlace(ctxtEncI, compositeDegree);
+    }
+
+    // ---- Chebyshev approximation of mod (ckksrns-fhe.cpp:719-720) ----
+    ctxtEnc  = algo->EvalChebyshevSeries(ctxtEnc, nio_g_coefficientsUniform, -1.0, 1.0);
+    ctxtEncI = algo->EvalChebyshevSeries(ctxtEncI, nio_g_coefficientsUniform, -1.0, 1.0);
+
+    // ---- ModReduce + double-angle (ckksrns-fhe.cpp:723-733) ----
+    algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+    algo->ModReduceInternalInPlace(ctxtEncI, compositeDegree);
+    constexpr std::uint32_t R_UNIFORM = 6;
+    nio_apply_double_angle(ctxtEnc, R_UNIFORM);
+    nio_apply_double_angle(ctxtEncI, R_UNIFORM);
+
+    // ---- Combine + scale (ckksrns-fhe.cpp:735-741) ----
+    algo->MultByMonomialInPlace(ctxtEncI, n.slots);
+    cc->EvalAddInPlaceNoCheck(ctxtEnc, ctxtEncI);
+    const std::uint64_t scalar =
+        static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    algo->MultByIntegerInPlace(ctxtEnc, scalar);
+
+    // ---- Pre-StC ModReduce + SlotsToCoeffs (ckksrns-fhe.cpp:756-760) ----
+    algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+    auto ctxtDec = fhe_ckks->EvalSlotsToCoeffs(precom.m_U0PreFFT, ctxtEnc);
+
+    // ---- corFactor (ckksrns-fhe.cpp:851-852) ----
+    const std::uint64_t corFactor =
+        static_cast<std::uint64_t>(1) << static_cast<std::uint64_t>(correction);
+    algo->MultByIntegerInPlace(ctxtDec, corFactor);
+
+    return ctxtDec;
+}
+} // namespace
+
+// Rung 2: manual OpenFHE replication of EvalBootstrap, byte-equal to cc->EvalBootstrap.
+TEST_CASE("nio02 manual cc->-replication of EvalBootstrap", "[.nio][e2e]") {
+    using namespace lbcrypto;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto ct = make_nio_depleted_ct(n, 6);
+    auto ref = n.ctx.cc->EvalBootstrap(ct);
+    auto manual = nio_manual_bootstrap(n, ct);
+    std::cerr << "  [nio02] ref towers=" << ref->GetElements()[0].GetNumOfElements()
+              << " manual towers=" << manual->GetElements()[0].GetNumOfElements() << "\n";
+    rns_equal_or_report("nio02", manual, ref);
+}
