@@ -14,7 +14,9 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <haze/haze.h>
 #include <memory>
+#include <niobium/compiler.h>
 #include <openfhe.h>
 #include <scheme/ckksrns/ckksrns-fhe.h>
 #include <scheme/ckksrns/ckksrns-utils.h>
@@ -25,24 +27,37 @@ namespace haze::test::ops {
 namespace {
 
 // Encode a constant value at the level matching `ref_ct` and h2d it.
+// The OpenFHE encoding work (MakeCKKSPackedPlaintext + SetFormat) is CPROBES-
+// instrumented and would emit stray sr_* IR into the active haze recording
+// — niobium-haze phasefs05 / phasefs14 reproduce the resulting Cheby
+// divergence. Wrap the OpenFHE-touching block in PausedRecording so the
+// host-only encoding stays out of the trace; the extracted residues land in
+// haze memory via Allocs's HOST_TO_DEVICE memcpy, which is the only IR-
+// emitting step we want.
 Allocs encode_const_pt(const OpCtx &ctx, const Ct &ref_ct, double scalar,
                        std::uint32_t noise_scale_deg) {
     using namespace lbcrypto;
     const std::uint32_t level = static_cast<std::uint32_t>(ctx.q_base.size() - ref_ct.towers());
-    Plaintext pt =
-        ctx.cc->MakeCKKSPackedPlaintext(std::vector<std::complex<double>>(
-                                            ctx.cc->GetEncodingParams()->GetBatchSize(),
-                                            std::complex<double>(scalar, 0)),
-                                        noise_scale_deg, level);
-    auto pt_elem = pt->GetElement<DCRTPoly>();
-    pt_elem.SetFormat(Format::EVALUATION);
     std::vector<std::vector<std::uint64_t>> chain(ref_ct.towers());
-    for (std::size_t t = 0; t < ref_ct.towers(); ++t) {
-        const auto &np = pt_elem.GetElementAtIndex(static_cast<usint>(t));
-        const auto &vals = np.GetValues();
-        chain[t].resize(ctx.ring_dim);
-        for (std::size_t i = 0; i < ctx.ring_dim; ++i)
-            chain[t][i] = vals[i].template ConvertToInt<std::uint64_t>();
+    {
+        struct PausedRec {
+            PausedRec() noexcept { ::niobium::compiler().pause(); }
+            ~PausedRec() noexcept { ::niobium::compiler().resume(); }
+        } _pause;
+        Plaintext pt =
+            ctx.cc->MakeCKKSPackedPlaintext(std::vector<std::complex<double>>(
+                                                ctx.cc->GetEncodingParams()->GetBatchSize(),
+                                                std::complex<double>(scalar, 0)),
+                                            noise_scale_deg, level);
+        auto pt_elem = pt->GetElement<DCRTPoly>();
+        pt_elem.SetFormat(Format::EVALUATION);
+        for (std::size_t t = 0; t < ref_ct.towers(); ++t) {
+            const auto &np = pt_elem.GetElementAtIndex(static_cast<usint>(t));
+            const auto &vals = np.GetValues();
+            chain[t].resize(ctx.ring_dim);
+            for (std::size_t i = 0; i < ctx.ring_dim; ++i)
+                chain[t][i] = vals[i].template ConvertToInt<std::uint64_t>();
+        }
     }
     return Allocs(chain);
 }
@@ -149,28 +164,38 @@ Ct mult_int_scalar(const OpCtx &ctx, const Ct &ct, std::uint64_t scalar) {
 }
 
 // OpenFHE's MultByMonomialInPlace.
+// The OpenFHE-side monomial construction (NativePoly + SetFormat) emits stray
+// CPROBES IR into the active haze recording — see encode_const_pt above for
+// the same pattern. Wrap in PausedRecording so only the hazeMulMrp below is
+// in the trace.
 Ct mult_monomial(const OpCtx &ctx, const Ct &ct, std::uint32_t power) {
     using namespace lbcrypto;
     const std::uint32_t M = static_cast<std::uint32_t>(2 * ctx.ring_dim);
-    auto params = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(ctx.cc->GetCryptoParameters());
-    auto fullParams = params->GetElementParams();
-    auto paramsNative = fullParams->GetParams()[0];
-    NativePoly monomial(paramsNative, Format::COEFFICIENT, true);
-    const std::uint32_t powerReduced = power % M;
-    monomial[power % ctx.ring_dim] =
-        powerReduced < ctx.ring_dim ? NativeInteger(1)
-                                    : paramsNative->GetModulus() - NativeInteger(1);
-    DCRTPoly monomialDCRT(fullParams, Format::COEFFICIENT, true);
-    monomialDCRT = monomial;
-    monomialDCRT.SetFormat(Format::EVALUATION);
-
     std::vector<std::vector<std::uint64_t>> chain(ct.towers());
-    for (std::size_t t = 0; t < ct.towers(); ++t) {
-        const auto &np = monomialDCRT.GetElementAtIndex(static_cast<usint>(t));
-        const auto &vals = np.GetValues();
-        chain[t].resize(ctx.ring_dim);
-        for (std::size_t i = 0; i < ctx.ring_dim; ++i)
-            chain[t][i] = vals[i].template ConvertToInt<std::uint64_t>();
+    {
+        struct PausedRec {
+            PausedRec() noexcept { ::niobium::compiler().pause(); }
+            ~PausedRec() noexcept { ::niobium::compiler().resume(); }
+        } _pause;
+        auto params = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(ctx.cc->GetCryptoParameters());
+        auto fullParams = params->GetElementParams();
+        auto paramsNative = fullParams->GetParams()[0];
+        NativePoly monomial(paramsNative, Format::COEFFICIENT, true);
+        const std::uint32_t powerReduced = power % M;
+        monomial[power % ctx.ring_dim] =
+            powerReduced < ctx.ring_dim ? NativeInteger(1)
+                                        : paramsNative->GetModulus() - NativeInteger(1);
+        DCRTPoly monomialDCRT(fullParams, Format::COEFFICIENT, true);
+        monomialDCRT = monomial;
+        monomialDCRT.SetFormat(Format::EVALUATION);
+
+        for (std::size_t t = 0; t < ct.towers(); ++t) {
+            const auto &np = monomialDCRT.GetElementAtIndex(static_cast<usint>(t));
+            const auto &vals = np.GetValues();
+            chain[t].resize(ctx.ring_dim);
+            for (std::size_t i = 0; i < ctx.ring_dim; ++i)
+                chain[t][i] = vals[i].template ConvertToInt<std::uint64_t>();
+        }
     }
     Allocs mono_chain(chain);
     std::vector<uint64_t> base(ctx.q_base.begin(),
