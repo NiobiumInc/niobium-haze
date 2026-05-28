@@ -4022,6 +4022,407 @@ TEST_CASE("phasefs04 full-slot {1,1} ops::bootstrap byte-equal e2e",
     REQUIRE(bad == 0);
 }
 
+// phasefs06: isolate the multi-stage eval_coeffs_to_slots at the niobium
+// config. Builds the raised (post-rescale) intermediate on both OpenFHE and
+// haze sides — the same intermediate as nio02 confirmed byte-exact — then
+// runs fhe_ckks->EvalCoeffsToSlots vs ops::eval_coeffs_to_slots and compares
+// bytes. Localizes CtS divergence in isolation from the rest of bootstrap.
+TEST_CASE("phasefs06 niobium-config eval_coeffs_to_slots == EvalCoeffsToSlots",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto ct = make_nio_depleted_ct(n, 6);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+    auto algo = n.ctx.cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t compositeDegree = cp->GetCompositeDegree();
+
+    const double qDouble = cp->GetElementParams()->GetParams()[0]
+        ->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(n.ctx.ring_dim);
+
+    // ---- OpenFHE pre-CtS (mirrors nio_manual_bootstrap) ----
+    auto raised = ct->Clone();
+    while (raised->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+    {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised->GetScalingFactor();
+        const std::uint32_t numTowers = raised->GetElements()[0].GetNumOfElements();
+        double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        for (std::uint32_t j = 2; j <= compositeDegree; ++j)
+            modToDrop *= cp->GetElementParams()->GetParams()[numTowers-j]
+                ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        n.ctx.cc->EvalMultInPlace(raised, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+        raised->SetScalingFactor(targetSF);
+    }
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            n.ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0 = static_cast<std::uint32_t>(ep->GetParams().size());
+        auto elements = raised->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), epp);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised->SetElements(std::move(elements));
+        raised->SetLevel(L0 - raised->GetElements()[0].GetNumOfElements());
+    }
+    n.ctx.cc->EvalMultInPlace(raised, pre / (static_cast<double>(K_UNIFORM) * N));
+    algo->ModReduceInternalInPlace(raised, compositeDegree);
+
+    // ---- haze pre-CtS via ops:: helpers (same as bootstrap.cpp) ----
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(n.ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(n.ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(n.ctx, r, adjustmentFactor);
+        r = ops::rescale(n.ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(n.ctx, adjusted);
+    if (dep.towers() > 1) dep = ops::level_reduce(n.ctx, std::move(dep), dep.towers() - 1);
+    auto hr = ops::mod_raise(n.ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(n.ctx, hr, pre/(static_cast<double>(K_UNIFORM) * N));
+    hr = ops::rescale(n.ctx, hr);
+
+    // Sanity: print BSGS params + pre-CtS byte-match.
+    const auto &pe = precom.m_paramsEnc;
+    std::cerr << "  [phasefs06] enc params lvlb=" << pe.lvlb
+              << " layersCollapse=" << pe.layersCollapse
+              << " remCollapse=" << pe.remCollapse
+              << " numRotations=" << pe.numRotations
+              << " b=" << pe.b << " g=" << pe.g
+              << " numRotationsRem=" << pe.numRotationsRem
+              << " bRem=" << pe.bRem << " gRem=" << pe.gRem << "\n";
+    std::cerr << "  [phasefs06] raised towers=" << raised->GetElements()[0].GetNumOfElements()
+              << " nsd=" << raised->GetNoiseScaleDeg()
+              << " hr towers=" << hr.towers() << " nsd=" << hr.noise_scale_deg() << "\n";
+
+    // Pre-CtS byte parity check.
+    {
+        const auto hb_pre = ops::d2h_ct(n.ctx, hr);
+        std::size_t pre_bad = 0;
+        for (std::size_t elem = 0; elem < 2; ++elem) {
+            const auto &rd = raised->GetElements()[elem];
+            const auto &hc = (elem == 0) ? hb_pre.c0 : hb_pre.c1;
+            for (std::size_t t = 0; t < hr.towers(); ++t) {
+                const auto &rv = rd.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+                for (std::size_t i = 0; i < hc[t].size(); ++i)
+                    if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) { ++pre_bad; break; }
+            }
+        }
+        std::cerr << "  [phasefs06] pre-CtS bad_polys=" << pre_bad << " of " << (2 * hr.towers()) << "\n";
+    }
+
+    // ---- CtS on both sides ----
+    auto cts_ref = fhe_ckks->EvalCoeffsToSlots(precom.m_U0hatTPreFFT, raised);
+    auto cts_haze = ops::eval_coeffs_to_slots(n.ctx, bk, bk.cts_matrices_fft, hr);
+    std::cerr << "  [phasefs06] CtS ref towers="
+              << cts_ref->GetElements()[0].GetNumOfElements()
+              << " haze towers=" << cts_haze.towers() << "\n";
+
+    const auto hb = ops::d2h_ct(n.ctx, cts_haze);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = cts_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < cts_haze.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(
+                static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [phasefs06] BAD elem=" << elem << " t=" << t
+                              << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs06] bad_towers=" << bad << " of "
+              << (2 * cts_haze.towers()) << "\n";
+    REQUIRE(bad == 0);
+}
+
+namespace {
+// Compare a haze Ct against an OpenFHE Ciphertext, return bad poly count.
+[[maybe_unused]] std::size_t haze_vs_openfhe(
+    const haze::test::ops::OpCtx &ctx, const haze::test::ops::Ct &h,
+    const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &r, const char *label) {
+    namespace ops = haze::test::ops;
+    const auto hb = ops::d2h_ct(ctx, h);
+    std::size_t bad = 0;
+    const std::size_t towers = h.towers();
+    const std::size_t ref_towers = r->GetElements()[0].GetNumOfElements();
+    if (towers != ref_towers) {
+        std::cerr << "  [" << label << "] TOWER MISMATCH haze=" << towers
+                  << " ref=" << ref_towers << "\n";
+    }
+    const std::size_t min_t = std::min(towers, ref_towers);
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = r->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < min_t; ++t) {
+            const auto &rv = rd.GetElementAtIndex(
+                static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) { ++bad; break; }
+        }
+    }
+    std::cerr << "  [" << label << "] bad_polys=" << bad << " of " << (2 * min_t)
+              << " (haze nsd=" << h.noise_scale_deg() << " sf=" << h.scaling_factor()
+              << " ref nsd=" << r->GetNoiseScaleDeg()
+              << " sf=" << r->GetScalingFactor() << ")\n";
+    return bad;
+}
+} // namespace
+
+// phasefs07: step-by-step trace through the post-CtS bootstrap pipeline at
+// the niobium config. Each step computes OpenFHE-reference and haze-ops
+// side-by-side, comparing bytes. Localizes the first diverging op.
+TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto ct = make_nio_depleted_ct(n, 6);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+    auto algo = n.ctx.cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t compositeDegree = cp->GetCompositeDegree();
+
+    const double qDouble = cp->GetElementParams()->GetParams()[0]
+        ->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(n.ctx.ring_dim);
+
+    // ---- OpenFHE pre-CtS ----
+    auto raised = ct->Clone();
+    while (raised->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+    {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised->GetScalingFactor();
+        const std::uint32_t numTowers = raised->GetElements()[0].GetNumOfElements();
+        double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        for (std::uint32_t j = 2; j <= compositeDegree; ++j)
+            modToDrop *= cp->GetElementParams()->GetParams()[numTowers-j]
+                ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        n.ctx.cc->EvalMultInPlace(raised, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised, compositeDegree);
+        raised->SetScalingFactor(targetSF);
+    }
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            n.ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0 = static_cast<std::uint32_t>(ep->GetParams().size());
+        auto elements = raised->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), epp);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised->SetElements(std::move(elements));
+        raised->SetLevel(L0 - raised->GetElements()[0].GetNumOfElements());
+    }
+    n.ctx.cc->EvalMultInPlace(raised, pre / (static_cast<double>(K_UNIFORM) * N));
+    algo->ModReduceInternalInPlace(raised, compositeDegree);
+
+    // ---- haze pre-CtS ----
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(n.ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(n.ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(n.ctx, r, adjustmentFactor);
+        r = ops::rescale(n.ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(n.ctx, adjusted);
+    if (dep.towers() > 1) dep = ops::level_reduce(n.ctx, std::move(dep), dep.towers() - 1);
+    auto hr = ops::mod_raise(n.ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(n.ctx, hr, pre/(static_cast<double>(K_UNIFORM) * N));
+    hr = ops::rescale(n.ctx, hr);
+
+    // Refresh: replace haze Ct with fresh upload from OpenFHE reference. Use
+    // after each step's d2h-based compare so subsequent ops see clean inputs
+    // (a mid-pipeline d2h evicts inputs from shadow_data, so chained reuse
+    // would feed zero-valued ciphertexts into the next op).
+    auto refresh = [&](haze::test::ops::Ct &h,
+                       const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &r) {
+        h = ops::h2d_ct(n.ctx, r);
+    };
+
+    // Force flush before CtS so the CtS recording is short (long combined
+    // pre-CtS+CtS traces in one epoch produce divergent CtS bytes — likely
+    // a fhetch simulator scaling/overflow issue triggered by long traces).
+    REQUIRE(haze_vs_openfhe(n.ctx, hr, raised, "fs07 0:preCtS") == 0);
+    refresh(hr, raised);
+
+    // ---- Step A: CtS ----
+    auto ctxtEnc = fhe_ckks->EvalCoeffsToSlots(precom.m_U0hatTPreFFT, raised);
+    auto h_ctxtEnc = ops::eval_coeffs_to_slots(n.ctx, bk, bk.cts_matrices_fft, hr);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 A:CtS") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+
+    // ---- Step B: Conjugate ----
+    const auto &evalKeyMap = n.ctx.cc->GetEvalAutomorphismKeyMap(ctxtEnc->GetKeyTag());
+    auto conj = FHECKKSRNS::Conjugate(ctxtEnc, evalKeyMap);
+    auto h_conj = ops::conjugate(n.ctx, h_ctxtEnc, bk.conjugation_key);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_conj, conj, "fs07 B:Conj") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_conj, conj);
+
+    // ---- Step C: Sub (real -> ctxtEncI) / Add (real -> ctxtEnc) ----
+    auto ctxtEncI = n.ctx.cc->EvalSub(ctxtEnc, conj);
+    auto h_ctxtEncI = ops::sub(n.ctx, h_ctxtEnc, h_conj);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 C1:Sub") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_conj, conj);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    n.ctx.cc->EvalAddInPlace(ctxtEnc, conj);
+    h_ctxtEnc = ops::add(n.ctx, h_ctxtEnc, h_conj);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 C2:Add") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+
+    // ---- Step D: MultByMonomial(3*slots) on imag ----
+    algo->MultByMonomialInPlace(ctxtEncI, 3 * n.slots);
+    h_ctxtEncI = ops::mult_monomial_for_test(n.ctx, h_ctxtEncI, 3 * n.slots);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 D:Mono") == 0);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    // ---- Step E: ModReduce both if nsd==2 ----
+    if (ctxtEnc->GetNoiseScaleDeg() == 2) {
+        algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+        algo->ModReduceInternalInPlace(ctxtEncI, compositeDegree);
+        h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+        h_ctxtEncI = ops::rescale(n.ctx, h_ctxtEncI);
+        REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 E1:RescR") == 0);
+        REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 E2:RescI") == 0);
+        refresh(h_ctxtEnc, ctxtEnc);
+        refresh(h_ctxtEncI, ctxtEncI);
+    }
+
+    // ---- Step F: Chebyshev x 2 ----
+    ctxtEnc  = algo->EvalChebyshevSeries(ctxtEnc, nio_g_coefficientsUniform, -1.0, 1.0);
+    ctxtEncI = algo->EvalChebyshevSeries(ctxtEncI, nio_g_coefficientsUniform, -1.0, 1.0);
+    h_ctxtEnc  = ops::eval_chebyshev_series_for_test(n.ctx, h_ctxtEnc, nio_g_coefficientsUniform);
+    h_ctxtEncI = ops::eval_chebyshev_series_for_test(n.ctx, h_ctxtEncI, nio_g_coefficientsUniform);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 F1:ChbR") == 0);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 F2:ChbI") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    // ---- Step G: ModReduce + DoubleAngle x 2 ----
+    algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+    algo->ModReduceInternalInPlace(ctxtEncI, compositeDegree);
+    h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+    h_ctxtEncI = ops::rescale(n.ctx, h_ctxtEncI);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 G1:RescR") == 0);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 G2:RescI") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    nio_apply_double_angle(ctxtEnc, bk.params.double_angle_iterations);
+    nio_apply_double_angle(ctxtEncI, bk.params.double_angle_iterations);
+    ops::apply_double_angle_for_test(n.ctx, h_ctxtEnc, bk.params.double_angle_iterations);
+    ops::apply_double_angle_for_test(n.ctx, h_ctxtEncI, bk.params.double_angle_iterations);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 H1:DAR") == 0);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 H2:DAI") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    // ---- Step I: MultByMonomial(slots) on imag, then Add ----
+    algo->MultByMonomialInPlace(ctxtEncI, n.slots);
+    h_ctxtEncI = ops::mult_monomial_for_test(n.ctx, h_ctxtEncI, n.slots);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI, "fs07 I:MonI") == 0);
+    refresh(h_ctxtEncI, ctxtEncI);
+
+    n.ctx.cc->EvalAddInPlace(ctxtEnc, ctxtEncI);
+    h_ctxtEnc = ops::add(n.ctx, h_ctxtEnc, h_ctxtEncI);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 J:AddRI") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+
+    // ---- Step K: MultByInteger(scalar = K_UNIFORM) ----
+    algo->MultByIntegerInPlace(ctxtEnc, K_UNIFORM);
+    h_ctxtEnc = ops::mult_int_scalar_for_test(n.ctx, h_ctxtEnc, K_UNIFORM);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 K:MulInt") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+
+    // ---- Step L: ModReduce ----
+    algo->ModReduceInternalInPlace(ctxtEnc, compositeDegree);
+    h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 L:Resc") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+
+    // ---- Step M: SlotsToCoeffs ----
+    auto ctxtDec = fhe_ckks->EvalSlotsToCoeffs(precom.m_U0PreFFT, ctxtEnc);
+    auto h_ctxtDec = ops::eval_slots_to_coeffs(n.ctx, bk, bk.stc_matrices_fft, h_ctxtEnc);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtDec, ctxtDec, "fs07 M:StC") == 0);
+    refresh(h_ctxtDec, ctxtDec);
+
+    // ---- Step N: MultByInteger(corFactor) ----
+    const std::uint64_t corFactor = static_cast<std::uint64_t>(1)
+        << static_cast<std::uint64_t>(correction);
+    algo->MultByIntegerInPlace(ctxtDec, corFactor);
+    h_ctxtDec = ops::mult_int_scalar_for_test(n.ctx, h_ctxtDec, corFactor);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtDec, ctxtDec, "fs07 N:CorMul") == 0);
+}
+
 // phasefs05 (e2e): full niobium config (full-slot N/2, levelBudget {4,4},
 // FLEXIBLEAUTO, depth=10+GetBootstrapDepth, scalingMod=59, firstMod=60) —
 // haze ops::bootstrap vs cc->EvalBootstrap. Exercises the multi-stage FFT
