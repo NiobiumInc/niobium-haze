@@ -5061,7 +5061,6 @@ TEST_CASE("phasefs14 pre-CtS + CtS single-trace (no flush between)",
     // Check byte parity right before Cheby.
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, cts_ref, "fs14 pre-chb R") == 0);
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, ctxtEncI_ref, "fs14 pre-chb I") == 0);
-    // ALSO refresh from OpenFHE refs to fully isolate (mirror fs07's pattern).
     h_ctxtEnc = ops::h2d_ct(n.ctx, cts_ref);
     h_ctxtEncI = ops::h2d_ct(n.ctx, ctxtEncI_ref);
     h_ctxtEnc = ops::eval_chebyshev_series_for_test(n.ctx, h_ctxtEnc, nio_g_coefficientsUniform);
@@ -5092,6 +5091,12 @@ TEST_CASE("phasefs05 niobium-config {4,4} full-slot ops::bootstrap byte-equal e2
     auto ct_ref = n.ctx.cc->EvalBootstrap(ct);
     REQUIRE(ct_ref);
     auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    // Clear CPROBE globals accumulated during make_bootstrap_keys / OpenFHE
+    // pre-haze work, so ops::bootstrap's recording starts with a clean
+    // g_address_map / g_data_parent / g_pinned_openfhe_ids. Without this
+    // the simulator's input loader's propagate-through-data-parent step
+    // can fill in stale bytes for trace-referenced polys (phasefs14 repro).
+    ::niobium::compiler().clear_cprobe_state();
     auto haze_refreshed = ops::bootstrap(n.ctx, bk, haze_ct,
                                          ops::BootstrapVariant::Standard);
     std::cerr << "  [phasefs05] ref towers="

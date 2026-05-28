@@ -280,6 +280,15 @@ void EpochState::clear_state_locked() noexcept {
     // Mirror clears to libnbfhetch so a failed materialise can't leak
     // captures into the next epoch; pairs with EpochSession's setup.
     niobium::compiler().clear_captured();
+    // Also wipe OpenFHE CPROBE-side globals (g_address_map, g_data_parent,
+    // g_pinned_openfhe_ids, etc.). Without this, the address mapping built
+    // during one recording bleeds into the next, and a poly that was bound
+    // to a particular FHETCH address in the prior trace gets the same id
+    // in the new one — but with stale data lineage. This corrupts the
+    // simulator's input loading for the next replay (niobium-haze
+    // phasefs05/14 byte-diverged on the niobium config bootstrap until
+    // this clear was added).
+    niobium::compiler().clear_cprobe_state();
 }
 
 void EpochState::reset() noexcept {
