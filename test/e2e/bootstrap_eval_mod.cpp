@@ -1125,21 +1125,11 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         1.0057423059167244e-12, 8.1701187638005194e-15,  -1.0611736208855373e-13,
         -8.9597492970451533e-16, 1.1421575296031385e-14};
 
-    // Force flush — see bootstrap.cpp flush_haze_trace for rationale.
-    // Only safe at boundaries where each Ct on the live set is read exactly
-    // once next — otherwise the second read sees an evicted shadow.
-    auto flush_pair = [](const Ct &a, const Ct &b) {
-        std::uint64_t scratch = 0;
-        REQUIRE(hazeMemcpy(&scratch, a.c0().as_const().data()[0],
-                           sizeof(scratch), HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(&scratch, b.c0().as_const().data()[0],
-                           sizeof(scratch), HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    };
-
     if (fully_packed) {
         // Fully-packed path (slots == N/2): conjugate-split into real+imag,
         // two Chebyshevs, recombine. Mirror OpenFHE's SUB-then-ADD order
-        // (ckksrns-fhe.cpp:701-702).
+        // (ckksrns-fhe.cpp:701-702) — phasefs07 step C1/C2 follow this
+        // sequence byte-exact to cc->EvalBootstrap.
         Ct conj = conjugate(ctx, ct, bk.conjugation_key);
         Ct ctEncI = sub(ctx, ct, conj);
         Ct ctEnc = add(ctx, ct, conj);
@@ -1148,15 +1138,9 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
             ctEnc = rescale(ctx, ctEnc);
             ctEncI = rescale(ctx, ctEncI);
         }
-        // Safe boundary: ct and conj are no longer needed; ctEnc and
-        // ctEncI are each read exactly once next (by Cheby).
-        flush_pair(ctEnc, ctEncI);
 
         ctEnc = eval_chebyshev_series(ctx, ctEnc, coefficients);
         ctEncI = eval_chebyshev_series(ctx, ctEncI, coefficients);
-        // Safe boundary: ctEnc and ctEncI are next read exactly once by
-        // rescale, then DA, then mono/add. Each read consumes one shadow.
-        flush_pair(ctEnc, ctEncI);
 
     // OpenFHE FIXEDAUTO: unconditional ModReduce after Chebyshev
     // (ckksrns-fhe.cpp:724-725) regardless of NSD. Drops a level on each
@@ -1165,7 +1149,6 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
         ctEnc = rescale(ctx, ctEnc);
         ctEncI = rescale(ctx, ctEncI);
     }
-    flush_pair(ctEnc, ctEncI);
 
     // Double-angle iterations: R_UNIFORM=6 for UNIFORM_TERNARY, R_SPARSE=3
     // otherwise — same source as the sparse path (ckksrns-fhe.cpp:727-731).
@@ -1176,7 +1159,6 @@ Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct) {
                                       : 3;
     apply_double_angle_iterations(ctx, ctEnc, numIter);
     apply_double_angle_iterations(ctx, ctEncI, numIter);
-    flush_pair(ctEnc, ctEncI);
 
     // Multiply ctEncI by i via MultByMonomial(slots).
     ctEncI = mult_monomial(ctx, ctEncI, bk.params.slots);
