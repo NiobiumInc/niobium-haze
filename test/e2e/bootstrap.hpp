@@ -26,6 +26,20 @@ enum class BootstrapVariant : std::uint8_t {
     StCFirst,
 };
 
+// Mirrors OpenFHE's ckks_boot_params (ckksrns-utils.h) — the multi-stage BSGS
+// dimensions used by EvalCoeffsToSlots / EvalSlotsToCoeffs for levelBudget>1.
+struct BSGSParams {
+    std::uint32_t lvlb{};            // level budget (=1 for the single-stage path)
+    std::uint32_t layersCollapse{};  // log2(g) — layers folded into one stage
+    std::uint32_t remCollapse{};     // leftover layers in the remainder stage
+    std::uint32_t numRotations{};    // baby+giant rotations per non-remainder stage
+    std::uint32_t b{};               // baby step
+    std::uint32_t g{};               // giant step
+    std::uint32_t numRotationsRem{}; // rotations in the remainder stage
+    std::uint32_t bRem{};
+    std::uint32_t gRem{};
+};
+
 struct BootstrapParams {
     std::uint32_t slots{};
     std::vector<std::uint32_t> level_budget;
@@ -35,6 +49,10 @@ struct BootstrapParams {
     std::uint32_t double_angle_iterations{};
     // Cyclotomic order M = 2 * ring_dim; cached so conjugate() doesn't re-query ctx.
     std::uint64_t cyclotomic_order{};
+    // Multi-stage BSGS params from OpenFHE's precom.m_paramsEnc/m_paramsDec.
+    // Used by eval_coeffs_to_slots / eval_slots_to_coeffs when lvlb > 1.
+    BSGSParams enc;
+    BSGSParams dec;
 };
 
 // Owns the haze device allocations for every bootstrap input that is
@@ -44,8 +62,10 @@ struct BootstrapKeys {
     haze::HybridKeyswitchLimbs conjugation_key;
     // Keyed by automorphism index, matching OpenFHE's FindBootstrapRotationIndices.
     std::map<std::uint32_t, RotationKeyEntry> rotation_keys;
-    std::vector<Allocs> cts_matrices; // U0hatT rows per BSGS level
-    std::vector<Allocs> stc_matrices; // U0 rows per BSGS level
+    std::vector<Allocs> cts_matrices;                     // {1,1}: U0hatT rows per BSGS level.
+    std::vector<Allocs> stc_matrices;                     // {1,1}: U0 rows per BSGS level.
+    std::vector<std::vector<Allocs>> cts_matrices_fft;    // {>1}: per-stage FFT matrices (m_U0hatTPreFFT).
+    std::vector<std::vector<Allocs>> stc_matrices_fft;    // {>1}: per-stage FFT matrices (m_U0PreFFT).
     // Per-plaintext SF (== precom.m_U0hatTPre[i]->GetScalingFactor()) and
     // encoded level. Required to propagate SF through linear_transform in
     // FLEXIBLEAUTO/FLEXIBLEAUTOEXT, where downstream AdjustLevelsAndDepthInPlace

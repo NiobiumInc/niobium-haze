@@ -47,8 +47,9 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
     REQUIRE(sk);
     REQUIRE(slots > 0);
     REQUIRE(level_budget.size() == 2);
-    REQUIRE(level_budget[0] == 1);
-    REQUIRE(level_budget[1] == 1);
+    REQUIRE(level_budget[0] >= 1);
+    REQUIRE(level_budget[1] >= 1);
+    const bool is_lt_bootstrap = (level_budget[0] == 1 && level_budget[1] == 1);
 
     // correctionFactor=11 matches FIDESlib's CKKSBootstrapTest fixture and
     // is required so cc->EvalBootstrap doesn't reject our depth=25 setup.
@@ -100,17 +101,65 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
     REQUIRE(it != precom_map.end());
     const auto &precom = *it->second;
     bk.params.chebyshev_degree = static_cast<std::uint32_t>(precom.m_paramsEnc.g);
+    // Mirror ckks_boot_params for both directions (used by the multi-stage
+    // eval_coeffs_to_slots / eval_slots_to_coeffs).
+    bk.params.enc.lvlb            = precom.m_paramsEnc.lvlb;
+    bk.params.enc.layersCollapse  = precom.m_paramsEnc.layersCollapse;
+    bk.params.enc.remCollapse     = precom.m_paramsEnc.remCollapse;
+    bk.params.enc.numRotations    = precom.m_paramsEnc.numRotations;
+    bk.params.enc.b               = precom.m_paramsEnc.b;
+    bk.params.enc.g               = precom.m_paramsEnc.g;
+    bk.params.enc.numRotationsRem = precom.m_paramsEnc.numRotationsRem;
+    bk.params.enc.bRem            = precom.m_paramsEnc.bRem;
+    bk.params.enc.gRem            = precom.m_paramsEnc.gRem;
+    bk.params.dec.lvlb            = precom.m_paramsDec.lvlb;
+    bk.params.dec.layersCollapse  = precom.m_paramsDec.layersCollapse;
+    bk.params.dec.remCollapse     = precom.m_paramsDec.remCollapse;
+    bk.params.dec.numRotations    = precom.m_paramsDec.numRotations;
+    bk.params.dec.b               = precom.m_paramsDec.b;
+    bk.params.dec.g               = precom.m_paramsDec.g;
+    bk.params.dec.numRotationsRem = precom.m_paramsDec.numRotationsRem;
+    bk.params.dec.bRem            = precom.m_paramsDec.bRem;
+    bk.params.dec.gRem            = precom.m_paramsDec.gRem;
 
-    bk.cts_matrices.reserve(precom.m_U0hatTPre.size());
-    for (const auto &pt : precom.m_U0hatTPre)
-        bk.cts_matrices.push_back(upload_pt_chain(ctx, pt));
-    bk.stc_matrices.reserve(precom.m_U0Pre.size());
-    for (const auto &pt : precom.m_U0Pre)
-        bk.stc_matrices.push_back(upload_pt_chain(ctx, pt));
-    bk.cts_pt_sf = precom.m_U0hatTPre.front()->GetScalingFactor();
-    bk.stc_pt_sf = precom.m_U0Pre.front()->GetScalingFactor();
-    bk.cts_pt_level = static_cast<std::uint32_t>(precom.m_U0hatTPre.front()->GetLevel());
-    bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0Pre.front()->GetLevel());
+    if (is_lt_bootstrap) {
+        bk.cts_matrices.reserve(precom.m_U0hatTPre.size());
+        for (const auto &pt : precom.m_U0hatTPre)
+            bk.cts_matrices.push_back(upload_pt_chain(ctx, pt));
+        bk.stc_matrices.reserve(precom.m_U0Pre.size());
+        for (const auto &pt : precom.m_U0Pre)
+            bk.stc_matrices.push_back(upload_pt_chain(ctx, pt));
+        bk.cts_pt_sf = precom.m_U0hatTPre.front()->GetScalingFactor();
+        bk.stc_pt_sf = precom.m_U0Pre.front()->GetScalingFactor();
+        bk.cts_pt_level = static_cast<std::uint32_t>(precom.m_U0hatTPre.front()->GetLevel());
+        bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0Pre.front()->GetLevel());
+    } else {
+        // Multi-stage FFT path (m_U0hatTPreFFT / m_U0PreFFT): nested per-stage.
+        bk.cts_matrices_fft.reserve(precom.m_U0hatTPreFFT.size());
+        for (const auto &stage : precom.m_U0hatTPreFFT) {
+            std::vector<Allocs> stage_allocs;
+            stage_allocs.reserve(stage.size());
+            for (const auto &pt : stage)
+                stage_allocs.push_back(upload_pt_chain(ctx, pt));
+            bk.cts_matrices_fft.push_back(std::move(stage_allocs));
+        }
+        bk.stc_matrices_fft.reserve(precom.m_U0PreFFT.size());
+        for (const auto &stage : precom.m_U0PreFFT) {
+            std::vector<Allocs> stage_allocs;
+            stage_allocs.reserve(stage.size());
+            for (const auto &pt : stage)
+                stage_allocs.push_back(upload_pt_chain(ctx, pt));
+            bk.stc_matrices_fft.push_back(std::move(stage_allocs));
+        }
+        REQUIRE(!bk.cts_matrices_fft.empty());
+        REQUIRE(!bk.cts_matrices_fft.front().empty());
+        bk.cts_pt_sf = bk.cts_matrices_fft.front().front().size() == 0
+                           ? 0.0
+                           : precom.m_U0hatTPreFFT.front().front()->GetScalingFactor();
+        bk.stc_pt_sf = precom.m_U0PreFFT.front().front()->GetScalingFactor();
+        bk.cts_pt_level = static_cast<std::uint32_t>(precom.m_U0hatTPreFFT.front().front()->GetLevel());
+        bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0PreFFT.front().front()->GetLevel());
+    }
 
     auto rns_params = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(cc->GetCryptoParameters());
     REQUIRE(rns_params);
