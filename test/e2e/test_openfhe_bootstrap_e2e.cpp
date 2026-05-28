@@ -3282,3 +3282,105 @@ TEST_CASE("bench bootstrap record vs replay timing", "[integration][e2e][.bench]
         REQUIRE(bytes.c0.size() == haze_refreshed.towers());
     }
 }
+
+// =====================================================================
+// Full-slot phase ladder — rung 1: CoeffToSlot linear transform isolation.
+// Build OpenFHE's raised + haze's raised in parallel; inject haze's bytes
+// into the OpenFHE ct so BOTH sides feed byte-identical input into the
+// linear transform. Then compare CtS outputs per-tower, non-aborting.
+// If they match -> haze's linear_transform is exact for full slots, and
+// the bug is downstream (eval_mod or StC). If not -> linear_transform
+// itself has a full-slot bug.
+// =====================================================================
+TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[integration][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = ops::make_ctx({.mode = FLEXIBLEAUTO, .mult_depth = 35, .scaling_mod_size = 50,
+        .batch_size = 0, .with_relin_key = true, .rotate_indices = {}, .ring_dim = 1u << 11});
+    ctx.cc->Enable(ADVANCEDSHE); ctx.cc->Enable(FHE);
+    const std::uint32_t slots = static_cast<std::uint32_t>(ctx.ring_dim / 2); // 1024
+    auto bk = ops::make_bootstrap_keys(ctx, ctx.cc, ctx.keys.secretKey, slots);
+    std::vector<double> v(slots); for (std::uint32_t i=0;i<slots;++i) v[i]=0.1+0.0003*i;
+    auto pt = ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, slots);
+    auto ct = ctx.cc->Encrypt(ctx.keys.publicKey, pt);
+    while (ct->GetElements()[0].GetNumOfElements() > 6)
+        ctx.cc->EvalMultInPlace(ct, 1.0);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(ctx.cc->GetCryptoParameters());
+    const double qDouble = cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble/powP)));
+    const std::int32_t correction = 11 - deg;
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(ctx.ring_dim);
+    const double pre = 1.0/std::pow(2.0,(double)deg);
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(ctx.cc->GetScheme()->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(slots);
+    auto algo = ctx.cc->GetScheme();
+
+    // -- OpenFHE side: build raised_ref through the bootstrap pre-CtS pipeline.
+    auto raised_ref = ct->Clone();
+    algo->ModReduceInternalInPlace(raised_ref, 0);
+    ctx.cc->EvalMultInPlace(raised_ref, std::pow(2.0,-correction));
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0=(std::uint32_t)ep->GetParams().size();
+        auto elements=raised_ref->GetElements();
+        for(auto&dcrt:elements){dcrt.SetFormat(Format::COEFFICIENT);DCRTPoly tmp(dcrt.GetElementAtIndex(0),epp);tmp.SetFormat(Format::EVALUATION);dcrt=std::move(tmp);}
+        raised_ref->SetElements(std::move(elements));
+        raised_ref->SetLevel(L0-raised_ref->GetElements()[0].GetNumOfElements());
+    }
+    ctx.cc->EvalMultInPlace(raised_ref, pre/((double)K_UNIFORM*N));
+    // partial_sum loop is skipped for full slots (limit = N/(2*slots) = 1).
+    algo->ModReduceInternalInPlace(raised_ref, 1);
+    std::cerr << "  [phasefs01] OpenFHE raised: towers="
+              << raised_ref->GetElements()[0].GetNumOfElements()
+              << " level=" << raised_ref->GetLevel()
+              << " nsd=" << raised_ref->GetNoiseScaleDeg() << "\n";
+
+    // -- haze side: same pipeline via ops::.
+    auto haze_ct = ops::h2d_ct(ctx, ct);
+    auto adj = ops::eval_mult_scalar_for_test(ctx, haze_ct, std::pow(2.0,-correction));
+    auto dep = ops::clone_ct(ctx, adj);
+    if (dep.towers()>1) dep = ops::level_reduce(ctx, std::move(dep), dep.towers()-1);
+    auto hr = ops::mod_raise(ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(ctx, hr, pre/((double)K_UNIFORM*N));
+    hr = ops::rescale(ctx, hr);
+    std::cerr << "  [phasefs01] haze raised: towers=" << hr.towers()
+              << " nsd=" << hr.noise_scale_deg() << "\n";
+
+    // -- Inject haze bytes into raised_ref so BOTH sides see identical input.
+    REQUIRE(raised_ref->GetElements()[0].GetNumOfElements() == hr.towers());
+    auto haze_bytes = ops::d2h_ct(ctx, hr);
+    ops::inject_ct(ctx, haze_bytes, raised_ref);
+
+    // -- CtS on both sides.
+    auto ctxtEnc_ref = fhe_ckks->EvalLinearTransform(precom.m_U0hatTPre, raised_ref);
+    auto haze_cts = ops::linear_transform(ctx, bk, bk.cts_matrices, hr);
+    std::cerr << "  [phasefs01] CtS ref towers="
+              << ctxtEnc_ref->GetElements()[0].GetNumOfElements()
+              << " haze towers=" << haze_cts.towers() << "\n";
+
+    // -- Non-aborting per-tower mismatch report.
+    const auto hb = ops::d2h_ct(ctx, haze_cts);
+    std::size_t bad = 0, total = 2 * haze_cts.towers();
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ctxtEnc_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < haze_cts.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                std::cerr << "  [phasefs01] BAD elem=" << elem << " t=" << t
+                          << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs01] bad_towers=" << bad << " of " << total << "\n";
+    REQUIRE(bad == 0);
+}
