@@ -4426,9 +4426,15 @@ TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 J:AddRI") == 0);
     refresh(h_ctxtEnc, ctxtEnc);
 
-    // ---- Step K: MultByInteger(scalar = K_UNIFORM) ----
-    algo->MultByIntegerInPlace(ctxtEnc, K_UNIFORM);
-    h_ctxtEnc = ops::mult_int_scalar_for_test(n.ctx, h_ctxtEnc, K_UNIFORM);
+    // ---- Step K: MultByInteger(scalar = 2^deg) — mirrors OpenFHE's
+    // ckksrns-fhe.cpp:574 (scalar = llround(2^deg)). For the niobium config
+    // deg=1 so scalar=2, NOT K_UNIFORM=512 as initially coded. The previous
+    // K_UNIFORM made fs07's manual-mirror internally consistent but diverged
+    // from cc->EvalBootstrap by a 256x factor.
+    const std::uint64_t fs07_step_k_scalar =
+        static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    algo->MultByIntegerInPlace(ctxtEnc, fs07_step_k_scalar);
+    h_ctxtEnc = ops::mult_int_scalar_for_test(n.ctx, h_ctxtEnc, fs07_step_k_scalar);
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 K:MulInt") == 0);
     refresh(h_ctxtEnc, ctxtEnc);
 
@@ -4450,6 +4456,22 @@ TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
     algo->MultByIntegerInPlace(ctxtDec, corFactor);
     h_ctxtDec = ops::mult_int_scalar_for_test(n.ctx, h_ctxtDec, corFactor);
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtDec, ctxtDec, "fs07 N:CorMul") == 0);
+
+    // Step O: compare to cc->EvalBootstrap directly. With the step-K scalar
+    // now matching OpenFHE (2^deg), step N's manual ctxtDec should be
+    // byte-identical to cc->EvalBootstrap of the original input.
+    auto ref_full = n.ctx.cc->EvalBootstrap(ct);
+    const std::size_t bad_vs_cc = haze_vs_openfhe(n.ctx, h_ctxtDec, ref_full,
+                                                  "fs07 O:vsEvalBootstrap");
+    std::cerr << "  [fs07 O.dbg] cc->EvalBootstrap towers="
+              << ref_full->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ref_full->GetNoiseScaleDeg()
+              << " sf=" << ref_full->GetScalingFactor()
+              << " | manual ctxtDec towers="
+              << ctxtDec->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ctxtDec->GetNoiseScaleDeg()
+              << " sf=" << ctxtDec->GetScalingFactor() << "\n";
+    REQUIRE(bad_vs_cc == 0);
 }
 
 // phasefs08: minimal Cheby byte-parity test at the niobium config (FLEXIBLEAUTO,
