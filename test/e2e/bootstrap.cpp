@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <niobium/openfhe/probes.h>
 #include <openfhe.h>
 #include <scheme/ckksrns/ckksrns-cryptoparameters.h>
 #include <stdexcept>
@@ -13,6 +14,26 @@
 namespace haze::test::ops {
 
 namespace {
+
+// Suppress OpenFHE-side CPROBES (cprobe_copy / cprobe_move / random / etc.)
+// for the duration of ops::bootstrap. The haze helpers here legitimately
+// call into OpenFHE for plaintext encoding (encode_const_pt, mult_monomial,
+// mult_scalar) and metadata lookups, and those calls construct / SetFormat
+// DCRTPoly objects that fire copy/move probes. Pre-fix we wrapped each such
+// call site in a PausedRecording; that gates trace_writer emission but also
+// blocks the haze sr_* emissions inside the same scope, so it has to be
+// minimally scoped. Suppressing only the OpenFHE probes (g_suppressed in
+// probes.cpp) lets haze's own sr_* land normally throughout the recording
+// while keeping the OpenFHE-side compute completely out of the trace —
+// exactly what the test harness wants, with one RAII at the entry point.
+struct SuppressOpenFheProbes {
+    SuppressOpenFheProbes() noexcept { openfhe_suppress_probes(1); }
+    ~SuppressOpenFheProbes() noexcept { openfhe_suppress_probes(0); }
+    SuppressOpenFheProbes(const SuppressOpenFheProbes &) = delete;
+    SuppressOpenFheProbes &operator=(const SuppressOpenFheProbes &) = delete;
+    SuppressOpenFheProbes(SuppressOpenFheProbes &&) = delete;
+    SuppressOpenFheProbes &operator=(SuppressOpenFheProbes &&) = delete;
+};
 
 // Cumulative-rotation sum used by OpenFHE's sparsely-packed bootstrap
 // before CtS (ckksrns-fhe.cpp:771-773). Each j*slots rotation key is
@@ -33,6 +54,7 @@ Ct partial_sum(const OpCtx &ctx, const BootstrapKeys &bk, Ct ct) {
 } // namespace
 
 Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapVariant variant) {
+    SuppressOpenFheProbes _suppress;
     switch (variant) {
     case BootstrapVariant::Standard: {
         // Mirror OpenFHE's bootstrap pipeline (ckksrns-fhe.cpp:586-805).
