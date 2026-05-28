@@ -3499,6 +3499,30 @@ NiobCtx make_nio_ctx() {
     out.slots = static_cast<std::uint32_t>(out.ctx.ring_dim / 2);
     out.ctx.cc->EvalBootstrapSetup(levelBudget, {0, 0}, out.slots, 11);
     out.ctx.cc->EvalBootstrapKeyGen(out.ctx.keys.secretKey, out.slots);
+    out.ctx.with_relin_key = true;
+    REQUIRE(hazeSetRingDimension(out.ctx.ring_dim) == HAZE_SUCCESS);
+    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(out.ctx.cc) == HAZE_SUCCESS);
+    const auto &q_eparams =
+        out.ctx.cc->GetCryptoParameters()->GetElementParams()->GetParams();
+    out.ctx.q_base.reserve(q_eparams.size());
+    for (const auto &p : q_eparams)
+        out.ctx.q_base.push_back(p->GetModulus().ConvertToInt());
+    const auto rns_params = std::dynamic_pointer_cast<CryptoParametersRNS>(
+        out.ctx.cc->GetCryptoParameters());
+    REQUIRE(rns_params);
+    const auto &p_eparams = rns_params->GetParamsP()->GetParams();
+    out.ctx.p_base.reserve(p_eparams.size());
+    for (const auto &p : p_eparams)
+        out.ctx.p_base.push_back(p->GetModulus().ConvertToInt());
+    int mod_idx = 0;
+    for (uint64_t q : out.ctx.q_base)
+        REQUIRE(hazeSetCiphertextModulus(mod_idx++, q) == HAZE_SUCCESS);
+    for (uint64_t pmod : out.ctx.p_base)
+        REQUIRE(hazeSetCiphertextModulus(mod_idx++, pmod) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    REQUIRE(haze::hazeReplayBridgeExtractEvalMultKey(out.ctx.cc,
+                                                     out.ctx.keys.secretKey,
+                                                     out.ctx.relin_key) == HAZE_SUCCESS);
     return out;
 }
 
@@ -3994,6 +4018,56 @@ TEST_CASE("phasefs04 full-slot {1,1} ops::bootstrap byte-equal e2e",
         }
     }
     std::cerr << "  [phasefs04] bad_towers=" << bad << " of "
+              << (2 * haze_refreshed.towers()) << "\n";
+    REQUIRE(bad == 0);
+}
+
+// phasefs05 (e2e): full niobium config (full-slot N/2, levelBudget {4,4},
+// FLEXIBLEAUTO, depth=10+GetBootstrapDepth, scalingMod=59, firstMod=60) —
+// haze ops::bootstrap vs cc->EvalBootstrap. Exercises the multi-stage FFT
+// path (eval_coeffs_to_slots / eval_slots_to_coeffs) and is the definitive
+// byte-parity gate for the niobium compiler config.
+TEST_CASE("phasefs05 niobium-config {4,4} full-slot ops::bootstrap byte-equal e2e",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    std::cerr << "  [phasefs05] depth=" << n.depth << " slots=" << n.slots << "\n";
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto ct = make_nio_depleted_ct(n, 6);
+    std::cerr << "  [phasefs05] input towers="
+              << ct->GetElements()[0].GetNumOfElements()
+              << " nsd=" << ct->GetNoiseScaleDeg() << "\n";
+
+    auto ct_ref = n.ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ct_ref);
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto haze_refreshed = ops::bootstrap(n.ctx, bk, haze_ct,
+                                         ops::BootstrapVariant::Standard);
+    std::cerr << "  [phasefs05] ref towers="
+              << ct_ref->GetElements()[0].GetNumOfElements()
+              << " haze towers=" << haze_refreshed.towers() << "\n";
+
+    const auto hb = ops::d2h_ct(n.ctx, haze_refreshed);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ct_ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < haze_refreshed.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(
+                static_cast<usint>(static_cast<std::uint32_t>(t))).GetValues();
+            std::size_t mism = 0;
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) ++mism;
+            if (mism) { ++bad;
+                if (bad <= 4)
+                    std::cerr << "  [phasefs05] BAD elem=" << elem << " t=" << t
+                              << " mism=" << mism << "/" << hc[t].size() << "\n"; }
+        }
+    }
+    std::cerr << "  [phasefs05] bad_towers=" << bad << " of "
               << (2 * haze_refreshed.towers()) << "\n";
     REQUIRE(bad == 0);
 }

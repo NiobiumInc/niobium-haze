@@ -109,6 +109,14 @@ Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
 Ct linear_transform_v2(const OpCtx &ctx, const BootstrapKeys &bk,
                        const std::vector<Allocs> &matrices, const Ct &ct);
 
+// Multi-stage CoeffsToSlots / SlotsToCoeffs (ckksrns-fhe.cpp:1912 / :2069).
+// Used by bootstrap when level_budget != {1,1}. Caller passes
+// bk.cts_matrices_fft or bk.stc_matrices_fft (nested per-stage matrices).
+Ct eval_coeffs_to_slots(const OpCtx &ctx, const BootstrapKeys &bk,
+                        const std::vector<std::vector<Allocs>> &A, const Ct &ct);
+Ct eval_slots_to_coeffs(const OpCtx &ctx, const BootstrapKeys &bk,
+                        const std::vector<std::vector<Allocs>> &A, const Ct &ct);
+
 // Chebyshev approximation of sin(2πKx)/(2πK) followed by `r` double-angle iterations.
 Ct eval_mod(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct);
 

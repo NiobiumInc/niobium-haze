@@ -521,6 +521,197 @@ Ct linear_transform(const OpCtx &ctx, const BootstrapKeys &bk,
     return std::move(*result);
 }
 
+// ReduceRotation: collapse a (possibly negative) rotation index modulo slots.
+// Mirrors OpenFHE's ckksrns-utils ReduceRotation.
+std::int32_t reduce_rotation(std::int32_t index, std::uint32_t slots) {
+    const std::int32_t isize = static_cast<std::int32_t>(slots);
+    if (index == 0 || index == isize || index == -isize)
+        return 0;
+    return ((index % isize) + isize) % isize;
+}
+
+// One stage of the multi-stage CtS/StC BSGS transform. Mirrors the per-stage
+// body of EvalCoeffsToSlots (ckksrns-fhe.cpp:1963-2013) and EvalSlotsToCoeffs
+// (2117-2169): hoisted baby rotations via rot_in, giant-step accumulation in
+// extended basis via rot_out, c0 tracked in `first`, one final KSD per stage.
+Ct eval_linear_stage(const OpCtx &ctx, const BootstrapKeys &bk,
+                     const std::vector<Allocs> &A_stage, const Ct &ct,
+                     std::size_t num_part_q,
+                     const std::vector<std::int32_t> &rot_in,
+                     const std::vector<std::int32_t> &rot_out,
+                     std::uint32_t g, std::uint32_t b,
+                     std::uint32_t numRotations,
+                     double matrix_sf) {
+    const std::size_t q_towers = ct.towers();
+    const ExtLayout L = build_ext_layout(ctx, q_towers, num_part_q);
+
+    Allocs digits = precompute_digits(ctx, ct.c1(), q_towers, L);
+
+    // Hoisted baby rotations: fastRotation[j] = FastRotExt(ct, rot_in[j], digits, true).
+    std::vector<CtExt> fastRotation;
+    fastRotation.reserve(g);
+    for (std::uint32_t j = 0; j < g; ++j)
+        fastRotation.push_back(fast_rotation_ext(ctx, ct, digits, bk, rot_in[j], true, L));
+
+    const std::uint32_t out_nsd = ct.noise_scale_deg() + 1;
+    const double out_sf = ct.scaling_factor() * matrix_sf;
+    const std::uint32_t out_level = ct.level();
+
+    CtExt outer;
+    Allocs first;
+    bool initialized = false;
+    for (std::uint32_t i = 0; i < b; ++i) {
+        const std::uint32_t G = g * i;
+        CtExt inner = mult_ext_pt(ctx, fastRotation[0], A_stage[G], L);
+        for (std::uint32_t j = 1; j < g; ++j) {
+            if ((G + j) != numRotations) {
+                CtExt prod = mult_ext_pt(ctx, fastRotation[j], A_stage[G + j], L);
+                add_ext_inplace(ctx, inner, prod, L);
+            }
+        }
+        if (i == 0) {
+            first = ksd_single(ctx, inner.b, q_towers, L);
+            zero_ext_inplace(ctx, inner.b, L);
+            outer = std::move(inner);
+            initialized = true;
+        } else {
+            if (rot_out[i] != 0) {
+                Ct inner_q = keyswitch_down(ctx, inner, L, out_nsd, out_sf, out_level);
+                const std::uint32_t auto_idx =
+                    ctx.cc->FindAutomorphismIndex(static_cast<std::uint32_t>(rot_out[i]));
+                Allocs c0_rot = automorph_q(ctx, inner_q.c0(), auto_idx, L.q_subbase);
+                add_q_inplace(ctx, first, c0_rot, L.q_subbase);
+                Allocs inner_digits = precompute_digits(ctx, inner_q.c1(), q_towers, L);
+                CtExt rot_ext = fast_rotation_ext(ctx, inner_q, inner_digits, bk,
+                                                   rot_out[i], false, L);
+                add_ext_inplace(ctx, outer, rot_ext, L);
+            } else {
+                // rot_out[i] == 0: no rotation, add inner directly to outer
+                // (with c0 tracked separately so we don't double-count it).
+                Allocs first_inc = ksd_single(ctx, inner.b, q_towers, L);
+                add_q_inplace(ctx, first, first_inc, L.q_subbase);
+                zero_ext_inplace(ctx, inner.b, L);
+                add_ext_inplace(ctx, outer, inner, L);
+            }
+        }
+    }
+    REQUIRE(initialized);
+
+    Ct result = keyswitch_down(ctx, outer, L, out_nsd, out_sf, out_level);
+    add_q_inplace(ctx, result.c0(), first, L.q_subbase);
+    return result;
+}
+
+// OpenFHE-mirroring multi-stage CoeffsToSlots (ckksrns-fhe.cpp:1912). Iterates
+// stages from smax down to stop; if remCollapse > 0, a remainder stage runs
+// last (s = 0 = stop). ModReduce between stages.
+Ct eval_coeffs_to_slots(const OpCtx &ctx, const BootstrapKeys &bk,
+                        const std::vector<std::vector<Allocs>> &A, const Ct &ct) {
+    const auto &p = bk.params.enc;
+    const std::uint32_t slots = bk.params.slots;
+    const std::uint32_t M4 = static_cast<std::uint32_t>(bk.params.cyclotomic_order / 4);
+
+    const std::int32_t flagRem = (p.remCollapse == 0) ? 0 : 1;
+    const std::int32_t stop = flagRem ? 0 : -1;
+
+    std::vector<std::vector<std::int32_t>> rot_out(
+        p.lvlb, std::vector<std::int32_t>(p.b + p.bRem));
+    std::vector<std::vector<std::int32_t>> rot_in(
+        p.lvlb, std::vector<std::int32_t>(p.numRotations + 1));
+    if (flagRem == 1) rot_in[0].resize(p.numRotationsRem + 1);
+
+    std::int32_t offset = static_cast<std::int32_t>((p.numRotations + 1) / 2) - 1;
+    for (std::int32_t s = static_cast<std::int32_t>(p.lvlb) - 1; s > stop; --s) {
+        const std::int32_t scale = 1 << ((s - flagRem) * static_cast<std::int32_t>(p.layersCollapse)
+                                          + static_cast<std::int32_t>(p.remCollapse));
+        for (std::uint32_t i = 0; i < p.b; ++i)
+            rot_out[static_cast<std::size_t>(s)][i] = reduce_rotation(scale * static_cast<std::int32_t>(p.g)
+                                             * static_cast<std::int32_t>(i), M4);
+        for (std::uint32_t j = 0; j < p.g; ++j)
+            rot_in[static_cast<std::size_t>(s)][j] = reduce_rotation(scale * (static_cast<std::int32_t>(j) - offset), slots);
+    }
+    if (flagRem == 1) {
+        offset = static_cast<std::int32_t>((p.numRotationsRem + 1) / 2) - 1;
+        for (std::uint32_t i = 0; i < p.bRem; ++i)
+            rot_out[static_cast<std::size_t>(stop)][i] = reduce_rotation(static_cast<std::int32_t>(p.gRem * i), M4);
+        for (std::uint32_t j = 0; j < p.gRem; ++j)
+            rot_in[static_cast<std::size_t>(stop)][j] = reduce_rotation(static_cast<std::int32_t>(j) - offset, slots);
+    }
+
+    Ct result = clone_ct(ctx, ct);
+    const std::size_t num_part_q = bk.relin_key.a_limbs.size();
+    const std::int32_t smax = static_cast<std::int32_t>(p.lvlb) - 1;
+    for (std::int32_t s = smax; s > stop; --s) {
+        if (s != smax)
+            result = rescale(ctx, std::move(result));
+        result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(s)], result, num_part_q,
+                                    rot_in[static_cast<std::size_t>(s)], rot_out[static_cast<std::size_t>(s)], p.g, p.b, p.numRotations,
+                                    bk.cts_pt_sf);
+    }
+    if (flagRem == 1) {
+        result = rescale(ctx, std::move(result));
+        result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(stop)], result, num_part_q,
+                                    rot_in[static_cast<std::size_t>(stop)], rot_out[static_cast<std::size_t>(stop)],
+                                    p.gRem, p.bRem, p.numRotationsRem,
+                                    bk.cts_pt_sf);
+    }
+    return result;
+}
+
+// OpenFHE-mirroring multi-stage SlotsToCoeffs (ckksrns-fhe.cpp:2069). Stages
+// run forward (0 to smax), remainder stage last.
+Ct eval_slots_to_coeffs(const OpCtx &ctx, const BootstrapKeys &bk,
+                        const std::vector<std::vector<Allocs>> &A, const Ct &ct) {
+    const auto &p = bk.params.dec;
+    const std::uint32_t M4 = static_cast<std::uint32_t>(bk.params.cyclotomic_order / 4);
+
+    const std::int32_t flagRem = (p.remCollapse == 0) ? 0 : 1;
+    const std::int32_t smax = static_cast<std::int32_t>(p.lvlb) - flagRem;
+
+    std::vector<std::vector<std::int32_t>> rot_out(
+        p.lvlb, std::vector<std::int32_t>(p.b + p.bRem));
+    std::vector<std::vector<std::int32_t>> rot_in(
+        p.lvlb, std::vector<std::int32_t>(p.numRotations + 1));
+    if (flagRem == 1) rot_in[p.lvlb - 1].resize(p.numRotationsRem + 1);
+
+    std::int32_t offset = static_cast<std::int32_t>((p.numRotations + 1) / 2) - 1;
+    for (std::int32_t s = 0; s < smax; ++s) {
+        const std::int32_t scale = 1 << (s * static_cast<std::int32_t>(p.layersCollapse));
+        for (std::uint32_t j = 0; j < p.g; ++j)
+            rot_in[static_cast<std::size_t>(s)][j] = reduce_rotation((static_cast<std::int32_t>(j) - offset) * scale, M4);
+        for (std::uint32_t i = 0; i < p.b; ++i)
+            rot_out[static_cast<std::size_t>(s)][i] = reduce_rotation((static_cast<std::int32_t>(p.g) *
+                                              static_cast<std::int32_t>(i)) * scale, M4);
+    }
+    if (flagRem == 1) {
+        const std::int32_t scaleRem = 1 << (smax * static_cast<std::int32_t>(p.layersCollapse));
+        const std::int32_t offsetRem = static_cast<std::int32_t>((p.numRotationsRem + 1) / 2) - 1;
+        for (std::uint32_t j = 0; j < p.gRem; ++j)
+            rot_in[static_cast<std::size_t>(smax)][j] = reduce_rotation((static_cast<std::int32_t>(j) - offsetRem) * scaleRem, M4);
+        for (std::uint32_t i = 0; i < p.bRem; ++i)
+            rot_out[static_cast<std::size_t>(smax)][i] = reduce_rotation((static_cast<std::int32_t>(p.gRem) *
+                                                  static_cast<std::int32_t>(i)) * scaleRem, M4);
+    }
+
+    Ct result = clone_ct(ctx, ct);
+    const std::size_t num_part_q = bk.relin_key.a_limbs.size();
+    for (std::int32_t s = 0; s < smax; ++s) {
+        if (s != 0)
+            result = rescale(ctx, std::move(result));
+        result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(s)], result, num_part_q,
+                                    rot_in[static_cast<std::size_t>(s)], rot_out[static_cast<std::size_t>(s)], p.g, p.b, p.numRotations,
+                                    bk.stc_pt_sf);
+    }
+    if (flagRem == 1) {
+        result = rescale(ctx, std::move(result));
+        result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(smax)], result, num_part_q,
+                                    rot_in[static_cast<std::size_t>(smax)], rot_out[static_cast<std::size_t>(smax)],
+                                    p.gRem, p.bRem, p.numRotationsRem,
+                                    bk.stc_pt_sf);
+    }
+    return result;
+}
+
 // OpenFHE-mirroring single-stage linear transform (ckksrns-fhe.cpp:1860
 // EvalLinearTransform). Accumulates `result` in the extended (Q∥P) basis
 // across all giant steps, tracks the c0 element in a separate `first` (Q

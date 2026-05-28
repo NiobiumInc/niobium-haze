@@ -101,7 +101,12 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             raised = partial_sum(ctx, bk, std::move(raised));
 
         raised = rescale(ctx, raised);
-        Ct in_slots = linear_transform_v2(ctx, bk, bk.cts_matrices, raised);
+        const bool is_lt = (bk.params.level_budget.size() == 2 &&
+                            bk.params.level_budget[0] == 1 &&
+                            bk.params.level_budget[1] == 1);
+        Ct in_slots = is_lt
+                          ? linear_transform_v2(ctx, bk, bk.cts_matrices, raised)
+                          : eval_coeffs_to_slots(ctx, bk, bk.cts_matrices_fft, raised);
         Ct modded = eval_mod(ctx, bk, in_slots);
         // Defensive: with the right double_angle_iterations count for the
         // secret-key dist (set in make_bootstrap_keys), modded.towers should
@@ -109,11 +114,14 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
         // Left in as a guard for parameter combinations that consume fewer
         // levels; remove when ops::bootstrap is mode-aware enough that the
         // condition becomes unreachable.
-        const std::size_t stc_q_towers =
-            bk.stc_matrices.front().size() - ctx.p_base.size();
+        const std::size_t stc_q_towers = is_lt
+            ? (bk.stc_matrices.front().size() - ctx.p_base.size())
+            : (bk.stc_matrices_fft.front().front().size() - ctx.p_base.size());
         if (modded.towers() > stc_q_towers)
             modded = level_reduce(ctx, std::move(modded), modded.towers() - stc_q_towers);
-        Ct out = linear_transform_v2(ctx, bk, bk.stc_matrices, modded);
+        Ct out = is_lt
+                     ? linear_transform_v2(ctx, bk, bk.stc_matrices, modded)
+                     : eval_slots_to_coeffs(ctx, bk, bk.stc_matrices_fft, modded);
 
         // SPARSELY PACKED post-StC: ctxtDec += rot(ctxtDec, slots), then
         // multiply by corFactor = 2^11. Mirrors ckksrns-fhe.cpp:846, 852.
