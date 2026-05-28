@@ -5069,6 +5069,141 @@ TEST_CASE("phasefs14 pre-CtS + CtS single-trace (no flush between)",
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEncI, cheby_ref_I, "fs14 chbI") == 0);
 }
 
+// phasefs15: TRUE single-trace bootstrap. Calls ops::* helpers in
+// fs07's exact sequence, but inline — NO intermediate d2h_ct, NO
+// refresh, ONE final d2h at the very end. Mirrors what ops::bootstrap
+// emits, but written out long-form so we can adjust the sequence
+// incrementally to find the divergence root cause.
+TEST_CASE("phasefs15 single-trace bootstrap, ONE final d2h",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto ct = make_nio_depleted_ct(n, 6);
+    auto ref_full = n.ctx.cc->EvalBootstrap(ct);
+    REQUIRE(ref_full);
+
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+    const double qDouble = cp->GetElementParams()->GetParams()[0]
+        ->GetModulus().ConvertToDouble();
+    const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+    const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+    const std::int32_t correction = 11 - deg;
+    const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+    constexpr std::uint32_t K_UNIFORM = 512;
+    const std::uint32_t N = static_cast<std::uint32_t>(n.ctx.ring_dim);
+
+    // Compute ALL OpenFHE references BEFORE any haze compute, so OpenFHE
+    // CPROBES never fire while recording is active.
+    auto algo = n.ctx.cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t compositeDegree = cp->GetCompositeDegree();
+    // OpenFHE references — all computed BEFORE haze starts so CPROBES
+    // are skipped (running_p() == false).
+    auto raised_ref = ct->Clone();
+    while (raised_ref->GetNoiseScaleDeg() > 1)
+        algo->ModReduceInternalInPlace(raised_ref, compositeDegree);
+    {
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = raised_ref->GetScalingFactor();
+        const std::uint32_t numTowers = raised_ref->GetElements()[0].GetNumOfElements();
+        const double modToDrop = cp->GetElementParams()->GetParams()[numTowers-1]
+            ->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        n.ctx.cc->EvalMultInPlace(raised_ref, adjustmentFactor);
+        algo->ModReduceInternalInPlace(raised_ref, compositeDegree);
+        raised_ref->SetScalingFactor(targetSF);
+    }
+    {
+        auto ep = cp->GetElementParams();
+        auto epp = std::make_shared<ILDCRTParams<DCRTPoly::Integer>>(
+            n.ctx.cc->GetCyclotomicOrder(),
+            [&]{std::vector<NativeInteger> m;for(auto&p:ep->GetParams())m.push_back(p->GetModulus());return m;}(),
+            [&]{std::vector<NativeInteger> r;for(auto&p:ep->GetParams())r.push_back(p->GetRootOfUnity());return r;}());
+        const std::uint32_t L0 = static_cast<std::uint32_t>(ep->GetParams().size());
+        auto elements = raised_ref->GetElements();
+        for (auto &dcrt : elements) {
+            dcrt.SetFormat(Format::COEFFICIENT);
+            DCRTPoly tmp(dcrt.GetElementAtIndex(0), epp);
+            tmp.SetFormat(Format::EVALUATION);
+            dcrt = std::move(tmp);
+        }
+        raised_ref->SetElements(std::move(elements));
+        raised_ref->SetLevel(L0 - raised_ref->GetElements()[0].GetNumOfElements());
+    }
+    n.ctx.cc->EvalMultInPlace(raised_ref, pre / (static_cast<double>(K_UNIFORM) * N));
+    algo->ModReduceInternalInPlace(raised_ref, compositeDegree);
+    auto ctxtEnc_ref = fhe_ckks->EvalCoeffsToSlots(precom.m_U0hatTPreFFT, raised_ref);
+    const auto &evalKeyMap = n.ctx.cc->GetEvalAutomorphismKeyMap(ctxtEnc_ref->GetKeyTag());
+    auto conj_ref = FHECKKSRNS::Conjugate(ctxtEnc_ref, evalKeyMap);
+    auto ctxtEncI_ref = n.ctx.cc->EvalSub(ctxtEnc_ref, conj_ref);
+    n.ctx.cc->EvalAddInPlace(ctxtEnc_ref, conj_ref);
+    algo->MultByMonomialInPlace(ctxtEncI_ref, 3 * n.slots);
+    if (ctxtEnc_ref->GetNoiseScaleDeg() == 2) {
+        algo->ModReduceInternalInPlace(ctxtEnc_ref, compositeDegree);
+        algo->ModReduceInternalInPlace(ctxtEncI_ref, compositeDegree);
+    }
+    auto cheby_R = algo->EvalChebyshevSeries(ctxtEnc_ref, nio_g_coefficientsUniform, -1.0, 1.0);
+    auto cheby_I = algo->EvalChebyshevSeries(ctxtEncI_ref, nio_g_coefficientsUniform, -1.0, 1.0);
+
+    // Now: haze pipeline. NO OpenFHE cc-> calls during this section.
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto adjusted = [&]() {
+        auto r = ops::clone_ct(n.ctx, haze_ct);
+        while (r.noise_scale_deg() > 1) r = ops::rescale(n.ctx, std::move(r));
+        const double targetSF = cp->GetScalingFactorReal(0);
+        const double sourceSF = r.scaling_factor();
+        const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+        const double modToDrop = cp->GetElementParams()
+            ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+        const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                        * std::pow(2.0, -correction);
+        r = ops::mult_by_const_for_test(n.ctx, r, adjustmentFactor);
+        r = ops::rescale(n.ctx, std::move(r));
+        r.set_scaling_factor(targetSF);
+        return r;
+    }();
+    auto dep = ops::clone_ct(n.ctx, adjusted);
+    if (dep.towers() > 1) dep = ops::level_reduce(n.ctx, std::move(dep), dep.towers() - 1);
+    auto hr = ops::mod_raise(n.ctx, bk, dep);
+    hr = ops::eval_mult_scalar_for_test(n.ctx, hr, pre/(static_cast<double>(K_UNIFORM) * N));
+    hr = ops::rescale(n.ctx, hr);
+
+    auto h_ctxtEnc = ops::eval_coeffs_to_slots(n.ctx, bk, bk.cts_matrices_fft, hr);
+    auto h_conj = ops::conjugate(n.ctx, h_ctxtEnc, bk.conjugation_key);
+    auto h_ctxtEncI = ops::sub(n.ctx, h_ctxtEnc, h_conj);
+    h_ctxtEnc = ops::add(n.ctx, h_ctxtEnc, h_conj);
+    h_ctxtEncI = ops::mult_monomial_for_test(n.ctx, h_ctxtEncI, 3 * n.slots);
+    if (h_ctxtEnc.noise_scale_deg() == 2) {
+        h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+        h_ctxtEncI = ops::rescale(n.ctx, h_ctxtEncI);
+    }
+    h_ctxtEnc = ops::eval_chebyshev_series_for_test(n.ctx, h_ctxtEnc, nio_g_coefficientsUniform);
+    h_ctxtEncI = ops::eval_chebyshev_series_for_test(n.ctx, h_ctxtEncI, nio_g_coefficientsUniform);
+    h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+    h_ctxtEncI = ops::rescale(n.ctx, h_ctxtEncI);
+    ops::apply_double_angle_for_test(n.ctx, h_ctxtEnc, bk.params.double_angle_iterations);
+    ops::apply_double_angle_for_test(n.ctx, h_ctxtEncI, bk.params.double_angle_iterations);
+    h_ctxtEncI = ops::mult_monomial_for_test(n.ctx, h_ctxtEncI, n.slots);
+    h_ctxtEnc = ops::add(n.ctx, h_ctxtEnc, h_ctxtEncI);
+    const std::uint64_t scalar = static_cast<std::uint64_t>(std::llround(std::pow(2.0, deg)));
+    if (scalar != 1) h_ctxtEnc = ops::mult_int_scalar_for_test(n.ctx, h_ctxtEnc, scalar);
+    h_ctxtEnc = ops::rescale(n.ctx, h_ctxtEnc);
+    auto h_ctxtDec = ops::eval_slots_to_coeffs(n.ctx, bk, bk.stc_matrices_fft, h_ctxtEnc);
+    const std::uint64_t corFactor = static_cast<std::uint64_t>(1)
+        << static_cast<std::uint64_t>(correction);
+    h_ctxtDec = ops::mult_int_scalar_for_test(n.ctx, h_ctxtDec, corFactor);
+
+    // ONE d2h here. Everything before this is one recording.
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtDec, ref_full, "fs15") == 0);
+}
+
 // phasefs05 (e2e): full niobium config (full-slot N/2, levelBudget {4,4},
 // FLEXIBLEAUTO, depth=10+GetBootstrapDepth, scalingMod=59, firstMod=60) —
 // haze ops::bootstrap vs cc->EvalBootstrap. Exercises the multi-stage FFT
