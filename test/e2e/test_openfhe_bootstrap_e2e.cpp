@@ -4303,7 +4303,23 @@ TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
     // would feed zero-valued ciphertexts into the next op).
     auto refresh = [&](haze::test::ops::Ct &h,
                        const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &r) {
+        // Ensure source is in EVALUATION before extracting — h2d_ct copies
+        // GetValues() verbatim, so coefficient-form bytes would be uploaded
+        // and misinterpreted as evaluation-form by haze NTT-aware ops.
+        for (auto &elem : r->GetElements()) elem.SetFormat(Format::EVALUATION);
         h = ops::h2d_ct(n.ctx, r);
+    };
+
+    auto dump_meta = [](const char *label,
+                        const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &r,
+                        const haze::test::ops::Ct &h) {
+        std::cerr << "  [" << label << "] ref fmt c0[0]="
+                  << (r->GetElements()[0].GetElementAtIndex(0).GetFormat() == EVALUATION ? "EVAL" : "COEF")
+                  << " level=" << r->GetLevel()
+                  << " nsd=" << r->GetNoiseScaleDeg()
+                  << " sf=" << r->GetScalingFactor()
+                  << " | haze level=" << h.level()
+                  << " nsd=" << h.noise_scale_deg() << " sf=" << h.scaling_factor() << "\n";
     };
 
     // Force flush before CtS so the CtS recording is short (long combined
@@ -4357,6 +4373,18 @@ TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
         refresh(h_ctxtEncI, ctxtEncI);
     }
 
+    dump_meta("fs07 F0.preCheby", ctxtEnc, h_ctxtEnc);
+    REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtEnc, ctxtEnc, "fs07 F0.byteCheck") == 0);
+    refresh(h_ctxtEnc, ctxtEnc);
+    refresh(h_ctxtEncI, ctxtEncI);
+    std::cerr << "  [fs07 F0.dbg] before Cheby ref: level=" << ctxtEnc->GetLevel()
+              << " nsd=" << ctxtEnc->GetNoiseScaleDeg()
+              << " sf=" << ctxtEnc->GetScalingFactor()
+              << " towers=" << ctxtEnc->GetElements()[0].GetNumOfElements()
+              << " | haze: level=" << h_ctxtEnc.level()
+              << " nsd=" << h_ctxtEnc.noise_scale_deg()
+              << " sf=" << h_ctxtEnc.scaling_factor()
+              << " towers=" << h_ctxtEnc.towers() << "\n";
     // ---- Step F: Chebyshev x 2 ----
     ctxtEnc  = algo->EvalChebyshevSeries(ctxtEnc, nio_g_coefficientsUniform, -1.0, 1.0);
     ctxtEncI = algo->EvalChebyshevSeries(ctxtEncI, nio_g_coefficientsUniform, -1.0, 1.0);
@@ -4421,6 +4449,184 @@ TEST_CASE("phasefs07 niobium-config post-CtS step-by-step byte parity",
     algo->MultByIntegerInPlace(ctxtDec, corFactor);
     h_ctxtDec = ops::mult_int_scalar_for_test(n.ctx, h_ctxtDec, corFactor);
     REQUIRE(haze_vs_openfhe(n.ctx, h_ctxtDec, ctxtDec, "fs07 N:CorMul") == 0);
+}
+
+// phasefs08: minimal Cheby byte-parity test at the niobium config (FLEXIBLEAUTO,
+// scalingMod=59, multDepth=32). Mimics phase14 but at the nio config so we can
+// isolate whether eval_chebyshev_series byte-matches cc->EvalChebyshevSeries on
+// this larger config. phase14 only covered FIXEDAUTO at scalingMod=50.
+TEST_CASE("phasefs08 Chebyshev byte-parity at niobium config",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+
+    auto fresh = [&]() {
+        std::vector<double> v(n.slots);
+        for (std::uint32_t i = 0; i < n.slots; ++i) v[i] = 0.001 * (1.0 + 0.0001 * i);
+        auto pt = n.ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, n.slots);
+        return n.ctx.cc->Encrypt(n.ctx.keys.publicKey, pt);
+    };
+
+    auto check = [&](const std::string &label, const std::vector<double> &coeffs) {
+        auto ct = fresh();
+        auto ref = n.ctx.cc->EvalChebyshevSeries(ct, coeffs, -1.0, 1.0);
+        auto haze_ct = ops::h2d_ct(n.ctx, ct);
+        auto out = ops::eval_chebyshev_series_for_test(n.ctx, haze_ct, coeffs);
+        REQUIRE(haze_vs_openfhe(n.ctx, out, ref, ("fs08 " + label).c_str()) == 0);
+    };
+
+    check("degree=5", {0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625});
+    {
+        std::vector<double> coeffs(13, 0.0);
+        for (std::size_t i = 0; i <= 12; ++i) coeffs[i] = 1.0 / static_cast<double>(i + 1);
+        check("degree=12", coeffs);
+    }
+    check("degree=88 (nio_g)", nio_g_coefficientsUniform);
+
+    // Match phasefs07's input level (5) to test if Cheby diverges at higher
+    // levels. cc->EvalMult(ct, 1.0) + ModReduceInternalInPlace simulates the
+    // 5 rescales that the bootstrap pre-Cheby pipeline consumes.
+    auto check_at_level = [&](const std::string &label,
+                              const std::vector<double> &coeffs,
+                              std::uint32_t target_level) {
+        auto ct = fresh();
+        auto algo = n.ctx.cc->GetScheme();
+        const std::uint32_t cd = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+            n.ctx.cc->GetCryptoParameters())->GetCompositeDegree();
+        for (std::uint32_t k = 0; k < target_level; ++k) {
+            n.ctx.cc->EvalMultInPlace(ct, 1.0);
+            algo->ModReduceInternalInPlace(ct, cd);
+        }
+        auto ref = n.ctx.cc->EvalChebyshevSeries(ct, coeffs, -1.0, 1.0);
+        auto haze_ct = ops::h2d_ct(n.ctx, ct);
+        auto out = ops::eval_chebyshev_series_for_test(n.ctx, haze_ct, coeffs);
+        REQUIRE(haze_vs_openfhe(n.ctx, out, ref, ("fs08 " + label).c_str()) == 0);
+    };
+    check_at_level("nio_g_at_level=5", nio_g_coefficientsUniform, 5);
+
+    // Try larger amplitude inputs to see if input-byte magnitude matters.
+    auto check_with_inputs = [&](const std::string &label,
+                                  const std::vector<double> &v,
+                                  const std::vector<double> &coeffs,
+                                  std::uint32_t target_level) {
+        auto pt = n.ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, n.slots);
+        auto ct = n.ctx.cc->Encrypt(n.ctx.keys.publicKey, pt);
+        auto algo = n.ctx.cc->GetScheme();
+        const std::uint32_t cd = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+            n.ctx.cc->GetCryptoParameters())->GetCompositeDegree();
+        for (std::uint32_t k = 0; k < target_level; ++k) {
+            n.ctx.cc->EvalMultInPlace(ct, 1.0);
+            algo->ModReduceInternalInPlace(ct, cd);
+        }
+        auto ref = n.ctx.cc->EvalChebyshevSeries(ct, coeffs, -1.0, 1.0);
+        auto haze_ct = ops::h2d_ct(n.ctx, ct);
+        auto out = ops::eval_chebyshev_series_for_test(n.ctx, haze_ct, coeffs);
+        REQUIRE(haze_vs_openfhe(n.ctx, out, ref, ("fs08 " + label).c_str()) == 0);
+    };
+
+    // Mid-amplitude in [-0.4, 0.4]: closer to bootstrap conjugate-split outputs.
+    {
+        std::vector<double> v(n.slots);
+        for (std::uint32_t i = 0; i < n.slots; ++i) v[i] = -0.4 + 0.8 * i / n.slots;
+        check_with_inputs("mid_amp_level=5", v, nio_g_coefficientsUniform, 5);
+    }
+    // Random-ish: vary signs across slots.
+    {
+        std::vector<double> v(n.slots);
+        for (std::uint32_t i = 0; i < n.slots; ++i)
+            v[i] = std::sin(0.31415 * i) * 0.45;
+        check_with_inputs("sinusoidal_level=5", v, nio_g_coefficientsUniform, 5);
+    }
+}
+
+// phasefs09: reproduce fs07's pre-Cheby pipeline byte-for-byte but at the very
+// end SWAP the input to Cheby with a fresh level-5 ciphertext (the one fs08 ran
+// Cheby on successfully). If fs09 fails too, the issue is residual state from
+// the pre-Cheby haze recordings interfering with Cheby. If fs09 passes, the
+// issue is data-dependent on the actual fs07 ctxtEnc byte pattern.
+TEST_CASE("phasefs09 fs07-prefix + Cheby on fresh-level5 input",
+          "[.nio][.fsladder][e2e]") {
+    using namespace lbcrypto;
+    namespace ops = haze::test::ops;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto n = make_nio_ctx();
+    auto bk = ops::make_bootstrap_keys(n.ctx, n.ctx.cc, n.ctx.keys.secretKey,
+                                       n.slots, {4, 4});
+    auto cp = std::dynamic_pointer_cast<CryptoParametersCKKSRNS>(
+        n.ctx.cc->GetCryptoParameters());
+    auto algo = n.ctx.cc->GetScheme();
+    auto fhe_ckks = std::dynamic_pointer_cast<FHECKKSRNS>(algo->GetFHE());
+    const auto &precom = *fhe_ckks->GetBootPrecomMap().at(n.slots);
+    const std::uint32_t cd = cp->GetCompositeDegree();
+
+    // Mimic fs07's pre-Cheby work but only as a "scribble" — purpose is to
+    // build up haze state, not to verify it.
+    {
+        auto ct_pre = make_nio_depleted_ct(n, 6);
+        auto haze_pre = ops::h2d_ct(n.ctx, ct_pre);
+        const double qDouble = cp->GetElementParams()->GetParams()[0]->GetModulus().ConvertToDouble();
+        const double powP = std::pow(2.0, cp->GetPlaintextModulus());
+        const std::int32_t deg = static_cast<std::int32_t>(std::round(std::log2(qDouble / powP)));
+        const std::int32_t correction = 11 - deg;
+        const double pre = 1.0 / std::pow(2.0, static_cast<double>(deg));
+        constexpr std::uint32_t K_UNIFORM = 512;
+        const std::uint32_t N = static_cast<std::uint32_t>(n.ctx.ring_dim);
+        auto adjusted = [&]() {
+            auto r = ops::clone_ct(n.ctx, haze_pre);
+            while (r.noise_scale_deg() > 1) r = ops::rescale(n.ctx, std::move(r));
+            const double targetSF = cp->GetScalingFactorReal(0);
+            const double sourceSF = r.scaling_factor();
+            const std::uint32_t numTowers = static_cast<std::uint32_t>(r.towers());
+            const double modToDrop = cp->GetElementParams()
+                ->GetParams()[numTowers - 1]->GetModulus().ConvertToDouble();
+            const double adjustmentFactor = (targetSF/sourceSF) * (modToDrop/sourceSF)
+                                            * std::pow(2.0, -correction);
+            r = ops::mult_by_const_for_test(n.ctx, r, adjustmentFactor);
+            r = ops::rescale(n.ctx, std::move(r));
+            r.set_scaling_factor(targetSF);
+            return r;
+        }();
+        auto dep = ops::clone_ct(n.ctx, adjusted);
+        if (dep.towers() > 1) dep = ops::level_reduce(n.ctx, std::move(dep), dep.towers() - 1);
+        auto hr = ops::mod_raise(n.ctx, bk, dep);
+        hr = ops::eval_mult_scalar_for_test(n.ctx, hr, pre / (static_cast<double>(K_UNIFORM) * N));
+        hr = ops::rescale(n.ctx, hr);
+        auto hcts = ops::eval_coeffs_to_slots(n.ctx, bk, bk.cts_matrices_fft, hr);
+        // Trigger flush to make sure all this state has been replayed.
+        (void)ops::d2h_ct(n.ctx, hcts);
+        (void)precom;  // shut warning
+    }
+
+    // Now do fs08-style Cheby at level=5 (which we know passes in fs08 alone).
+    std::vector<double> v(n.slots);
+    for (std::uint32_t i = 0; i < n.slots; ++i) v[i] = 0.001 * (1.0 + 0.0001 * i);
+    auto pt = n.ctx.cc->MakeCKKSPackedPlaintext(v, 1, 0, nullptr, n.slots);
+    auto ct = n.ctx.cc->Encrypt(n.ctx.keys.publicKey, pt);
+    for (std::uint32_t k = 0; k < 5; ++k) {
+        n.ctx.cc->EvalMultInPlace(ct, 1.0);
+        algo->ModReduceInternalInPlace(ct, cd);
+    }
+    auto ref = n.ctx.cc->EvalChebyshevSeries(ct, nio_g_coefficientsUniform, -1.0, 1.0);
+    auto haze_ct = ops::h2d_ct(n.ctx, ct);
+    auto out = ops::eval_chebyshev_series_for_test(n.ctx, haze_ct, nio_g_coefficientsUniform);
+    namespace ops_ = haze::test::ops;
+    const auto hb = ops_::d2h_ct(n.ctx, out);
+    std::size_t bad = 0;
+    for (std::size_t elem = 0; elem < 2; ++elem) {
+        const auto &rd = ref->GetElements()[elem];
+        const auto &hc = (elem == 0) ? hb.c0 : hb.c1;
+        for (std::size_t t = 0; t < out.towers(); ++t) {
+            const auto &rv = rd.GetElementAtIndex(static_cast<usint>(t)).GetValues();
+            for (std::size_t i = 0; i < hc[t].size(); ++i)
+                if (hc[t][i] != rv[i].template ConvertToInt<std::uint64_t>()) { ++bad; break; }
+        }
+    }
+    std::cerr << "  [fs09] bad_polys=" << bad << " of " << (2 * out.towers()) << "\n";
+    REQUIRE(bad == 0);
 }
 
 // phasefs05 (e2e): full niobium config (full-slot N/2, levelBudget {4,4},
