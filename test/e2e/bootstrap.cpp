@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
+#include <haze/haze.h>
 #include <memory>
 #include <openfhe.h>
 #include <scheme/ckksrns/ckksrns-cryptoparameters.h>
@@ -13,6 +14,26 @@
 namespace haze::test::ops {
 
 namespace {
+
+// Issue a 1-byte D2H on the first c0 tower to flush the in-flight haze
+// recording. D2H is the canonical flush trigger; the libhaze flush path
+// replays the trace, populates shadow_data for outputs, and clears the
+// polymap + niobium-fhetch CPROBE globals. Subsequent ops start a new
+// recording that re-promotes ciphertext bytes from shadow_data.
+//
+// Used between major phases of ops::bootstrap (pre-CtS → CtS → eval_mod →
+// StC → final scaling) so each phase is its own shorter recording. The
+// FHETCH simulator produces correct bytes per phase but byte-diverges
+// from cc->EvalBootstrap on a single end-to-end trace at the niobium
+// config — splitting at phase boundaries (where each result feeds into
+// exactly one next phase, no cross-phase reuse) keeps shadow consumption
+// linear and avoids the shadow-single-use trap that would happen if we
+// flushed between sub/add/etc. inside eval_mod.
+void flush_haze_trace(const Ct &ct) {
+    std::uint64_t scratch = 0;
+    REQUIRE(hazeMemcpy(&scratch, ct.c0().as_const().data()[0], sizeof(scratch),
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+}
 
 // Cumulative-rotation sum used by OpenFHE's sparsely-packed bootstrap
 // before CtS (ckksrns-fhe.cpp:771-773). Each j*slots rotation key is
@@ -101,12 +122,16 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             raised = partial_sum(ctx, bk, std::move(raised));
 
         raised = rescale(ctx, raised);
+        // Phase boundary: pre-CtS → CtS. Each is used exactly once next.
+        flush_haze_trace(raised);
         const bool is_lt = (bk.params.level_budget.size() == 2 &&
                             bk.params.level_budget[0] == 1 &&
                             bk.params.level_budget[1] == 1);
         Ct in_slots = is_lt
                           ? linear_transform_v2(ctx, bk, bk.cts_matrices, raised)
                           : eval_coeffs_to_slots(ctx, bk, bk.cts_matrices_fft, raised);
+        // Phase boundary: CtS → eval_mod.
+        flush_haze_trace(in_slots);
         Ct modded = eval_mod(ctx, bk, in_slots);
         // Defensive: with the right double_angle_iterations count for the
         // secret-key dist (set in make_bootstrap_keys), modded.towers should
@@ -119,9 +144,13 @@ Ct bootstrap(const OpCtx &ctx, const BootstrapKeys &bk, const Ct &ct, BootstrapV
             : (bk.stc_matrices_fft.front().front().size() - ctx.p_base.size());
         if (modded.towers() > stc_q_towers)
             modded = level_reduce(ctx, std::move(modded), modded.towers() - stc_q_towers);
+        // Phase boundary: eval_mod → StC.
+        flush_haze_trace(modded);
         Ct out = is_lt
                      ? linear_transform_v2(ctx, bk, bk.stc_matrices, modded)
                      : eval_slots_to_coeffs(ctx, bk, bk.stc_matrices_fft, modded);
+        // Phase boundary: StC → final scaling.
+        flush_haze_trace(out);
 
         // SPARSELY PACKED post-StC: ctxtDec += rot(ctxtDec, slots), then
         // multiply by corFactor = 2^11. Mirrors ckksrns-fhe.cpp:846, 852.
