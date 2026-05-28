@@ -3386,7 +3386,11 @@ TEST_CASE("phasefs01 full-slot CtS isolation FLEXIBLEAUTO", "[integration][e2e]"
 
     std::cerr << "  [phasefs01] cts_pt_level=" << bk.cts_pt_level
               << " cts_pt_sf=" << bk.cts_pt_sf
-              << " precom.m_U0hatTPre size=" << precom.m_U0hatTPre.size() << "\n";
+              << " precom.m_U0hatTPre size=" << precom.m_U0hatTPre.size()
+              << " g(cheby_degree)=" << bk.params.chebyshev_degree
+              << " m_paramsEnc.g=" << precom.m_paramsEnc.g
+              << " m_paramsEnc.b=" << precom.m_paramsEnc.b
+              << " lvlb=" << precom.m_paramsEnc.lvlb << "\n";
     REQUIRE(raised_ref->GetElements()[0].GetNumOfElements() == hr.towers());
 
     // -- Bisection step A: do the haze and OpenFHE pre-CtS pipelines produce
