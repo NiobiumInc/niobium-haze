@@ -12,20 +12,22 @@
 // from the Product.
 #pragma once
 
+#include "common/errors.hpp"
+
+#include <expected>
 #include <haze/haze_types.h>
 
 namespace haze {
 
-// Single-device runtime state. The active-device selector is the only
-// mutable field; everything else (count, properties) is constexpr in
-// the impl. Free functions instead of a class — there is one int of
-// state and one invariant ("active must be 0"); a class adds nothing
-// over an `int` plus a setter.
+// Single-device runtime state. Only one device exists; the only valid
+// device index is 0. Free functions instead of a class — a class adds
+// nothing over a one-int counter and a couple of getters.
 
 int device_count() noexcept;
 int device_active() noexcept;
-hazeError_t device_set_active(int device) noexcept;
-hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept;
+std::expected<void, HazeInternalError> device_set_active(int device) noexcept;
+std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *prop,
+                                                              int device) noexcept;
 void device_reset() noexcept;
 
 } // namespace haze

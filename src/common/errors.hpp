@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <haze/haze_types.h>
 
 // Thread-local last-error state. set_error is the inline writer used at
@@ -57,3 +58,11 @@ hazeError_t to_public_error(HazeInternalError err) noexcept;
 void record_internal_error(HazeInternalError err, const char *context = nullptr) noexcept;
 
 } // namespace haze
+
+// Translate an internal-error result at the C ABI boundary. Lives at
+// namespace scope so api/ shims can write
+// `return set_internal_result(core_call(...));` directly.
+[[nodiscard]] inline hazeError_t
+set_internal_result(std::expected<void, haze::HazeInternalError> result) noexcept {
+    return set_error(result ? HAZE_SUCCESS : haze::to_public_error(result.error()));
+}

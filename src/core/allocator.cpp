@@ -40,10 +40,10 @@ void DeviceAllocator::clear_pool_locked() noexcept {
 
 void DeviceAllocator::set_polynomial_size(size_t bytes) noexcept {
     HazeLockGuard lock(mutex_);
-    if (poly_bytes_ == bytes)
-        return;
-    clear_pool_locked();
-    poly_bytes_ = bytes;
+    if (poly_bytes_ != bytes) {
+        clear_pool_locked();
+        poly_bytes_ = bytes;
+    }
 }
 
 size_t DeviceAllocator::polynomial_size() const noexcept {
@@ -99,21 +99,22 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
     return addr;
 }
 
-hazeError_t DeviceAllocator::free(DevAddr addr) noexcept {
-    if (to_uintptr(addr) == 0)
-        return HAZE_SUCCESS; // hazeFree(nullptr) matches CUDA semantics
-
+std::expected<void, HazeInternalError> DeviceAllocator::free(DevAddr addr) noexcept {
+    if (to_uintptr(addr) == 0) {
+        // hazeFree(nullptr) matches CUDA semantics: silent success.
+        return {};
+    }
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(addr)) {
         record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::UnknownAddress);
     }
     // Evict the shadow — those bytes are no longer the user's to read.
     // The DevAddr stays in alloc_set_ and goes onto the free list for
     // the next allocate() to recycle.
     shadow_data_.erase(addr);
     pool_free_.push_back(addr);
-    return HAZE_SUCCESS;
+    return {};
 }
 
 std::expected<std::vector<uint64_t>, HazeInternalError>
@@ -137,8 +138,9 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
     }
     auto node = shadow_data_.extract(addr);
     if (!node) {
-        // Address allocated but never written; caller may fall back to
-        // a zero polynomial via fhetch.
+        // Address allocated but never written. epoch::lookup_or_create_locked
+        // translates this to SourceUnavailable — compute / D2D on an
+        // uninitialized buffer is a contract violation.
         record_internal_error(HazeInternalError::NoData,
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::NoData);
@@ -191,14 +193,15 @@ DeviceAllocator::read_polynomial_components(DevAddr addr, uint64_t ring_dim) con
     return data_it->second;
 }
 
-hazeError_t DeviceAllocator::copy_h2d(DevAddr dst, const void *src, size_t count) noexcept {
+std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, const void *src,
+                                                                 size_t count) noexcept {
     if (src == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(dst))
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::UnknownAddress);
     if (count > poly_bytes_)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::AllocTooSmall);
     // Lazy-create or overwrite the shadow entry. Sized to the full
     // allocation so partial writes leave the tail at zero (matches
     // prior eager-zero semantics for the unwritten tail).
@@ -208,65 +211,44 @@ hazeError_t DeviceAllocator::copy_h2d(DevAddr dst, const void *src, size_t count
         shadow.assign(want_elems, uint64_t{0});
     }
     std::memcpy(reinterpret_cast<uint8_t *>(shadow.data()), src, count);
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t DeviceAllocator::copy_d2d(DevAddr dst, DevAddr src, size_t count) noexcept {
-    HazeLockGuard lock(mutex_);
-    if (!alloc_set_.contains(src) || !alloc_set_.contains(dst))
-        return HAZE_ERROR_INVALID_VALUE;
-    if (count > poly_bytes_)
-        return HAZE_ERROR_INVALID_VALUE;
-    auto src_data = shadow_data_.find(src);
-    if (src_data == shadow_data_.end()) {
-        // D2D from an address with no live shadow → dst inherits the
-        // "no shadow" state. Evict whatever dst had (if anything).
-        shadow_data_.erase(dst);
-        return HAZE_SUCCESS;
-    }
-    auto &dst_shadow = shadow_data_[dst];
-    const size_t want_elems = poly_bytes_ / sizeof(uint64_t);
-    if (dst_shadow.size() != want_elems) {
-        dst_shadow.assign(want_elems, uint64_t{0});
-    }
-    std::memcpy(reinterpret_cast<uint8_t *>(dst_shadow.data()),
-                reinterpret_cast<const uint8_t *>(src_data->second.data()), count);
-    return HAZE_SUCCESS;
-}
-
-hazeError_t DeviceAllocator::memset(DevAddr addr, int value, size_t count) noexcept {
+std::expected<void, HazeInternalError> DeviceAllocator::memset(DevAddr addr, int value,
+                                                               size_t count) noexcept {
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(addr))
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::UnknownAddress);
     if (count > poly_bytes_)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::AllocTooSmall);
     auto &shadow = shadow_data_[addr];
     const size_t want_elems = poly_bytes_ / sizeof(uint64_t);
     if (shadow.size() != want_elems) {
         shadow.assign(want_elems, uint64_t{0});
     }
     std::memset(reinterpret_cast<uint8_t *>(shadow.data()), value, count);
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t DeviceAllocator::copy_to_host(void *dst, DevAddr src, size_t count) const noexcept {
+std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, DevAddr src,
+                                                                     size_t count) const noexcept {
     if (dst == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(src))
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::UnknownAddress);
     if (count > poly_bytes_)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::AllocTooSmall);
     auto data_it = shadow_data_.find(src);
     if (data_it == shadow_data_.end()) {
         // Address allocated but no bytes ever written or already
         // consumed by compute. Match the prior eager-zero semantic:
         // return zeros, success. Do not erase any state.
         std::memset(dst, 0, count);
-        return HAZE_SUCCESS;
+        return {};
     }
     std::memcpy(dst, reinterpret_cast<const uint8_t *>(data_it->second.data()), count);
-    return HAZE_SUCCESS;
+    return {};
 }
 
 std::expected<void, HazeInternalError>
@@ -284,17 +266,10 @@ DeviceAllocator::update_shadow(DevAddr addr, std::vector<uint64_t> &&values) noe
     return {};
 }
 
-bool DeviceAllocator::is_device_pointer(const void *ptr) const noexcept {
-    if (ptr == nullptr)
-        return false;
-    HazeLockGuard lock(mutex_);
-    return alloc_set_.contains(to_dev_addr(ptr));
-}
-
-hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
-                                                const void *ptr) const noexcept {
+std::expected<void, HazeInternalError>
+DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs, const void *ptr) const noexcept {
     if (attrs == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     *attrs = {};
     // Resolve classification under one locked snapshot, then fill the
     // attribute fields outside the lock. Snapshotting closes the window
@@ -329,21 +304,21 @@ hazeError_t DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs,
         attrs->type = HAZE_MEMORY_TYPE_UNREGISTERED;
         break;
     }
-    return HAZE_SUCCESS;
+    return {};
 }
 
 void DeviceAllocator::register_host_pointer(const void *ptr) noexcept {
-    if (ptr == nullptr)
-        return;
-    HazeLockGuard lock(mutex_);
-    host_set_.insert(ptr);
+    if (ptr != nullptr) {
+        HazeLockGuard lock(mutex_);
+        host_set_.insert(ptr);
+    }
 }
 
 void DeviceAllocator::unregister_host_pointer(const void *ptr) noexcept {
-    if (ptr == nullptr)
-        return;
-    HazeLockGuard lock(mutex_);
-    host_set_.erase(ptr);
+    if (ptr != nullptr) {
+        HazeLockGuard lock(mutex_);
+        host_set_.erase(ptr);
+    }
 }
 
 void DeviceAllocator::reset() noexcept {

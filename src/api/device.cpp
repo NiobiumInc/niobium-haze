@@ -25,7 +25,7 @@ extern "C" hazeError_t hazeGetDeviceCount(int *count) noexcept {
 }
 
 extern "C" hazeError_t hazeSetDevice(int device) noexcept {
-    return set_error(haze::device_set_active(device));
+    return set_internal_result(haze::device_set_active(device));
 }
 
 extern "C" hazeError_t hazeGetDevice(int *device) noexcept {
@@ -36,7 +36,7 @@ extern "C" hazeError_t hazeGetDevice(int *device) noexcept {
 }
 
 extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp *prop, int device) noexcept {
-    return set_error(haze::device_fill_properties(prop, device));
+    return set_internal_result(haze::device_fill_properties(prop, device));
 }
 
 extern "C" hazeError_t hazeDeviceSynchronize() noexcept {

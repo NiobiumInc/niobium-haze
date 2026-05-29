@@ -12,9 +12,11 @@
 // from the Product.
 #pragma once
 
+#include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 
 #include <cstdint>
+#include <expected>
 #include <haze/haze_types.h>
 #include <string>
 #include <string_view>
@@ -47,23 +49,22 @@ class Config {
     static Config &instance() noexcept;
 
     // FHE parameters (existing public API).
-    hazeError_t set_ring_dimension(uint64_t n) noexcept;
-    hazeError_t set_modulus(int idx, uint64_t modulus) noexcept;
-    hazeError_t set_twiddle_generator(int idx, uint64_t generator) noexcept;
-    hazeError_t configure_device() noexcept;
+    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept;
+    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept;
+    std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
+                                                                 uint64_t generator) noexcept;
+    std::expected<void, HazeInternalError> configure_device() noexcept;
 
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
-    bool is_configured() const noexcept;
-    std::vector<uint64_t> moduli_copy() const noexcept;
 
     // Program / target metadata fed to the compiler during init.
     // Defaults: name="haze", version="0.1", description="HAZE runtime",
     // target=kLocalTarget (overridable by HAZE_TARGET env var unless
     // an explicit hazeSetTarget call has been made).
-    hazeError_t set_program_info(const char *name, const char *version,
-                                 const char *description) noexcept;
-    hazeError_t set_target(const char *target) noexcept;
+    std::expected<void, HazeInternalError> set_program_info(const char *name, const char *version,
+                                                            const char *description) noexcept;
+    std::expected<void, HazeInternalError> set_target(const char *target) noexcept;
     std::string program_name() const noexcept;
     std::string program_version() const noexcept;
     std::string program_description() const noexcept;

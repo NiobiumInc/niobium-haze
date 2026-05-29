@@ -17,11 +17,10 @@
 
 namespace haze {
 
-// Virtual HBM address base for HAZE's DeviceAllocator.
-// Must lie above FHETCH's synthetic address range (today < 0x1000000000)
-// so HAZE-allocated DevAddr values cannot alias FHETCH-emitted synthetic
-// addresses inside the recorded IR. The specific offset (256 GiB) is
-// arbitrary within the constraint; chosen to leave generous headroom.
+// Virtual HBM address base for HAZE's DeviceAllocator. The offset
+// (256 GiB) sits well above any plausible upstream synthetic-address
+// range so HAZE-allocated DevAddr values cannot collide with synthetic
+// addresses fhetch may emit inside the recorded IR.
 inline constexpr uintptr_t kHbmBase = 0x4000000000ULL;
 
 // Strong-typed device address. Wraps the uintptr_t we cast from the

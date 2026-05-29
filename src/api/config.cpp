@@ -19,26 +19,26 @@
 #include <haze/haze_types.h>
 
 extern "C" hazeError_t hazeSetRingDimension(uint64_t n) noexcept {
-    return set_error(haze::config().set_ring_dimension(n));
+    return set_internal_result(haze::config().set_ring_dimension(n));
 }
 
 extern "C" hazeError_t hazeSetCiphertextModulus(int index, uint64_t modulus) noexcept {
-    return set_error(haze::config().set_modulus(index, modulus));
+    return set_internal_result(haze::config().set_modulus(index, modulus));
 }
 
 extern "C" hazeError_t hazeSetTwiddleFactors(int index, uint64_t generator) noexcept {
-    return set_error(haze::config().set_twiddle_generator(index, generator));
+    return set_internal_result(haze::config().set_twiddle_generator(index, generator));
 }
 
 extern "C" hazeError_t hazeConfigureDevice() noexcept {
-    return set_error(haze::config().configure_device());
+    return set_internal_result(haze::config().configure_device());
 }
 
 extern "C" hazeError_t hazeSetProgramInfo(const char *name, const char *version,
                                           const char *description) noexcept {
-    return set_error(haze::config().set_program_info(name, version, description));
+    return set_internal_result(haze::config().set_program_info(name, version, description));
 }
 
 extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
-    return set_error(haze::config().set_target(target));
+    return set_internal_result(haze::config().set_target(target));
 }

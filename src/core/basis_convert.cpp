@@ -52,7 +52,7 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     // rescale_base must be a *proper* subset of src_base — equal-length
-    // would leave dst empty (FhetchApi.cpp:1660 asserts the same).
+    // would leave dst empty (upstream fhetch asserts the same).
     if (p.rescale_base_len >= p.src_base_len) {
         record_internal_error(HazeInternalError::InvalidArgument,
                               "hazeModDown: rescale_base_len >= src_base_len");
@@ -129,9 +129,9 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
     fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base);
-    // result.base() == src_base \ rescale_base in src_base's original order
-    // (FhetchApi.cpp:1606-1617). Use it directly so HAZE-side and
-    // backend-side never disagree on the dst layout.
+    // result.base() == src_base \ rescale_base in src_base's original
+    // order. Use it directly so HAZE-side and backend-side never disagree
+    // on the dst layout.
     const auto &dst_base = result.base();
     return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
 }
@@ -166,9 +166,8 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
         return std::unexpected(HazeInternalError::BackendShapeMismatch);
     }
 
-    // Each result[d].base() == src_base + p_base (FhetchApi.cpp:1704-1705)
-    // — same size and order across all digits. Use it directly to flatten
-    // dst writes.
+    // Each result[d].base() == src_base + p_base — same size and order
+    // across all digits. Use it directly to flatten dst writes.
     for (size_t d = 0; d < p.digit_count; ++d) {
         const auto &d_base = result[d].base();
         auto stored =

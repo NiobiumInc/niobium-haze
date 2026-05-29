@@ -12,8 +12,11 @@
 // from the Product.
 #include "core/device.hpp"
 
+#include "common/errors.hpp"
+
 #include <cstddef>
 #include <cstring>
+#include <expected>
 #include <haze/haze_types.h>
 
 namespace haze {
@@ -41,18 +44,20 @@ int device_active() noexcept {
     return g_active_device;
 }
 
-hazeError_t device_set_active(int device) noexcept {
+std::expected<void, HazeInternalError> device_set_active(int device) noexcept {
     if (device != 0)
-        return HAZE_ERROR_INVALID_VALUE;
-    g_active_device = device;
-    return HAZE_SUCCESS;
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    // g_active_device is initialised to 0, only reset to 0, and the
+    // guard above rejects every non-zero value — no assignment needed.
+    return {};
 }
 
-hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept {
+std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *prop,
+                                                              int device) noexcept {
     if (prop == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     if (device != 0)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
 
     *prop = {};
     std::strncpy(prop->name, "Niobium FPGA", sizeof(prop->name) - 1);
@@ -65,9 +70,7 @@ hazeError_t device_fill_properties(hazeDeviceProp *prop, int device) noexcept {
     }
     prop->maxCiphertextModuli = kMaxCiphertextModuli;
     prop->numHBMBanks = kNumHbmBanks;
-    prop->overlapCaps = HAZE_OVERLAP_FULL;
-    prop->instructionFIFODepth = 256;
-    return HAZE_SUCCESS;
+    return {};
 }
 
 void device_reset() noexcept {

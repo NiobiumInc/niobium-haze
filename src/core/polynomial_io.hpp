@@ -28,14 +28,13 @@ namespace haze {
 // the round-trip + parse behind a single call so the materialization
 // engine doesn't need to carry that detail.
 //
-// TODO(niobium-fhetch): replace with Polynomial::int_data() when
-// upstream adds it; the round-trip would then become a one-line read of
-// the in-memory components vector. Tracked separately because the
-// upstream API change is multi-repo.
+// TODO(niobium-fhetch): rewire to Polynomial::int_data() (added
+// upstream in fhetch_api.h) and drop the JSON round-trip. Deferred —
+// the rewire is a separate task.
 //
-// `tag` is used in the temp filename for diagnostic clarity if multiple
-// extractions race. Returns true on success and populates `out` with
-// the values; false on any I/O or parse failure.
+// `tag` distinguishes the temp filename when multiple extractions
+// happen in the same epoch. Returns true on success and populates `out`
+// with the values; false on any I/O or parse failure.
 bool extract_polynomial_values(const niobium::fhetch::Polynomial &p, std::string_view tag,
                                std::vector<uint64_t> &out);
 

@@ -72,44 +72,23 @@ typedef struct haze_exec_s *hazeGraphExec_t;
 // are silenced for the entire ABI block.
 // NOLINTBEGIN(cppcoreguidelines-use-enum-class,performance-enum-size)
 
+// Only user-actionable conditions get their own code. Anything that
+// signals "haze itself is broken" maps to HAZE_ERROR_INTERNAL — callers
+// can log it but can't recover; the rich classification lives in
+// haze's internal `HazeInternalError` enum and surfaces via the
+// HAZE_DEBUG=1 stderr log.
 typedef enum {
     HAZE_SUCCESS = 0,
-    HAZE_ERROR_INVALID_HANDLE,          // opaque handle (stream / event / graph) is null or stale
-    HAZE_ERROR_INVALID_VALUE,           // argument violated the documented contract
-    HAZE_ERROR_OUT_OF_MEMORY,           // allocator could not satisfy the request
-    HAZE_ERROR_NOT_SUPPORTED,           // operation is not implemented for this build / target
-    HAZE_ERROR_NOT_READY,               // CUDA-shape parity: device or async result not ready
-    HAZE_ERROR_LAUNCH_FAILURE,          // compilation or execution failure on the backend
-    HAZE_ERROR_DMEMERR,                 // hardware data-memory error (FPGA / silicon target)
-    HAZE_ERROR_IMEMERR,                 // hardware instruction-memory error
-    HAZE_ERROR_INSTRERR,                // hardware instruction error
-    HAZE_ERROR_CONFIGERR,               // ring_dim / modulus / target not configured
-    HAZE_ERROR_ISEQERR,                 // hardware instruction-sequence error
-    HAZE_ERROR_UNKNOWN_ADDRESS,         // DevAddr not in the allocator's table
-    HAZE_ERROR_NO_DATA,                 // address allocated but never written
-    HAZE_ERROR_ALLOC_TOO_SMALL,         // allocation size < polynomial size
-    HAZE_ERROR_SOURCE_UNAVAILABLE,      // compute / D2D source has no shadow + no poly_map_
-    HAZE_ERROR_BACKEND_INIT_FAILED,     // niobium::compiler().init() threw
-    HAZE_ERROR_BACKEND_REPLAY_FAILED,   // stop_epoch / replay returned false / threw
-    HAZE_ERROR_BACKEND_SHAPE_MISMATCH,  // backend result / MRP-group shape mismatch
-    HAZE_ERROR_MISSING_POLYMAP_BINDING, // pending output / MRP group addr missing
-    HAZE_ERROR_SHADOW_SIZE_MISMATCH,    // shadow buffer length disagrees with ring_dim
-    HAZE_ERROR_BACKEND_OUTPUT_MISSING,  // fhetch::result(name, ...) returned false
-    HAZE_ERROR_BACKEND_OUTPUT_DECODE_FAILED, // extract_polynomial_values returned false
-    HAZE_ERROR_BRIDGE_HOOK_FAILED,           // post-recording hook reported failures
-    HAZE_ERROR_POOL_MAP_DESYNC,              // pool_free_ entry has no alloc_set_ peer
+    HAZE_ERROR_INVALID_VALUE,      // argument violated the documented contract
+    HAZE_ERROR_OUT_OF_MEMORY,      // allocator could not satisfy the request
+    HAZE_ERROR_NOT_SUPPORTED,      // operation is not implemented for this build / target
+    HAZE_ERROR_CONFIGERR,          // ring_dim / modulus / target not configured
+    HAZE_ERROR_UNKNOWN_ADDRESS,    // DevAddr not in the allocator's table
+    HAZE_ERROR_NO_DATA,            // address allocated but never written
+    HAZE_ERROR_ALLOC_TOO_SMALL,    // allocation size < polynomial size
+    HAZE_ERROR_SOURCE_UNAVAILABLE, // compute / D2D source has no shadow + no poly_map_
+    HAZE_ERROR_INTERNAL,           // haze invariant broke or backend failed; see HAZE_DEBUG log
 } hazeError_t;
-
-// ---------------------------------------------------------------------------
-// Memory-compute overlap capability flags
-// ---------------------------------------------------------------------------
-
-typedef enum {
-    HAZE_OVERLAP_NONE = 0,
-    HAZE_OVERLAP_LOAD = 1U << 0,
-    HAZE_OVERLAP_STORE = 1U << 1,
-    HAZE_OVERLAP_FULL = (1U << 0) | (1U << 1),
-} hazeOverlapFlags;
 
 // ---------------------------------------------------------------------------
 // DMA direction
@@ -119,11 +98,9 @@ typedef enum {
 // ---------------------------------------------------------------------------
 
 typedef enum {
-    HAZE_MEMCPY_HOST_TO_HOST = 0,
     HAZE_MEMCPY_HOST_TO_DEVICE = 1,
     HAZE_MEMCPY_DEVICE_TO_HOST = 2,
     HAZE_MEMCPY_DEVICE_TO_DEVICE = 3,
-    HAZE_MEMCPY_DEFAULT = 4,
 } hazeMemcpyKind;
 
 // ---------------------------------------------------------------------------
@@ -138,8 +115,6 @@ typedef struct {
     int supportedRingDimExponents[32]; /* HAZE-specific */
     int maxCiphertextModuli;           /* HAZE-specific */
     int numHBMBanks;                   /* HAZE-specific */
-    hazeOverlapFlags overlapCaps;      /* HAZE-specific */
-    int instructionFIFODepth;          /* HAZE-specific */
 } hazeDeviceProp;
 
 // ---------------------------------------------------------------------------
@@ -152,7 +127,6 @@ typedef enum {
     HAZE_MEMORY_TYPE_UNREGISTERED = 0,
     HAZE_MEMORY_TYPE_HOST = 1,
     HAZE_MEMORY_TYPE_DEVICE = 2,
-    HAZE_MEMORY_TYPE_MANAGED = 4
 } hazeMemoryType;
 // NOLINTEND(cppcoreguidelines-use-enum-class,performance-enum-size)
 

@@ -143,9 +143,9 @@ hazeError_t to_haze_error(BridgeError e) {
     case BridgeError::InvalidModulus:
         return HAZE_ERROR_INVALID_VALUE;
     case BridgeError::OpenFheUnavailable:
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
-    return HAZE_ERROR_LAUNCH_FAILURE;
+    return HAZE_ERROR_INTERNAL;
 }
 
 // Drop trailing towers from `dcrt` to exactly `target`; throws if the CC
@@ -484,9 +484,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     } catch (...) {
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
 }
 
@@ -555,9 +555,9 @@ hazeReplayBridgeRegisterCryptoContext(const lbcrypto::CryptoContext<DCRTPoly> &c
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         log_error("replay_bridge", std::string{"register_crypto_context threw: "} + e.what());
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     } catch (...) {
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
 }
 
@@ -661,9 +661,9 @@ extract_keyswitch_key_into(const lbcrypto::CryptoContext<DCRTPoly> &cc,
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         log_error("replay_bridge", std::string{diag_prefix} + " threw: " + e.what());
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     } catch (...) {
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
 }
 
@@ -689,7 +689,7 @@ HAZE_API hazeError_t hazeReplayBridgeExtractEvalMultKey(
         log_error("replay_bridge", std::string{"ExtractEvalMultKey threw: "} + e.what());
         return HAZE_ERROR_INVALID_VALUE;
     } catch (...) {
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
 }
 
@@ -717,9 +717,9 @@ HAZE_API hazeError_t hazeReplayBridgeExtractAutomorphismKey(
         return extract_keyswitch_key_into(cc, it->second, "ExtractAutomorphismKey", out);
     } catch (const std::exception &e) {
         log_error("replay_bridge", std::string{"ExtractAutomorphismKey threw: "} + e.what());
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     } catch (...) {
-        return HAZE_ERROR_LAUNCH_FAILURE;
+        return HAZE_ERROR_INTERNAL;
     }
 }
 

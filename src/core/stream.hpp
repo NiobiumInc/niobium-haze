@@ -20,23 +20,19 @@
 // boundary per the documented opaque-handle pattern.
 struct haze_stream_s {
     uint64_t id;
-    bool is_default;
 };
 
 struct haze_event_s {
     uint64_t id;
-    bool recorded;
 };
 
 namespace haze {
 
 // Free functions instead of registry classes — state is just two
-// counters and a default-stream singleton, not enough invariants to
-// justify the wrapper. Default stream id=0 mirrors CUDA stream-0.
+// counters, not enough invariants to justify a wrapper.
 
-hazeStream_t stream_create() noexcept;        // new haze_stream_s, caller owns
-void stream_destroy(hazeStream_t s) noexcept; // delete unless is_default
-hazeStream_t stream_default() noexcept;       // lazy-init singleton
+hazeStream_t stream_create() noexcept; // new haze_stream_s, caller owns
+void stream_destroy(hazeStream_t s) noexcept;
 void streams_reset() noexcept;
 
 hazeEvent_t event_create() noexcept;

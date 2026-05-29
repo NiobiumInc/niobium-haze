@@ -90,22 +90,22 @@ class DeviceAllocator {
     size_t polynomial_size() const noexcept HAZE_EXCLUDES(mutex_);
 
     std::expected<DevAddr, HazeInternalError> allocate(size_t bytes) noexcept HAZE_EXCLUDES(mutex_);
-    hazeError_t free(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> free(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Bulk operations on a single allocation. Each path validates count
-    // against the allocation size and sets has_data on success.
-    hazeError_t copy_h2d(DevAddr dst, const void *src, size_t count) noexcept HAZE_EXCLUDES(mutex_);
-    hazeError_t copy_d2d(DevAddr dst, DevAddr src, size_t count) noexcept HAZE_EXCLUDES(mutex_);
-    hazeError_t memset(DevAddr addr, int value, size_t count) noexcept HAZE_EXCLUDES(mutex_);
+    // against the allocation size.
+    std::expected<void, HazeInternalError> copy_h2d(DevAddr dst, const void *src,
+                                                    size_t count) noexcept HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> memset(DevAddr addr, int value, size_t count) noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Snapshot the shadow buffer as a vector of `ring_dim` 64-bit limbs.
     // Used by EpochState::lookup_or_create_locked when promoting fresh
     // shadow data to a FHETCH input polynomial. Returns NoData if the
-    // address has no shadow entry — the caller can fall back to
-    // fhetch::Polynomial::zeros for unwritten reads. **Evicts the
-    // shadow entry on success** — the caller now owns the bytes via
-    // fhetch's Polynomial storage; the HAZE-side shadow is freed
-    // mid-program. Non-const for that reason.
+    // address has no shadow entry; the caller surfaces this as
+    // SourceUnavailable. **Evicts the shadow entry on success** — the
+    // caller now owns the bytes via fhetch's Polynomial storage; the
+    // HAZE-side shadow is freed mid-program. Non-const for that reason.
     HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
     extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept HAZE_EXCLUDES(mutex_);
 
@@ -118,7 +118,8 @@ class DeviceAllocator {
 
     // Read shadow bytes into a host buffer. Caller is responsible for
     // any compute materialization; this only touches the staging buffer.
-    hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) const noexcept
+    std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src,
+                                                        size_t count) const noexcept
         HAZE_EXCLUDES(mutex_);
 
     // Full-replace write of the shadow buffer; `values` is truncated
@@ -131,10 +132,9 @@ class DeviceAllocator {
     // pointers, HOST for hazeHostAlloc-allocated pointers, UNREGISTERED
     // for any other pointer (matches cudaPointerGetAttributes from
     // CUDA 11 onward).
-    hazeError_t pointer_attributes(hazePointerAttributes *attrs, const void *ptr) const noexcept
+    std::expected<void, HazeInternalError> pointer_attributes(hazePointerAttributes *attrs,
+                                                              const void *ptr) const noexcept
         HAZE_EXCLUDES(mutex_);
-
-    bool is_device_pointer(const void *ptr) const noexcept HAZE_EXCLUDES(mutex_);
 
     // Track an allocation made by hazeHostAlloc so pointer_attributes
     // can report it as HOST. The set is keyed by raw void* — pointers

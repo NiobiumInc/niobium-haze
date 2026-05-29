@@ -42,8 +42,6 @@ class EpochState {
 
     // ---- Public methods (take mutex_ internally) ----
 
-    bool is_recording() noexcept HAZE_EXCLUDES(mutex_);
-
     // Drop any polymap binding for `addr`. Called by allocator paths
     // (H2D, D2D, memset, free) so the next compute rebuilds from shadow.
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
@@ -71,10 +69,9 @@ class EpochState {
 
     // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
     // Builds the Polynomial via a non-evicting read (shadow stays intact
-    // for subsequent compute-free D2H), tag_inputs it, and binds it in
-    // poly_map_. Modulus tracking is left to the first real op that
-    // consumes the address. Returns an internal error if the H2D
-    // post-conditions (ring_dim set, shadow populated) are violated.
+    // for subsequent compute-free D2H), calls `tag_input`, and binds it
+    // in poly_map_. Returns an internal error if the H2D post-conditions
+    // (ring_dim set, shadow populated) are violated.
     std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
         HAZE_REQUIRES(mutex_);
 
@@ -159,9 +156,9 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 };
 
 // D2H trigger: finalize any active recording (no-op otherwise), then
-// copy from the device shadow buffer to host. Returns a public
-// hazeError_t already translated for the C ABI.
-hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
+// copy from the device shadow buffer to host. The api/ shim translates
+// the internal error at the C ABI edge.
+std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
 // D2D as a recorded copy: promotes `src` if needed (via
 // `lookup_or_create_locked`), emits a pass-through fhetch IR node, and

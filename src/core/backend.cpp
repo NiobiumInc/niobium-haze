@@ -81,10 +81,6 @@ void CompilerBackend::start_recording() noexcept {
     niobium::compiler().start();
 }
 
-void CompilerBackend::start_epoch() noexcept {
-    niobium::compiler().start_epoch();
-}
-
 bool CompilerBackend::stop_epoch() noexcept {
     // Use stop() (not stop_epoch()): stop() writes both the .fhetch trace
     // and fhetch_replay.json that nbcc_fhetch_replay needs for HTTP dispatch.
