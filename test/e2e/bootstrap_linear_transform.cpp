@@ -641,19 +641,29 @@ Ct eval_coeffs_to_slots(const OpCtx &ctx, const BootstrapKeys &bk,
     Ct result = clone_ct(ctx, ct);
     const std::size_t num_part_q = bk.relin_key.a_limbs.size();
     const std::int32_t smax = static_cast<std::int32_t>(p.lvlb) - 1;
+    // Per-stage scaling factor: each FFT stage's plaintexts encode at a
+    // different level so their SF differs in the last bit(s). Using a
+    // single bk.cts_pt_sf across stages produces a last-bit drift in the
+    // output SF that cascades into wrong per-tower scalars in downstream
+    // mult_by_const. Use bk.cts_pt_sf_per_stage[s] when available.
+    auto stage_sf = [&](std::size_t idx) -> double {
+        return idx < bk.cts_pt_sf_per_stage.size()
+                   ? bk.cts_pt_sf_per_stage[idx]
+                   : bk.cts_pt_sf;
+    };
     for (std::int32_t s = smax; s > stop; --s) {
         if (s != smax)
             result = rescale(ctx, std::move(result));
         result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(s)], result, num_part_q,
                                     rot_in[static_cast<std::size_t>(s)], rot_out[static_cast<std::size_t>(s)], p.g, p.b, p.numRotations,
-                                    bk.cts_pt_sf);
+                                    stage_sf(static_cast<std::size_t>(s)));
     }
     if (flagRem == 1) {
         result = rescale(ctx, std::move(result));
         result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(stop)], result, num_part_q,
                                     rot_in[static_cast<std::size_t>(stop)], rot_out[static_cast<std::size_t>(stop)],
                                     p.gRem, p.bRem, p.numRotationsRem,
-                                    bk.cts_pt_sf);
+                                    stage_sf(static_cast<std::size_t>(stop)));
     }
     return result;
 }
@@ -695,19 +705,25 @@ Ct eval_slots_to_coeffs(const OpCtx &ctx, const BootstrapKeys &bk,
 
     Ct result = clone_ct(ctx, ct);
     const std::size_t num_part_q = bk.relin_key.a_limbs.size();
+    // Per-stage scaling factor; see eval_coeffs_to_slots for rationale.
+    auto stage_sf = [&](std::size_t idx) -> double {
+        return idx < bk.stc_pt_sf_per_stage.size()
+                   ? bk.stc_pt_sf_per_stage[idx]
+                   : bk.stc_pt_sf;
+    };
     for (std::int32_t s = 0; s < smax; ++s) {
         if (s != 0)
             result = rescale(ctx, std::move(result));
         result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(s)], result, num_part_q,
                                     rot_in[static_cast<std::size_t>(s)], rot_out[static_cast<std::size_t>(s)], p.g, p.b, p.numRotations,
-                                    bk.stc_pt_sf);
+                                    stage_sf(static_cast<std::size_t>(s)));
     }
     if (flagRem == 1) {
         result = rescale(ctx, std::move(result));
         result = eval_linear_stage(ctx, bk, A[static_cast<std::size_t>(smax)], result, num_part_q,
                                     rot_in[static_cast<std::size_t>(smax)], rot_out[static_cast<std::size_t>(smax)],
                                     p.gRem, p.bRem, p.numRotationsRem,
-                                    bk.stc_pt_sf);
+                                    stage_sf(static_cast<std::size_t>(smax)));
     }
     return result;
 }

@@ -75,6 +75,16 @@ struct BootstrapKeys {
     double stc_pt_sf{};
     std::uint32_t cts_pt_level{};
     std::uint32_t stc_pt_level{};
+    // Per-stage plaintext SF for the multi-stage FFT path (lvlb != {1,1}).
+    // Each stage's plaintexts are at a different level so their scaling
+    // factors differ in the last bit(s); eval_coeffs_to_slots /
+    // eval_slots_to_coeffs must multiply the running SF by the right
+    // stage's sf to match OpenFHE's accumulation byte-for-byte. (Using
+    // cts_pt_sf for every stage produces a last-bit-different output sf
+    // → downstream mult_by_const computes different per-tower scalars
+    // → cheby output diverges. phasefs05 / fs19 reproduce.)
+    std::vector<double> cts_pt_sf_per_stage;
+    std::vector<double> stc_pt_sf_per_stage;
     std::vector<Allocs> eval_mod_coeffs;
     // PModq[t] = (product of P-moduli) mod q_t. Needed by KeySwitchExt
     // to multiply c0/c1 by P before zero-extending the P-portion.

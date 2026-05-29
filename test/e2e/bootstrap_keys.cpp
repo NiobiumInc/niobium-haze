@@ -135,8 +135,16 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
         bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0Pre.front()->GetLevel());
     } else {
         // Multi-stage FFT path (m_U0hatTPreFFT / m_U0PreFFT): nested per-stage.
+        // Each stage's plaintexts encode at a different chain level so their
+        // scaling factors differ in the last bit(s); eval_coeffs_to_slots /
+        // eval_slots_to_coeffs accumulate the running output SF stage by stage
+        // (out_sf = in_sf * stage_pt_sf), so the SF must come from each
+        // stage's own plaintext to match OpenFHE byte-for-byte.
         bk.cts_matrices_fft.reserve(precom.m_U0hatTPreFFT.size());
+        bk.cts_pt_sf_per_stage.reserve(precom.m_U0hatTPreFFT.size());
         for (const auto &stage : precom.m_U0hatTPreFFT) {
+            REQUIRE(!stage.empty());
+            bk.cts_pt_sf_per_stage.push_back(stage.front()->GetScalingFactor());
             std::vector<Allocs> stage_allocs;
             stage_allocs.reserve(stage.size());
             for (const auto &pt : stage)
@@ -144,7 +152,10 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
             bk.cts_matrices_fft.push_back(std::move(stage_allocs));
         }
         bk.stc_matrices_fft.reserve(precom.m_U0PreFFT.size());
+        bk.stc_pt_sf_per_stage.reserve(precom.m_U0PreFFT.size());
         for (const auto &stage : precom.m_U0PreFFT) {
+            REQUIRE(!stage.empty());
+            bk.stc_pt_sf_per_stage.push_back(stage.front()->GetScalingFactor());
             std::vector<Allocs> stage_allocs;
             stage_allocs.reserve(stage.size());
             for (const auto &pt : stage)
@@ -153,10 +164,11 @@ BootstrapKeys make_bootstrap_keys(const OpCtx &ctx,
         }
         REQUIRE(!bk.cts_matrices_fft.empty());
         REQUIRE(!bk.cts_matrices_fft.front().empty());
-        bk.cts_pt_sf = bk.cts_matrices_fft.front().front().size() == 0
-                           ? 0.0
-                           : precom.m_U0hatTPreFFT.front().front()->GetScalingFactor();
-        bk.stc_pt_sf = precom.m_U0PreFFT.front().front()->GetScalingFactor();
+        // Legacy scalar SFs (read by linear_transform / linear_transform_v2 on
+        // the {1,1} path; unused on this multi-stage path but kept populated
+        // for callers that share the same BootstrapKeys across both paths).
+        bk.cts_pt_sf = bk.cts_pt_sf_per_stage.front();
+        bk.stc_pt_sf = bk.stc_pt_sf_per_stage.front();
         bk.cts_pt_level = static_cast<std::uint32_t>(precom.m_U0hatTPreFFT.front().front()->GetLevel());
         bk.stc_pt_level = static_cast<std::uint32_t>(precom.m_U0PreFFT.front().front()->GetLevel());
     }
