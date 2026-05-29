@@ -27,28 +27,14 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
     switch (error) {
     case HAZE_SUCCESS:
         return "no error";
-    case HAZE_ERROR_INVALID_HANDLE:
-        return "invalid handle";
     case HAZE_ERROR_INVALID_VALUE:
         return "invalid value";
     case HAZE_ERROR_OUT_OF_MEMORY:
         return "out of memory";
     case HAZE_ERROR_NOT_SUPPORTED:
         return "not supported";
-    case HAZE_ERROR_NOT_READY:
-        return "device not ready";
-    case HAZE_ERROR_LAUNCH_FAILURE:
-        return "compilation or execution failure";
-    case HAZE_ERROR_DMEMERR:
-        return "data memory error";
-    case HAZE_ERROR_IMEMERR:
-        return "instruction memory error";
-    case HAZE_ERROR_INSTRERR:
-        return "instruction error";
     case HAZE_ERROR_CONFIGERR:
         return "configuration error";
-    case HAZE_ERROR_ISEQERR:
-        return "instruction sequence error";
     case HAZE_ERROR_UNKNOWN_ADDRESS:
         return "unknown device address";
     case HAZE_ERROR_NO_DATA:
@@ -57,24 +43,8 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
         return "allocation size below polynomial size";
     case HAZE_ERROR_SOURCE_UNAVAILABLE:
         return "compute / D2D source has no shadow data and no poly_map_ binding";
-    case HAZE_ERROR_BACKEND_INIT_FAILED:
-        return "backend init failed";
-    case HAZE_ERROR_BACKEND_REPLAY_FAILED:
-        return "backend replay failed";
-    case HAZE_ERROR_BACKEND_SHAPE_MISMATCH:
-        return "backend result shape mismatch";
-    case HAZE_ERROR_MISSING_POLYMAP_BINDING:
-        return "address missing from poly_map_";
-    case HAZE_ERROR_SHADOW_SIZE_MISMATCH:
-        return "shadow buffer length disagrees with ring_dim";
-    case HAZE_ERROR_BACKEND_OUTPUT_MISSING:
-        return "backend output missing";
-    case HAZE_ERROR_BACKEND_OUTPUT_DECODE_FAILED:
-        return "backend output decode failed";
-    case HAZE_ERROR_BRIDGE_HOOK_FAILED:
-        return "replay bridge post-recording hook failed";
-    case HAZE_ERROR_POOL_MAP_DESYNC:
-        return "allocator pool / alloc_set_ desync";
+    case HAZE_ERROR_INTERNAL:
+        return "internal haze error (set HAZE_DEBUG=1 for details)";
     default:
         return "unknown error";
     }

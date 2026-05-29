@@ -16,13 +16,12 @@
 
 namespace haze {
 
-// Single sink for [haze]-prefixed runtime diagnostics. Replaces ad-hoc
-// `std::cerr << "[haze] ...";` blocks across haze + replay_bridge so the
-// prefix is consistent and call sites stay short.
+// Tagged sink for [haze]-prefixed runtime diagnostics emitted from
+// replay_bridge (libhaze internal failures route through
+// record_internal_error in errors.hpp instead).
 //
-// Output format: "[haze] <tag>: <body>\n". `tag` identifies the subsystem
-// (e.g. "epoch", "replay_bridge"). Both arguments are printed verbatim;
-// callers compose their own error text.
+// Output format: "[haze] <tag>: <body>\n". Both arguments are printed
+// verbatim; callers compose their own error text.
 void log_error(std::string_view tag, std::string_view body) noexcept;
 
 } // namespace haze

@@ -1434,7 +1434,7 @@ TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[
 
     // Pre-fix: leaks a stale pending_mrp_groups_ entry. At the D2H below,
     // replay_and_populate's group walk hits MissingPolyMapBinding ->
-    // HAZE_ERROR_LAUNCH_FAILURE because poly_map_[intt_dst...] are gone.
+    // HAZE_ERROR_INTERNAL because poly_map_[intt_dst...] are gone.
     haze::test::free_all_residues(intt_dst);
 
     d.add(dst, haze::test::to_const(d_a), haze::test::to_const(d_b));

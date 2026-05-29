@@ -12,12 +12,13 @@
 // from the Product.
 #include "core/config.hpp"
 
+#include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
 
 #include <cstdint>
 #include <cstdlib>
-#include <haze/haze_types.h>
+#include <expected>
 #include <string>
 #include <utility>
 #include <vector>
@@ -27,7 +28,6 @@ namespace haze {
 namespace {
 
 bool is_supported_ring_dim(uint64_t n) noexcept {
-    // TODO: add an explicit upper bound once hardware constraints are known.
     return (n != 0) && ((n & (n - 1)) == 0);
 }
 
@@ -38,32 +38,32 @@ Config &Config::instance() noexcept {
     return inst;
 }
 
-hazeError_t Config::set_ring_dimension(uint64_t n) noexcept {
+std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) noexcept {
     if (!is_supported_ring_dim(n))
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     // Hold the Config lock across the allocator update so no observer
     // ever sees (new ring_dim, old pool poly_bytes) or vice versa. Lock
     // order is Config -> Allocator; the allocator never calls back into
     // Config, so this direction cannot deadlock.
     HazeLockGuard lock(mutex_);
     if (configured_ && ring_dim_ != n)
-        return HAZE_ERROR_CONFIGERR;
+        return std::unexpected(HazeInternalError::NotConfigured);
     ring_dim_ = n;
     DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
+std::expected<void, HazeInternalError> Config::set_modulus(int idx, uint64_t modulus) noexcept {
     if (idx < 0)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     if (modulus == 0)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= moduli_.size() || moduli_[i] != modulus)
-            return HAZE_ERROR_CONFIGERR;
-        return HAZE_SUCCESS;
+            return std::unexpected(HazeInternalError::NotConfigured);
+        return {};
     }
     // Reject sparse writes — every index from 0 to idx-1 must already
     // have been set with a non-zero modulus. Without this constraint,
@@ -71,38 +71,39 @@ hazeError_t Config::set_modulus(int idx, uint64_t modulus) noexcept {
     // returns indistinguishably from "out of range," and the compute
     // templates would conflate the two failure modes.
     if (std::cmp_less(moduli_.size(), idx))
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     if (std::cmp_equal(moduli_.size(), idx)) {
         moduli_.push_back(modulus);
     } else {
         moduli_[static_cast<size_t>(idx)] = modulus;
     }
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t Config::set_twiddle_generator(int idx, uint64_t generator) noexcept {
+std::expected<void, HazeInternalError> Config::set_twiddle_generator(int idx,
+                                                                     uint64_t generator) noexcept {
     if (idx < 0)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= twiddle_generators_.size() || twiddle_generators_[i] != generator)
-            return HAZE_ERROR_CONFIGERR;
-        return HAZE_SUCCESS;
+            return std::unexpected(HazeInternalError::NotConfigured);
+        return {};
     }
     if (std::cmp_less_equal(twiddle_generators_.size(), idx)) {
         twiddle_generators_.resize(static_cast<size_t>(idx) + 1, 0);
     }
     twiddle_generators_[static_cast<size_t>(idx)] = generator;
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t Config::configure_device() noexcept {
+std::expected<void, HazeInternalError> Config::configure_device() noexcept {
     HazeLockGuard lock(mutex_);
     if (ring_dim_ == 0)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::NotConfigured);
     configured_ = true;
-    return HAZE_SUCCESS;
+    return {};
 }
 
 uint64_t Config::ring_dim() const noexcept {
@@ -117,35 +118,25 @@ uint64_t Config::modulus(int idx) const noexcept {
     return moduli_[static_cast<size_t>(idx)];
 }
 
-bool Config::is_configured() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return configured_;
-}
-
-std::vector<uint64_t> Config::moduli_copy() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return moduli_;
-}
-
-hazeError_t Config::set_program_info(const char *name, const char *version,
-                                     const char *description) noexcept {
+std::expected<void, HazeInternalError>
+Config::set_program_info(const char *name, const char *version, const char *description) noexcept {
     if (name == nullptr || version == nullptr || description == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     program_name_ = name;
     program_version_ = version;
     program_description_ = description;
     program_info_set_ = true;
-    return HAZE_SUCCESS;
+    return {};
 }
 
-hazeError_t Config::set_target(const char *target) noexcept {
+std::expected<void, HazeInternalError> Config::set_target(const char *target) noexcept {
     if (target == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return std::unexpected(HazeInternalError::InvalidArgument);
     HazeLockGuard lock(mutex_);
     target_ = target;
     target_set_ = true;
-    return HAZE_SUCCESS;
+    return {};
 }
 
 std::string Config::program_name() const noexcept {

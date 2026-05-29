@@ -21,7 +21,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <haze/haze_types.h>
 #include <niobium/fhetch_api.h>
 
 namespace haze {
@@ -33,57 +32,62 @@ namespace haze {
 
 // Polynomial-polynomial-modulus. Used by hazeAdd, hazeSub, hazeMul.
 template <auto OpFn>
-hazeError_t binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2, int mod_idx) noexcept {
+std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2,
+                                                    int mod_idx) noexcept {
     EpochSession session;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
-        return set_error(HAZE_ERROR_INVALID_VALUE);
+        return std::unexpected(HazeInternalError::InvalidArgument);
     auto p1 = epoch().lookup_or_create_locked(src1);
     if (!p1)
-        return set_error(to_public_error(p1.error()));
+        return std::unexpected(p1.error());
     auto p2 = epoch().lookup_or_create_locked(src2);
     if (!p2)
-        return set_error(to_public_error(p2.error()));
+        return std::unexpected(p2.error());
     epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q));
-    return HAZE_SUCCESS;
+    return {};
 }
 
 // Polynomial-scalar-modulus. Used by hazeAddScalar, hazeSubScalar, hazeMulScalar.
 template <auto OpFn>
-hazeError_t binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar, int mod_idx) noexcept {
+std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar,
+                                                    int mod_idx) noexcept {
     EpochSession session;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
-        return set_error(HAZE_ERROR_INVALID_VALUE);
+        return std::unexpected(HazeInternalError::InvalidArgument);
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
-        return set_error(to_public_error(p.error()));
+        return std::unexpected(p.error());
     epoch().store_compute_result_locked(dst,
                                         OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
-    return HAZE_SUCCESS;
+    return {};
 }
 
 // Polynomial-modulus. Used by hazeNTT, hazeINTT.
-template <auto OpFn> hazeError_t unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
+template <auto OpFn>
+std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
     EpochSession session;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
-        return set_error(HAZE_ERROR_INVALID_VALUE);
+        return std::unexpected(HazeInternalError::InvalidArgument);
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
-        return set_error(to_public_error(p.error()));
+        return std::unexpected(p.error());
     epoch().store_compute_result_locked(dst, OpFn(*p, q));
-    return HAZE_SUCCESS;
+    return {};
 }
 
 // Polynomial-index. Used by hazeAutomorph.
-template <auto OpFn> hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t index) noexcept {
+template <auto OpFn>
+std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
+                                                   uint64_t index) noexcept {
     EpochSession session;
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
-        return set_error(to_public_error(p.error()));
+        return std::unexpected(p.error());
     epoch().store_compute_result_locked(dst, OpFn(*p, index));
-    return HAZE_SUCCESS;
+    return {};
 }
 
 // MRP compute templates: same shape as the SRP templates, fanned out per
@@ -92,68 +96,72 @@ template <auto OpFn> hazeError_t unary_pi_op(DevAddr dst, DevAddr src, uint64_t 
 
 // MRP polynomial-polynomial. Used by hazeAddMrp, hazeSubMrp, hazeMulMrp.
 template <auto OpFn>
-hazeError_t binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *src2,
-                             const uint64_t *base, std::size_t base_len) noexcept {
+std::expected<void, HazeInternalError>
+binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *src2,
+                 const uint64_t *base, std::size_t base_len) noexcept {
     EpochSession session;
     auto m1 = build_mrp_locked(src1, base, base_len);
     if (!m1)
-        return set_error(to_public_error(m1.error()));
+        return std::unexpected(m1.error());
     auto m2 = build_mrp_locked(src2, base, base_len);
     if (!m2)
-        return set_error(to_public_error(m2.error()));
+        return std::unexpected(m2.error());
     niobium::fhetch::MRP result = OpFn(*m1, *m2);
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
-        return set_error(to_public_error(stored.error()));
-    return HAZE_SUCCESS;
+        return std::unexpected(stored.error());
+    return {};
 }
 
 // MRP polynomial-scalar (scalars[i] pairs with base[i]); used by
 // hazeAddScalarMrp, hazeSubScalarMrp, hazeMulScalarMrp.
 template <auto OpFn>
-hazeError_t binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scalars,
-                             const uint64_t *base, std::size_t base_len) noexcept {
+std::expected<void, HazeInternalError>
+binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scalars,
+                 const uint64_t *base, std::size_t base_len) noexcept {
     EpochSession session;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
-        return set_error(to_public_error(m.error()));
+        return std::unexpected(m.error());
     niobium::fhetch::MRP result = OpFn(*m, build_mrs(scalars, base, base_len));
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
-        return set_error(to_public_error(stored.error()));
-    return HAZE_SUCCESS;
+        return std::unexpected(stored.error());
+    return {};
 }
 
 // MRP polynomial-only: mr_ntt/mr_intt carry their moduli base inside the
 // MRP, so this can't reuse unary_pq_op. Used by hazeNTTMrp, hazeINTTMrp.
 template <auto OpFn>
-hazeError_t unary_p_op_mrp(void *const *dst, const void *const *src, const uint64_t *base,
-                           std::size_t base_len) noexcept {
+std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const void *const *src,
+                                                      const uint64_t *base,
+                                                      std::size_t base_len) noexcept {
     EpochSession session;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
-        return set_error(to_public_error(m.error()));
+        return std::unexpected(m.error());
     niobium::fhetch::MRP result = OpFn(*m);
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
-        return set_error(to_public_error(stored.error()));
-    return HAZE_SUCCESS;
+        return std::unexpected(stored.error());
+    return {};
 }
 
 // MRP polynomial-with-index. Used by hazeAutomorphMrp (mr_automorph_eval
 // takes an odd integer k in [1, 2N-1] and is otherwise modulus-independent).
 template <auto OpFn>
-hazeError_t unary_pi_op_mrp(void *const *dst, const void *const *src, uint64_t index,
-                            const uint64_t *base, std::size_t base_len) noexcept {
+std::expected<void, HazeInternalError> unary_pi_op_mrp(void *const *dst, const void *const *src,
+                                                       uint64_t index, const uint64_t *base,
+                                                       std::size_t base_len) noexcept {
     EpochSession session;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
-        return set_error(to_public_error(m.error()));
+        return std::unexpected(m.error());
     niobium::fhetch::MRP result = OpFn(*m, index);
     auto stored = store_mrp_locked(dst, result, base, base_len);
     if (!stored)
-        return set_error(to_public_error(stored.error()));
-    return HAZE_SUCCESS;
+        return std::unexpected(stored.error());
+    return {};
 }
 
 } // namespace haze

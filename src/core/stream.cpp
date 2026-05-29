@@ -25,46 +25,30 @@ std::atomic<uint64_t> g_next_event_id{1};
 } // namespace
 
 hazeStream_t stream_create() noexcept {
-    return new (std::nothrow) haze_stream_s{
-        .id = g_next_stream_id.fetch_add(1, std::memory_order_relaxed), .is_default = false};
+    return new (std::nothrow)
+        haze_stream_s{.id = g_next_stream_id.fetch_add(1, std::memory_order_relaxed)};
 }
 
 void stream_destroy(hazeStream_t s) noexcept {
-    if (s == nullptr)
-        return;
-    if (s->is_default)
-        return; // never destroy the default stream
-    delete s;
-}
-
-hazeStream_t stream_default() noexcept {
-    // id=0 mirrors CUDA's default-stream convention. The instance has
-    // static storage duration — initialised once on first call (C++11
-    // magic statics handle the thread-safe init), destroyed at normal
-    // process exit. No heap allocation, no leak, no mutex needed for
-    // the lazy init.
-    static haze_stream_s instance{.id = 0, .is_default = true};
-    return &instance;
+    delete s; // delete nullptr is well-defined and a no-op
 }
 
 void streams_reset() noexcept {
-    // Default stream lives for the process; nothing to drop here. Only
-    // the user-stream id counter resets.
     g_next_stream_id.store(1, std::memory_order_relaxed);
 }
 
 hazeEvent_t event_create() noexcept {
-    return new (std::nothrow) haze_event_s{
-        .id = g_next_event_id.fetch_add(1, std::memory_order_relaxed), .recorded = false};
+    return new (std::nothrow)
+        haze_event_s{.id = g_next_event_id.fetch_add(1, std::memory_order_relaxed)};
 }
 
 void event_destroy(hazeEvent_t e) noexcept {
     delete e;
 }
 
-void event_record(hazeEvent_t e) noexcept {
-    if (e != nullptr)
-        e->recorded = true;
+void event_record(hazeEvent_t /*e*/) noexcept {
+    // Events do not model ordering in this runtime (CUDA-shape parity
+    // only); recording is a no-op.
 }
 
 void events_reset() noexcept {

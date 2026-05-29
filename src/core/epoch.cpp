@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/compiler.h>
@@ -44,22 +43,16 @@ EpochState &EpochState::instance() noexcept {
 }
 
 void EpochState::ensure_recording_locked() {
-    // EpochSession initializes the backend before locking; this defensive
-    // check guards future code paths that might bypass EpochSession.
-    if (!backend().is_initialized())
-        return;
-    if (!recording_) {
-        // start_epoch() before start() memorizes the polynomial-ID base so
-        // post-materialize resets snap back to it; without it, IDs drift.
-        CompilerBackend::start_epoch();
+    // EpochSession initializes the backend before locking; the
+    // is_initialized() check guards future code paths that might bypass
+    // EpochSession. start_epoch() before start() memorizes the
+    // polynomial-ID base so post-materialize resets snap back to it;
+    // without it, IDs drift.
+    if (backend().is_initialized() && !recording_) {
+        niobium::compiler().start_epoch();
         CompilerBackend::start_recording();
         recording_ = true;
     }
-}
-
-bool EpochState::is_recording() noexcept {
-    HazeLockGuard lock(mutex_);
-    return recording_;
 }
 
 void EpochState::invalidate(DevAddr addr) noexcept {
@@ -157,10 +150,9 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
 
 void EpochState::tag_mrp_input_if_new_locked(const std::string &name, const fhetch::MRP &mrp) {
     // Dedup so each name reaches fhetch exactly once.
-    auto [it, inserted] = mrp_input_tagged_names_.insert(name);
-    if (!inserted)
-        return;
-    fhetch::tag_input(*it, mrp);
+    if (auto [it, inserted] = mrp_input_tagged_names_.insert(name); inserted) {
+        fhetch::tag_input(*it, mrp);
+    }
 }
 
 std::expected<void, HazeInternalError>
@@ -300,7 +292,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         }
     }
 
-    clear_state_locked(); // also clears captured inputs/outputs (E7).
+    clear_state_locked();
     return {};
 }
 
@@ -330,13 +322,12 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
     return epoch().mutex_;
 }
 
-hazeError_t copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
+std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
     // D2H is the sole flush trigger: finalize, replay, and populate shadows
     // before reading. No-op when not recording, so H2D-then-D2H round-trips
     // and follow-up D2H reads in the same epoch are free.
-    auto replay_result = epoch().replay_and_populate();
-    if (!replay_result)
-        return to_public_error(replay_result.error());
+    if (auto replay_result = epoch().replay_and_populate(); !replay_result)
+        return std::unexpected(replay_result.error());
     return allocator().copy_to_host(dst, src, count);
 }
 

@@ -21,7 +21,7 @@
 namespace haze {
 
 // Internal C++ entry points for the CRT basis-conversion composites.
-// extern "C" shims in haze_basis_convert_api.cpp validate pointer
+// extern "C" shims in src/api/basis_convert.cpp validate pointer
 // arguments, dispatch here, and map HazeInternalError to hazeError_t.
 // Each function does its own pre-flight validation on the params struct
 // and opens an EpochSession internally.

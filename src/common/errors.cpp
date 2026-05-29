@@ -21,6 +21,7 @@ namespace haze {
 
 hazeError_t to_public_error(HazeInternalError err) noexcept {
     switch (err) {
+    // User-actionable: the caller can fix their code.
     case HazeInternalError::InvalidArgument:
         return HAZE_ERROR_INVALID_VALUE;
     case HazeInternalError::NotConfigured:
@@ -33,27 +34,24 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_ALLOC_TOO_SMALL;
     case HazeInternalError::SourceUnavailable:
         return HAZE_ERROR_SOURCE_UNAVAILABLE;
+    // Internal: haze invariants / backend failed. Caller can't recover;
+    // the specific variant survives in the HAZE_DEBUG=1 stderr log.
     case HazeInternalError::BackendInitFailed:
-        return HAZE_ERROR_BACKEND_INIT_FAILED;
     case HazeInternalError::BackendReplayFailed:
-        return HAZE_ERROR_BACKEND_REPLAY_FAILED;
     case HazeInternalError::BackendShapeMismatch:
     case HazeInternalError::MrpGroupAddrModuliMismatch:
-        return HAZE_ERROR_BACKEND_SHAPE_MISMATCH;
     case HazeInternalError::MissingPolyMapBinding:
-        return HAZE_ERROR_MISSING_POLYMAP_BINDING;
     case HazeInternalError::ShadowSizeMismatch:
-        return HAZE_ERROR_SHADOW_SIZE_MISMATCH;
     case HazeInternalError::BackendOutputMissing:
-        return HAZE_ERROR_BACKEND_OUTPUT_MISSING;
     case HazeInternalError::BackendOutputDecodeFailed:
-        return HAZE_ERROR_BACKEND_OUTPUT_DECODE_FAILED;
     case HazeInternalError::BridgeHookFailed:
-        return HAZE_ERROR_BRIDGE_HOOK_FAILED;
     case HazeInternalError::PoolMapDesync:
-        return HAZE_ERROR_POOL_MAP_DESYNC;
+        return HAZE_ERROR_INTERNAL;
     }
-    return HAZE_ERROR_INVALID_VALUE;
+    // Unreachable: the switch above is exhaustive. If a new variant is
+    // added without extending this table, "haze is broken" is the
+    // correct user-visible classification.
+    return HAZE_ERROR_INTERNAL;
 }
 
 namespace {
@@ -107,12 +105,13 @@ bool debug_logging_enabled() noexcept {
 } // namespace
 
 void record_internal_error(HazeInternalError err, const char *context) noexcept {
-    if (!debug_logging_enabled())
-        return;
-    if (context != nullptr) {
-        std::println(stderr, "[haze] internal error: {} ({})", internal_error_name(err), context);
-    } else {
-        std::println(stderr, "[haze] internal error: {}", internal_error_name(err));
+    if (debug_logging_enabled()) {
+        if (context != nullptr) {
+            std::println(stderr, "[haze] internal error: {} ({})", internal_error_name(err),
+                         context);
+        } else {
+            std::println(stderr, "[haze] internal error: {}", internal_error_name(err));
+        }
     }
 }
 

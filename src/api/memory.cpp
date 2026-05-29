@@ -34,7 +34,7 @@ extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
 extern "C" hazeError_t hazeFree(void *ptr) noexcept {
     if (ptr != nullptr)
         haze::epoch().invalidate(haze::to_dev_addr(ptr));
-    return set_error(haze::allocator().free(haze::to_dev_addr(ptr)));
+    return set_internal_result(haze::allocator().free(haze::to_dev_addr(ptr)));
 }
 
 extern "C" hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t /*stream*/) noexcept {
@@ -73,7 +73,7 @@ extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
 
 extern "C" hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
                                                 const void *ptr) noexcept {
-    return set_error(haze::allocator().pointer_attributes(attrs, ptr));
+    return set_internal_result(haze::allocator().pointer_attributes(attrs, ptr));
 }
 
 extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
@@ -85,27 +85,21 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
         const haze::DevAddr dev = haze::to_dev_addr(dst);
-        const hazeError_t err = alloc.copy_h2d(dev, src, count);
-        if (err != HAZE_SUCCESS)
-            return set_error(err);
-        if (auto tag = haze::tag_h2d_input(dev); !tag)
-            return set_error(haze::to_public_error(tag.error()));
-        return set_error(HAZE_SUCCESS);
+        if (auto h2d = alloc.copy_h2d(dev, src, count); !h2d)
+            return set_internal_result(h2d);
+        return set_internal_result(haze::tag_h2d_input(dev));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
         // D2H finalises any in-flight recording (replay + shadow
         // populate) before reading the shadow buffer. See
         // haze::copy_to_host for the contract.
-        return set_error(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
+        return set_internal_result(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {
-        auto result =
-            haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count);
-        if (!result)
-            return set_error(haze::to_public_error(result.error()));
-        return set_error(HAZE_SUCCESS);
+        return set_internal_result(
+            haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count));
     }
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
@@ -120,10 +114,10 @@ extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexce
     if (dev_ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     const haze::DevAddr dev = haze::to_dev_addr(dev_ptr);
-    const hazeError_t err = haze::allocator().memset(dev, value, count);
-    if (err == HAZE_SUCCESS)
-        haze::epoch().invalidate(dev);
-    return set_error(err);
+    if (auto result = haze::allocator().memset(dev, value, count); !result)
+        return set_internal_result(result);
+    haze::epoch().invalidate(dev);
+    return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,

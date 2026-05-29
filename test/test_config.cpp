@@ -64,8 +64,8 @@ TEST_CASE("hazeSetTwiddleFactors rejects negative index", "[unit]") {
 
 TEST_CASE("hazeConfigureDevice fails without ring dimension", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_CONFIGERR);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_CONFIGERR);
 }
 
 TEST_CASE("hazeConfigureDevice succeeds when ring dimension is set", "[unit]") {
@@ -95,8 +95,8 @@ TEST_CASE("hazeDeviceReset returns success and re-permits configuration", "[unit
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // After reset, configure_device should fail again until ring_dim re-set.
-    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_CONFIGERR);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_CONFIGERR);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }

@@ -30,11 +30,9 @@
 //   - Mark accessor methods that hand out a reference to the underlying
 //     capability with HAZE_RETURN_CAPABILITY(field).
 //
-// Limitation: HAZE_ACQUIRED_BEFORE/AFTER work on capabilities that are
-// declared in the same translation unit. For HAZE's epoch -> allocator
-// lock order, the architectural separation (DeviceAllocator never calls
-// into EpochState) is the primary enforcement, with TSAN as the runtime
-// backstop.
+// For HAZE's epoch -> allocator lock order, the architectural separation
+// (DeviceAllocator never calls into EpochState) is the primary
+// enforcement, with TSAN as the runtime backstop.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names
@@ -48,8 +46,6 @@
 #define HAZE_ACQUIRE(...) __attribute__((acquire_capability(__VA_ARGS__)))
 #define HAZE_RELEASE(...) __attribute__((release_capability(__VA_ARGS__)))
 #define HAZE_RETURN_CAPABILITY(x) __attribute__((lock_returned(x)))
-#define HAZE_TRY_ACQUIRE(...) __attribute__((try_acquire_capability(__VA_ARGS__)))
-#define HAZE_NO_THREAD_SAFETY_ANALYSIS __attribute__((no_thread_safety_analysis))
 #else
 #define HAZE_CAPABILITY(s)
 #define HAZE_SCOPED_CAPABILITY
@@ -59,8 +55,6 @@
 #define HAZE_ACQUIRE(...)
 #define HAZE_RELEASE(...)
 #define HAZE_RETURN_CAPABILITY(x)
-#define HAZE_TRY_ACQUIRE(...)
-#define HAZE_NO_THREAD_SAFETY_ANALYSIS
 #endif
 
 #include <mutex>
@@ -70,9 +64,8 @@ namespace haze {
 // Thin wrapper around std::mutex annotated as a clang TSA capability.
 // libstdc++'s std::mutex carries no annotations, so without this
 // wrapper the TSA attributes cannot identify the underlying mutex as
-// the capability they protect. Forwards lock/unlock/try_lock so
-// std::lock_guard and std::unique_lock continue to work. Used by
-// EpochState::mutex_ and DeviceAllocator::mutex_.
+// the capability they protect. Used by EpochState::mutex_ and
+// DeviceAllocator::mutex_.
 class HAZE_CAPABILITY("mutex") HazeMutex {
   public:
     HazeMutex() = default;
@@ -81,12 +74,6 @@ class HAZE_CAPABILITY("mutex") HazeMutex {
 
     void lock() HAZE_ACQUIRE() { impl_.lock(); }
     void unlock() HAZE_RELEASE() { impl_.unlock(); }
-    bool try_lock() HAZE_TRY_ACQUIRE(true) { return impl_.try_lock(); }
-
-    // Escape hatch for code that needs the underlying std::mutex
-    // (e.g., std::unique_lock<std::mutex> when constructed with the
-    // raw mutex). Carries no analysis — use sparingly.
-    std::mutex &raw() noexcept HAZE_NO_THREAD_SAFETY_ANALYSIS { return impl_; }
 
   private:
     std::mutex impl_;

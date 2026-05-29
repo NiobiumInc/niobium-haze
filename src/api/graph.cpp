@@ -12,9 +12,9 @@
 // from the Product.
 //
 // Graph capture / execution shims (CUDA-shape names). All entries
-// currently return HAZE_ERROR_NOT_SUPPORTED; graph capture is a future
-// task. Output handles are zeroed on entry so callers that ignore the
-// error code do not see uninitialised pointers.
+// return HAZE_ERROR_NOT_SUPPORTED — graph capture has no analogue in
+// the record-and-replay model. Output handles are zeroed on entry so
+// callers that ignore the error code do not see uninitialised pointers.
 
 #include "common/errors.hpp"
 

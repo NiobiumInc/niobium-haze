@@ -24,9 +24,9 @@ namespace haze {
 // only the *control* operations: init, recording lifecycle, replay.
 //
 // Single concrete class, no virtual dispatch. Backend swap (e.g. to the
-// niobium-fhetch dummy compiler when stable) happens at link time: the
-// implementation file (haze_backend.cpp) calls into whichever library
-// supplies the niobium::compiler() symbol.
+// niobium-fhetch dummy compiler when stable) happens at link time:
+// backend.cpp calls into whichever library supplies the
+// niobium::compiler() symbol.
 class CompilerBackend {
   public:
     static CompilerBackend &instance() noexcept;
@@ -45,10 +45,6 @@ class CompilerBackend {
 
     // Begin a new recording (after init or after stop_epoch).
     static void start_recording() noexcept;
-
-    // Mark the start of a functional epoch — anchors poly-ID base on
-    // first call, resets to that base on subsequent calls.
-    static void start_epoch() noexcept;
 
     // Finalize the current epoch's recording, write the per-epoch .fhetch
     // trace, and reset state for the next epoch. Returns true on success.
