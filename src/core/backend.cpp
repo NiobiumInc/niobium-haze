@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <niobium/compiler.h>
+#include <niobium/openfhe/probes.h>
 #include <string>
 
 namespace haze {
@@ -63,6 +64,10 @@ bool CompilerBackend::ensure_initialized() noexcept {
         int argc = 2;
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
+        // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
+        // capture path is dead weight; mute it globally. Distinct from
+        // openfhe_cprobe_pause_recording, which would also silence sr_*.
+        openfhe_suppress_probes(1);
     } catch (...) {
         record_internal_error(HazeInternalError::BackendInitFailed,
                               "CompilerBackend::ensure_initialized");
