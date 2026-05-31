@@ -15,6 +15,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/allocator.hpp"
 #include "core/epoch.hpp"
 
 #include <cstddef>
@@ -87,6 +88,57 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
         DevAddr a = to_dev_addr(dst_polys[i]);
         epoch().store_compute_result_locked(a, mrp[base[i]]);
         addrs.push_back(a);
+    }
+    if (len > 1) {
+        auto group_name = mrp_signature_name("haze_mrp_out", addrs.front());
+        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
+                                                        std::move(group_name));
+    }
+    return {};
+}
+
+std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
+                                                    std::size_t count, std::size_t len) noexcept {
+    // Write every residue's shadow first, then tag them under one session:
+    // tag promotes the just-written bytes to a fhetch input per residue.
+    for (std::size_t i = 0; i < len; ++i)
+        if (auto h2d = allocator().copy_h2d(to_dev_addr(dst[i]), src[i], count); !h2d)
+            return h2d;
+    EpochSession session;
+    for (std::size_t i = 0; i < len; ++i)
+        if (auto tag = epoch().tag_h2d_input_locked(to_dev_addr(dst[i])); !tag)
+            return tag;
+    return {};
+}
+
+std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
+                                                        std::size_t count,
+                                                        std::size_t len) noexcept {
+    // The first copy_to_host flushes the recording; the rest read shadow bytes
+    // (replay_and_populate is a no-op once the recording is flushed).
+    for (std::size_t i = 0; i < len; ++i)
+        if (auto d2h = copy_to_host(dst[i], to_dev_addr(src[i]), count); !d2h)
+            return d2h;
+    return {};
+}
+
+std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
+                                                                 const void *const *src,
+                                                                 const uint64_t *base,
+                                                                 std::size_t len) noexcept {
+    // Per-residue pass-through copy under base[i]: sr_addps(+0) emits real IR
+    // and triggers remember_modulus so a compute-produced source is captured.
+    EpochSession session;
+    std::vector<DevAddr> addrs;
+    addrs.reserve(len);
+    for (std::size_t i = 0; i < len; ++i) {
+        auto src_poly = epoch().lookup_or_create_locked(to_dev_addr(src[i]));
+        if (!src_poly)
+            return std::unexpected(src_poly.error());
+        DevAddr d = to_dev_addr(dst[i]);
+        epoch().store_compute_result_locked(
+            d, fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), base[i]));
+        addrs.push_back(d);
     }
     if (len > 1) {
         auto group_name = mrp_signature_name("haze_mrp_out", addrs.front());

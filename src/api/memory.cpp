@@ -14,7 +14,9 @@
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
 #include "core/epoch.hpp"
+#include "core/mrp_polymap.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <haze/haze.h>
@@ -108,6 +110,22 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
 extern "C" hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count,
                                        hazeMemcpyKind kind, hazeStream_t /*stream*/) noexcept {
     return hazeMemcpy(dst, src, count, kind);
+}
+
+extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
+                                     hazeMemcpyKind kind, const uint64_t *base,
+                                     size_t base_len) noexcept {
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+
+    if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
+        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base_len));
+    if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
+        return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
+    if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)
+        return set_internal_result(haze::copy_device_to_device_mrp(dst, src, base, base_len));
+
+    return set_error(HAZE_ERROR_INVALID_VALUE);
 }
 
 extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
