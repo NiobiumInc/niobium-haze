@@ -86,6 +86,15 @@ HAZE_API hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
 HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *src, int src_device,
                                          size_t count, hazeStream_t stream) HAZE_NOEXCEPT;
 
+// Per-residue (MRP) variant of hazeMemcpy: `dst`/`src` are arrays of
+// `base_len` poly pointers and `count` is bytes-per-residue, applied to every
+// residue under `kind`. `base` (the per-residue primes, see the MRP block
+// below) is consulted only by D2D, which records a per-residue pass-through
+// copy under base[i] and registers the dst as an MRP output group.
+HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
+                                   hazeMemcpyKind kind, const uint64_t *base,
+                                   size_t base_len) HAZE_NOEXCEPT;
+
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,
 // program metadata, target selection, lifecycle reset.
 
