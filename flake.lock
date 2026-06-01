@@ -21,9 +21,8 @@
       "flake": false,
       "locked": {
         "lastModified": 1779247542,
-        "narHash": "sha256-1wl7fYbh5JYHKcgXAILZljRAB2Vswetjz7Lvg0AL3NY=",
         "ref": "refs/heads/main",
-        "rev": "4ab3ee9190219c9cbf94ef4d94a5c6c8df794091",
+        "rev": "ae99cdd65c3d8e49a6b2c250a9e757f16cbc60b4",
         "revCount": 108,
         "submodules": true,
         "type": "git",
