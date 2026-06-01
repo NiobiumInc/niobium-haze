@@ -151,7 +151,7 @@ jobs:
           retention-days: 7
 
   flake-check:
-    name: nix flake check
+    name: pure-nix build
     runs-on: ubuntu-latest
     if: >-
       github.event_name != 'pull_request' ||
