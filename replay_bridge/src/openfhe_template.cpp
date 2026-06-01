@@ -68,6 +68,11 @@ namespace {
 namespace fs = std::filesystem;
 using DCRTPoly = lbcrypto::DCRTPoly;
 
+// fhetch's copy sentinel (trace_writer.h TraceWriter::COPY_MODULUS_VALUE; no
+// public header exports it). Tags an address only ever touched by modulus-less
+// copy ops, so it describes no real modulus. Keep in sync if fhetch changes it.
+constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+
 // Granular failure variants for diagnostics; the C ABI collapses them.
 enum class BridgeError : uint8_t {
     InvalidModulus,
@@ -339,8 +344,10 @@ struct HookCtx {
 
 // Pick the CC for a shape; uses `local_cache` (alive only during one hook
 // call) to dedupe per-shape builds. Heterogeneous arrays log + return nullptr.
-// TODO(niobium-fhetch:mod-map-tracking): the modulus-0 fallback covers
-// outputs whose address_modulus_map entry isn't registered before sync.
+// TODO(niobium-fhetch:mod-map-tracking): the modulus-0 / COPY_MODULUS fallback
+// covers outputs whose address_modulus_map entry is the copy sentinel (an
+// address only ever touched by modulus-less copy ops) rather than a real
+// modulus registered before sync.
 const Context *context_for_shape(const HookCtx &hctx,
                                  std::map<std::vector<uint64_t>, Context> &local_cache,
                                  const niobium::CapturedShape &shape) {
@@ -363,8 +370,12 @@ const Context *context_for_shape(const HookCtx &hctx,
     const auto &moduli = shape.per_element_moduli.front();
     if (moduli.empty())
         return &hctx.primary;
+    // A 0 or COPY_MODULUS sentinel means the address carries no real modulus —
+    // its primes are filled from the trace at reconstruct time. Route to the
+    // primary CC; synthesizing a per-shape context from the sentinel yields
+    // bit_width 64 → an out-of-range scalingModSize.
     for (auto q : moduli) {
-        if (q == 0)
+        if (q == 0 || q == kCopyModulus)
             return &hctx.primary;
     }
     // Mirrors the heterogeneity check in synthesize_haze_array_ciphertext.
@@ -396,6 +407,36 @@ const Context *context_for_shape(const HookCtx &hctx,
     }
     auto [ins, _] = local_cache.emplace(moduli, std::move(*built));
     return &ins->second;
+}
+
+// After fhetch 55fd616, reconstruct fills output templates via SetValues
+// without rebuilding params, so each template tower's modulus must already
+// equal the trace modulus. The synthetic per-shape context (Init path) is
+// built from bit-widths, so GenCryptoContext's primes won't match — install
+// the exact trace moduli. Towers already at the right modulus (the Register
+// path, where the primary CC is the recording's own context) are left
+// untouched so their precomputed params stay byte-identical; COPY_MODULUS / 0
+// towers carry no real modulus and keep the template's.
+void install_trace_output_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
+                                 const niobium::CapturedShape &shape, uint64_t ring_dim) {
+    const auto corder = static_cast<uint32_t>(2 * ring_dim);
+    auto &elements = ct->GetElements();
+    for (size_t e = 0; e < elements.size(); ++e) {
+        const auto &moduli = shape.per_element_moduli[e < shape.per_element_moduli.size() ? e : 0];
+        auto &towers = elements[e].GetAllElements();
+        const size_t n = std::min(towers.size(), moduli.size());
+        for (size_t t = 0; t < n; ++t) {
+            const uint64_t q = moduli[t];
+            if (q == 0 || q == kCopyModulus)
+                continue;
+            if (towers[t].GetModulus().ConvertToInt() == q)
+                continue;
+            const auto root =
+                lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
+            elements[e].SwitchModulusAtIndex(t, DCRTPoly::Integer(q),
+                                             DCRTPoly::Integer(root.ConvertToInt()));
+        }
+    }
 }
 
 // LOAD-BEARING. Runs between stop_recording and reconstruct to produce the
@@ -432,6 +473,7 @@ void on_post_recording(const HookCtx &hctx) {
                     return;
                 }
                 auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
+                install_trace_output_moduli(ct, shape, hctx.ring_dim);
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
                     log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }
