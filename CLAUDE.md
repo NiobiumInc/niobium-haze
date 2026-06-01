@@ -40,8 +40,8 @@ the project tests against.
 ### Preferred path: nix flake
 
 If `nix` is installed, use it. The flake provides a hermetic devshell
-with everything pinned (clang, cmake, clang-tools, catch2_3, jujutsu)
-plus `MACOSX_DEPLOYMENT_TARGET=14.0` and a nix-pinned `SDKROOT`:
+with everything pinned (clang via `clangStdenv`, cmake, clang-tools,
+catch2_3, jujutsu, nixfmt, clang-tidy-cache):
 
 ```sh
 cd /path/to/niobium-haze
