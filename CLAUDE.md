@@ -461,6 +461,10 @@ parent project (e.g., niobium-client) has already built it.
 
 ## Repository conventions
 
+- `style.md` is the C++ house style guide (Rust-developer lens, C++23,
+  safe-subset, templates/concepts). Read it before writing or reviewing
+  any C++ in this repo; it complements the `.clang-format` / `.clang-tidy`
+  configs with the conventions tooling can't enforce.
 - `vendor/` is read-only. Public headers under
   `vendor/niobium-fhetch/include` are consumable; modifying source there
   is out of scope. The companion `niobium-fhetch` review goes through
