@@ -67,6 +67,12 @@ class EpochState {
     void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
 
+    // Record a pass-through copy dst <- src under the COPY_MODULUS sentinel.
+    // A copy is modulus-agnostic and H2D eager-tags inputs, so the op needn't
+    // carry a real prime; shared by the SRP and MRP D2D paths.
+    std::expected<void, HazeInternalError> copy_result_locked(DevAddr dst, DevAddr src) noexcept
+        HAZE_REQUIRES(mutex_);
+
     // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
     // Builds the Polynomial via a non-evicting read (shadow stays intact
     // for subsequent compute-free D2H), calls `tag_input`, and binds it

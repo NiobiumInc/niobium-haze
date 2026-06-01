@@ -37,6 +37,11 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
+// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE):
+// the simulator reads it as "no reduction", so sr_addps(x, 0, kCopyModulus)
+// is a pure copy of x.
+constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+
 EpochState &EpochState::instance() noexcept {
     static EpochState inst;
     return inst;
@@ -119,6 +124,16 @@ void EpochState::store_compute_result_locked(DevAddr addr,
     if (!pending_outputs_.contains(addr)) {
         pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
     }
+}
+
+std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst,
+                                                                      DevAddr src) noexcept {
+    auto src_poly = lookup_or_create_locked(src);
+    if (!src_poly)
+        return std::unexpected(src_poly.error());
+    store_compute_result_locked(
+        dst, fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kCopyModulus));
+    return {};
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr addr) noexcept {
@@ -333,23 +348,10 @@ std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t /*count*/) noexcept {
-    // D2D is a recorded polynomial copy under the first configured ciphertext
-    // modulus. sr_addps with imm=0 and a real modulus is a normalize-and-copy
-    // — identity for any well-formed CKKS residue and the right contract for
-    // record-and-replay; an "unbounded" copy isn't meaningful in CKKS. The
-    // real modulus also triggers remember_modulus, which is what makes a
-    // freshly-tagged input visible to sync_fhetch_state_to_compiler at
-    // replay time.
-    const uint64_t q = config().modulus(0);
-    if (q == 0)
-        return std::unexpected(HazeInternalError::NotConfigured);
+    // D2D is a recorded pass-through copy; the source is already tagged (H2D
+    // eager-tag or a prior compute), so the copy carries no real modulus.
     EpochSession session;
-    auto src_poly = epoch().lookup_or_create_locked(src);
-    if (!src_poly)
-        return std::unexpected(src_poly.error());
-    fhetch::Polynomial result = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), q);
-    epoch().store_compute_result_locked(dst, std::move(result));
-    return {};
+    return epoch().copy_result_locked(dst, src);
 }
 
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept {
