@@ -1,7 +1,6 @@
 name: PR - Claude Code Review
 
 on:
-  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened]
   issue_comment:
@@ -18,7 +17,6 @@ jobs:
     name: PR - Full Code Review
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened')) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
@@ -49,11 +47,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 45
-            --allowedTools Edit,Read,Write
+            --allowedTools Read
           track_progress: true
           prompt: |
             REPO: ${{ github.repository }}
@@ -81,6 +79,7 @@ jobs:
             2. Blockers (must-fix)
             3. Risks / Watch-outs
             4. Non-blocking suggestions
+            5. Questions for the author
 
             Rules:
             - Each issue must be one line: [Severity] file:line — problem — fix
@@ -130,7 +129,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           token: ${{ steps.app-token.outputs.token }}
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Get files changed in latest push
         id: changed-files
@@ -144,11 +143,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 25
-            --allowedTools Edit,Read,Write
+            --allowedTools Read
           track_progress: true
           prompt: |
             REPO: ${{ github.repository }}
