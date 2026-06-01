@@ -421,11 +421,16 @@ void install_trace_output_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
                                  const niobium::CapturedShape &shape, uint64_t ring_dim) {
     const auto corder = static_cast<uint32_t>(2 * ring_dim);
     auto &elements = ct->GetElements();
+    // synthesize_for_shape builds one CT element per per_element_moduli entry
+    // and trims each to its moduli-list length, so the two stay in lockstep.
+    if (elements.size() != shape.per_element_moduli.size())
+        throw std::runtime_error("install_trace_output_moduli: element/shape count mismatch");
     for (size_t e = 0; e < elements.size(); ++e) {
-        const auto &moduli = shape.per_element_moduli[e < shape.per_element_moduli.size() ? e : 0];
+        const auto &moduli = shape.per_element_moduli[e];
         auto &towers = elements[e].GetAllElements();
-        const size_t n = std::min(towers.size(), moduli.size());
-        for (size_t t = 0; t < n; ++t) {
+        if (towers.size() != moduli.size())
+            throw std::runtime_error("install_trace_output_moduli: tower/moduli count mismatch");
+        for (size_t t = 0; t < moduli.size(); ++t) {
             const uint64_t q = moduli[t];
             if (q == 0 || q == kCopyModulus)
                 continue;
