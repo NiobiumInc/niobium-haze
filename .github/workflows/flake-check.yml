@@ -56,11 +56,9 @@ jobs:
 
       - name: Verify flake.lock niobium-fhetch rev matches submodule
         # Strict gate: the niobium-fhetch flake input must pin the same
-        # rev that haze's index records for the vendor/niobium-fhetch
-        # submodule. Drift is impossible to merge because we'd be
-        # building/testing different fhetch sources via nix vs. via
-        # `make build`. After a fhetch bump, run scripts/sync-fhetch-rev.sh
-        # to realign flake.lock with the new submodule rev.
+        # rev haze's index records for the submodule, else nix and
+        # `make build` test different sources. Realign after a bump with
+        # scripts/sync-fhetch-rev.sh.
         run: |
           submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
           lock_rev=$(jq -r '.nodes."niobium-fhetch-src".locked.rev' flake.lock)
@@ -71,12 +69,9 @@ jobs:
           fi
 
       - name: Configure git to use App token for github.com fetches
-        # nix's libgit2 fetcher resolves git+ssh://git@github.com/...
-        # URLs in the flake. The runner has no SSH key, so rewrite
-        # ssh://git@github.com/ -> https://x-access-token:${TOKEN}@github.com/
-        # globally; libgit2 honors insteadOf rules. This covers both
-        # the niobium-fhetch flake input and any sub-submodule fetches
-        # (openfhe, json) that the input's `?submodules=1` triggers.
+        # The runner has no SSH key, so rewrite ssh://git@github.com/ ->
+        # https with the App token; nix's libgit2 fetcher honors insteadOf
+        # for the niobium-fhetch input and its ?submodules=1 sub-fetches.
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -95,16 +90,10 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Build compile_commands.json
-        # haze-compile-commands is a configure-only flake derivation
-        # that hands us a hermetic compile_commands.json without
-        # rebuilding openfhe / niobium-fhetch (those are cached via
-        # Magic Nix Cache). The output uses a __HAZE_ROOT__ sentinel
-        # for haze's source root; substitute it for the actual
-        # workspace so clang-tidy reads the checked-out files.
-        # Also pre-create the per-target build subdirs that cmake
-        # would otherwise generate during a real build — clang-tidy
-        # chdir's into each entry's `directory` and crashes if the
-        # dir is missing.
+        # Configure-only flake derivation yielding a hermetic
+        # compile_commands.json (openfhe/fhetch stay cached). Swap the
+        # __HAZE_ROOT__ sentinel for the workspace, and pre-create each
+        # entry's build dir since clang-tidy chdir's into it.
         run: |
           nix build -L .#haze-compile-commands -o build-cc-nix
           mkdir -p build
@@ -114,12 +103,9 @@ jobs:
             | sort -u | xargs -r mkdir -p
 
       - name: Restore clang-tidy-cache
-        # Persistent ctcache hash database across CI runs. Cache key
-        # binds to .clang-tidy (the check set), flake.lock (toolchain
-        # rev), and scripts/clang-tidy.sh itself (since the flag set
-        # we pass to clang-tidy lives there); commit SHA gives each
-        # run a unique save slot so we can resume from the most recent
-        # match via restore-keys without ever clobbering.
+        # Persistent ctcache hash DB. Key binds .clang-tidy + flake.lock
+        # + clang-tidy.sh; the commit SHA gives a unique save slot and
+        # restore-keys resume from the latest match.
         id: ctcache-restore
         uses: actions/cache/restore@v4
         with:
@@ -130,12 +116,9 @@ jobs:
             ctcache-${{ runner.os }}-
 
       - name: Run clang-tidy via cache
-        # nix develop pulls in clang-tools (for the real clang-tidy)
-        # and clang-tidy-cache (the wrapper). CTCACHE_CLANG_TIDY tells
-        # the wrapper which real binary to delegate to on a cache
-        # miss; default upstream is /usr/bin/clang-tidy which doesn't
-        # exist in the nix environment. CTCACHE_DIR lives under $HOME
-        # so it's covered by actions/cache above.
+        # nix develop provides clang-tidy + the clang-tidy-cache wrapper.
+        # CTCACHE_CLANG_TIDY points the wrapper at the real binary on a
+        # miss; CTCACHE_DIR sits under $HOME so actions/cache covers it.
         run: |
           nix develop -L --command bash -c '
             export CTCACHE_DIR="$HOME/.ctcache"
@@ -144,10 +127,8 @@ jobs:
           '
 
       - name: Save clang-tidy-cache
-        # `if: always()` ensures partial cache state (e.g. when lint
-        # caught new findings on some files but cached others) still
-        # warms the next run. ctcache only stores successful results,
-        # so the cache never holds stale failure verdicts.
+        # always(): warm the next run even on partial state. ctcache
+        # stores only successful verdicts, so it never caches a failure.
         if: always()
         uses: actions/cache/save@v4
         with:
@@ -238,10 +219,8 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Magic Nix Cache
-        # Free, zero-config /nix/store cache backed by GitHub Actions
-        # cache. Covers openfhe (~20-30 min cold), niobium-fhetch, and
-        # haze across runs. Documented combo is nix-installer-action
-        # then magic-nix-cache-action.
+        # Zero-config /nix/store cache (GitHub Actions cache). Covers
+        # openfhe (~20-30 min cold), niobium-fhetch, and haze across runs.
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Build pure-nix checks (nixfmt, haze build, devshell)
@@ -256,9 +235,8 @@ jobs:
 
       - name: Collect nix build logs on failure
         if: failure()
-        # /nix/var/log/nix/drvs/ is where nix persists per-derivation
-        # build logs; tarballing it gives the failed derivation's full
-        # log even if the streamed -L output was truncated.
+        # nix persists per-derivation logs under /nix/var/log/nix/drvs;
+        # tar it for the full failed-derivation log even if -L truncated.
         run: |
           sudo tar -czf nix-drv-logs.tgz -C / nix/var/log/nix/drvs 2>/dev/null || true
           ls -la nix-drv-logs.tgz || true
