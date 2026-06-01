@@ -126,18 +126,16 @@ std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *ds
                                                                  const void *const *src,
                                                                  const uint64_t *base,
                                                                  std::size_t len) noexcept {
-    // Per-residue pass-through copy under base[i]: sr_addps(+0) emits real IR
-    // and triggers remember_modulus so a compute-produced source is captured.
+    // Per-residue pass-through copy, then register the dst as an MRP output
+    // group under the real base[i] so it reads back as an MRP, matching the
+    // arithmetic MRP ops.
     EpochSession session;
     std::vector<DevAddr> addrs;
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
-        auto src_poly = epoch().lookup_or_create_locked(to_dev_addr(src[i]));
-        if (!src_poly)
-            return std::unexpected(src_poly.error());
         DevAddr d = to_dev_addr(dst[i]);
-        epoch().store_compute_result_locked(
-            d, fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), base[i]));
+        if (auto copied = epoch().copy_result_locked(d, to_dev_addr(src[i])); !copied)
+            return copied;
         addrs.push_back(d);
     }
     if (len > 1) {
