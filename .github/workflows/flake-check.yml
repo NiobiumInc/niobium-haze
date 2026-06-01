@@ -14,13 +14,9 @@ concurrency:
   group: flake-check-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Two-job pipeline running in parallel. `lint` runs the cached
-# clang-tidy gate (ctcache-backed); `flake-check` runs the slower
-# test suite. Both gate the PR independently — running them in
-# parallel rather than sequentially halves wall time on the typical
-# happy path while preserving the property that any uncached
-# regression caught only by the in-sandbox flake derivation still
-# blocks merge. Magic Nix Cache shares the /nix/store across jobs.
+# Two parallel jobs. `lint` is the ctcache-backed clang-tidy gate;
+# `flake-check` builds the pure-nix derivations nothing else covers
+# (nixfmt + haze + devshell). Magic Nix Cache shares /nix/store.
 jobs:
   lint:
     name: clang-tidy
@@ -248,12 +244,15 @@ jobs:
         # then magic-nix-cache-action.
         uses: DeterminateSystems/magic-nix-cache-action@v13
 
-      - name: nix flake check
-        # -L (= --print-build-logs) streams every derivation's build
-        # log to the workflow output, so test failures and OpenFHE
-        # build errors are visible inline. --keep-going lets every
-        # check run before the job fails, matching local behaviour.
-        run: nix flake check -L --keep-going
+      - name: Build pure-nix checks (nixfmt, haze build, devshell)
+        # Not `nix flake check`: that also realizes clang-format, clang-tidy,
+        # and the unit/sim tests, which clang-format.yml, the lint job, and
+        # build-test.yml already gate. Build only what nothing else does.
+        run: |
+          nix build -L --keep-going \
+            .#checks.x86_64-linux.fmt \
+            .#checks.x86_64-linux.haze-build \
+            .#checks.x86_64-linux.devshell-builds
 
       - name: Collect nix build logs on failure
         if: failure()
