@@ -139,6 +139,25 @@ std::expected<void, HazeInternalError> Config::set_target(const char *target) no
     return {};
 }
 
+std::expected<void, HazeInternalError> Config::set_program_directory(const char *dir) noexcept {
+    if (dir == nullptr)
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    HazeLockGuard lock(mutex_);
+    program_dir_ = dir;
+    program_dir_set_ = true;
+    return {};
+}
+
+bool Config::has_program_directory() const noexcept {
+    HazeLockGuard lock(mutex_);
+    return program_dir_set_;
+}
+
+std::string Config::program_directory() const noexcept {
+    HazeLockGuard lock(mutex_);
+    return program_dir_;
+}
+
 std::string Config::program_name() const noexcept {
     HazeLockGuard lock(mutex_);
     return program_info_set_ ? program_name_ : std::string{"haze"};
@@ -180,8 +199,10 @@ void Config::reset() noexcept {
     program_version_.clear();
     program_description_.clear();
     target_.clear();
+    program_dir_.clear();
     program_info_set_ = false;
     target_set_ = false;
+    program_dir_set_ = false;
 }
 
 } // namespace haze

@@ -109,6 +109,17 @@ HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
                                         const char *description) HAZE_NOEXCEPT;
 
+/* Override the directory where the recorded project is written.
+ *
+ * By default the project (the .fhetch trace, serialized inputs, ciphertext
+ * templates, and cryptocontext.dat) is written under
+ * <cwd>/<program_name>/. Setting an explicit path makes the project land at
+ * `dir` verbatim instead — convenient for producing one self-contained
+ * directory to ship elsewhere (e.g. to replay on the FPGA host).
+ *
+ * Must be called before the first compute call to take effect. */
+HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
+
 /* Select the niobium-compiler target for replay.
  *
  * Targets fall into two tiers by where they execute:
@@ -144,6 +155,24 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
  * which finalises the recording, runs the replay, and populates the
  * shadow buffer before returning bytes to the host. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
+
+/* Finalize the current recording and write the project directory WITHOUT
+ * running replay.
+ *
+ * Where hazeMemcpy(D2H) finalizes the recording, dispatches replay, and
+ * reads results back into host memory, hazeWriteProgram() stops after the
+ * project directory is written: the .fhetch trace, serialized inputs,
+ * ciphertext templates, and cryptocontext.dat. Nothing is executed and no
+ * results are produced.
+ *
+ * Use it to emit a self-contained directory on a machine without the
+ * compiler/hardware, then replay it elsewhere — e.g. ship it to the FPGA
+ * host and run `nbcc_fhetch_replay --project=<dir> --target=<device>`.
+ *
+ * No-op (returns HAZE_SUCCESS) when no recording is in flight. After it
+ * returns the epoch is reset, so a subsequent hazeMemcpy(D2H) would start a
+ * fresh recording rather than replay the one just written. */
+HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
 
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer
 // that emits FHETCH IR; nothing executes until hazeMemcpy(D2H) flushes

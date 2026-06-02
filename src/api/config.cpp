@@ -42,3 +42,7 @@ extern "C" hazeError_t hazeSetProgramInfo(const char *name, const char *version,
 extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
     return set_internal_result(haze::config().set_target(target));
 }
+
+extern "C" hazeError_t hazeSetProgramDirectory(const char *dir) noexcept {
+    return set_internal_result(haze::config().set_program_directory(dir));
+}

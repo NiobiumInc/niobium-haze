@@ -50,6 +50,12 @@ class EpochState {
     // populate shadow buffers. No-op when not recording.
     std::expected<void, HazeInternalError> replay_and_populate() noexcept HAZE_EXCLUDES(mutex_);
 
+    // Finalize the epoch and write the project directory (trace + inputs +
+    // templates + cryptocontext) WITHOUT dispatching replay or populating
+    // shadow buffers. Backs hazeWriteProgram() for the record-here /
+    // replay-elsewhere (e.g. FPGA) flow. No-op when not recording.
+    std::expected<void, HazeInternalError> materialize_only() noexcept HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -98,9 +104,19 @@ class EpochState {
   private:
     EpochState() = default;
 
-    // Drain pending outputs through the backend; always resets state at
-    // the end so the next epoch starts clean on success or failure.
-    std::expected<void, HazeInternalError> do_materialize_locked() HAZE_REQUIRES(mutex_);
+    // Tag pending SRP + MRP outputs for fhetch. Shared by replay_and_populate
+    // and materialize_only; returns the binding error without clearing state.
+    std::expected<void, HazeInternalError> tag_pending_outputs_locked() HAZE_REQUIRES(mutex_);
+
+    // Shared finalize entry: early-out when idle, tag outputs, then materialize.
+    // run_replay=false stops after the trace is written (hazeWriteProgram).
+    std::expected<void, HazeInternalError> finalize_locked(bool run_replay) HAZE_REQUIRES(mutex_);
+
+    // Write the trace (step 1) and, when run_replay, dispatch replay + populate
+    // shadows (steps 2-3). Always resets state at the end so the next epoch
+    // starts clean on success or failure.
+    std::expected<void, HazeInternalError> do_materialize_locked(bool run_replay)
+        HAZE_REQUIRES(mutex_);
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
@@ -165,6 +181,11 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 // copy from the device shadow buffer to host. The api/ shim translates
 // the internal error at the C ABI edge.
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
+
+// Finalize an active recording by writing the project directory only — no
+// replay, no shadow population. Peer of copy_to_host for the hazeWriteProgram
+// path; no-op when not recording. The api/ shim translates the error.
+std::expected<void, HazeInternalError> write_program() noexcept;
 
 // D2D as a recorded copy: promotes `src` if needed (via
 // `lookup_or_create_locked`), emits a pass-through fhetch IR node, and

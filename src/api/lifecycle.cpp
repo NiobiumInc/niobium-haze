@@ -56,3 +56,9 @@ extern "C" hazeError_t hazeDeviceReset(void) noexcept {
     g_last_error = HAZE_SUCCESS;
     return HAZE_SUCCESS;
 }
+
+extern "C" hazeError_t hazeWriteProgram(void) noexcept {
+    // Finalize + write the project directory without replaying; see
+    // haze::write_program and the hazeWriteProgram doc in haze.h.
+    return set_internal_result(haze::write_program());
+}
