@@ -194,29 +194,15 @@ EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
     return {};
 }
 
-std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
-    HazeLockGuard lock(mutex_);
-    if (!recording_) {
-        return {}; // nothing to replay
-    }
-
-    // No outputs to materialize — recording was opened (e.g., by H2D's
-    // eager-tag) but no compute followed. The shadow buffer holds the
-    // current bytes; skip the replay entirely so the bridge crypto context
-    // isn't a prerequisite for compute-free D2H reads.
-    if (pending_outputs_.empty() && pending_mrp_groups_.empty()) {
-        clear_state_locked();
-        return {};
-    }
-
+std::expected<void, HazeInternalError> EpochState::tag_pending_outputs_locked() {
     // pending_outputs_ and poly_map_ stay in lockstep via store + invalidate,
     // so a missing binding here is a state-management bug, not recoverable.
     for (auto &[addr, name] : pending_outputs_) {
         auto it = poly_map_.find(addr);
         if (it == poly_map_.end()) {
             std::ostringstream body;
-            body << "replay_and_populate: pending output '" << name << "' addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec << " missing from poly_map_";
+            body << "tag_pending_outputs_locked: pending output '" << name << "' addr 0x"
+                 << std::hex << to_uintptr(addr) << std::dec << " missing from poly_map_";
             record_internal_error(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
             return std::unexpected(HazeInternalError::MissingPolyMapBinding);
         }
@@ -231,9 +217,9 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
         for (size_t i = 0; i < g.addrs.size(); ++i) {
             auto it = poly_map_.find(g.addrs[i]);
             if (it == poly_map_.end()) {
-                // Group registered but its poly_map_ binding was invalidated before replay.
+                // Group registered but its poly_map_ binding was invalidated before materialize.
                 std::ostringstream body;
-                body << "replay_and_populate: MRP group '" << name << "' addr 0x" << std::hex
+                body << "tag_pending_outputs_locked: MRP group '" << name << "' addr 0x" << std::hex
                      << to_uintptr(g.addrs[i]) << std::dec << " missing from poly_map_";
                 record_internal_error(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
                 return std::unexpected(HazeInternalError::MissingPolyMapBinding);
@@ -244,10 +230,40 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
         fhetch::tag_output(name, fhetch::MRP::from_pairs(pairs));
     }
 
-    return do_materialize_locked();
+    return {};
 }
 
-std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
+std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_replay) {
+    if (!recording_) {
+        return {}; // nothing to finalize
+    }
+
+    // No outputs to materialize — recording was opened (e.g., by H2D's
+    // eager-tag) but no compute followed. The shadow buffer holds the
+    // current bytes; skip the write/replay entirely so the bridge crypto
+    // context isn't a prerequisite for compute-free D2H reads.
+    if (pending_outputs_.empty() && pending_mrp_groups_.empty()) {
+        clear_state_locked();
+        return {};
+    }
+
+    if (auto tagged = tag_pending_outputs_locked(); !tagged)
+        return std::unexpected(tagged.error());
+
+    return do_materialize_locked(run_replay);
+}
+
+std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
+    HazeLockGuard lock(mutex_);
+    return finalize_locked(/*run_replay=*/true);
+}
+
+std::expected<void, HazeInternalError> EpochState::materialize_only() noexcept {
+    HazeLockGuard lock(mutex_);
+    return finalize_locked(/*run_replay=*/false);
+}
+
+std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool run_replay) {
     if (!recording_) {
         return {};
     }
@@ -258,7 +274,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
     if (!stop_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::replay_and_populate (stop_epoch)");
+                              "EpochState::do_materialize_locked (stop_epoch)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
     if (hazeReplayBridgeTakeHookHadError() != 0) {
@@ -269,6 +285,15 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
         return std::unexpected(HazeInternalError::BridgeHookFailed);
     }
 
+    // hazeWriteProgram() stops here: step 1 has written the full project dir
+    // (.fhetch + inputs + templates + cryptocontext), ready to ship for
+    // out-of-process replay (e.g. on the FPGA host). There is no in-process
+    // result to read back, so skip replay + shadow population.
+    if (!run_replay) {
+        clear_state_locked();
+        return {};
+    }
+
     // Step 2: dispatch replay. kLocalTarget runs the in-process simulator;
     // other targets spawn nbcc_fhetch_replay over HTTP — both produce
     // serialized_probes/<name>.ct for step 3 to read.
@@ -276,7 +301,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked() {
     if (!replay_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::replay_and_populate (replay)");
+                              "EpochState::do_materialize_locked (replay)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 
@@ -344,6 +369,13 @@ std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size
     if (auto replay_result = epoch().replay_and_populate(); !replay_result)
         return std::unexpected(replay_result.error());
     return allocator().copy_to_host(dst, src, count);
+}
+
+std::expected<void, HazeInternalError> write_program() noexcept {
+    // Write the project directory for the active recording without replaying.
+    // Unlike copy_to_host, there is no shadow read afterward — the caller
+    // ships the directory and replays it out of process (e.g. on the FPGA).
+    return epoch().materialize_only();
 }
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,

@@ -447,6 +447,9 @@ add_executable(haze_tests
   test/e2e/test_openfhe_rotate_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
   test/e2e/test_ops_ctx_params_e2e.cpp
+  # Hidden ([.]) tool case: emits a CKKS-add project via hazeWriteProgram for
+  # out-of-process FPGA replay. Driven by HAZE_EMIT_OUT; see the file header.
+  test/e2e/test_emit_fpga_project.cpp
   # Same compiled code as libhaze.so, linked directly — NOT the shipped
   # libhaze.so, whose version script hides the internal symbols these tests use.
   $<TARGET_OBJECTS:haze_objs>

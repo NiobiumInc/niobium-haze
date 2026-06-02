@@ -64,6 +64,12 @@ bool CompilerBackend::ensure_initialized() noexcept {
         int argc = 2;
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
+        // Optional explicit output dir: when set via hazeSetProgramDirectory,
+        // the project (.fhetch + inputs + templates + cryptocontext) lands
+        // here instead of cwd/<program_name>. Must precede the first compute
+        // op so it's in effect when stop_epoch() writes the trace.
+        if (config().has_program_directory())
+            niobium::compiler().set_program_directory(config().program_directory());
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.

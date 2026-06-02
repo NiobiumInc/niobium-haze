@@ -70,6 +70,14 @@ class Config {
     std::string program_description() const noexcept;
     std::string target() const noexcept;
 
+    // Optional output-directory override. When set, the backend forwards it to
+    // niobium::compiler().set_program_directory() at init, so the project dir
+    // (.fhetch + inputs + templates + cryptocontext) lands at this exact path
+    // instead of the cwd/<program_name> default. Unset by default.
+    std::expected<void, HazeInternalError> set_program_directory(const char *dir) noexcept;
+    bool has_program_directory() const noexcept;
+    std::string program_directory() const noexcept;
+
     void reset() noexcept;
 
     Config(const Config &) = delete;
@@ -89,8 +97,10 @@ class Config {
     std::string program_version_;
     std::string program_description_;
     std::string target_;
+    std::string program_dir_;
     bool program_info_set_ = false;
     bool target_set_ = false;
+    bool program_dir_set_ = false;
 };
 
 inline Config &config() noexcept {
