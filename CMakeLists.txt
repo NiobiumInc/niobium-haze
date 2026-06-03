@@ -19,6 +19,16 @@ option(HAZE_USE_PREBUILT_FHETCH
 set(NIOBIUM_HAZE_FHETCH_DIR "" CACHE PATH
     "External niobium-fhetch source tree (empty = use vendor/niobium-fhetch)")
 
+# haze ships a single, symbol-isolated libhaze.so that statically ABSORBS
+# libnbfhetch + OpenFHE and exports only the haze* C ABI (see the libhaze
+# section below). Force the in-tree niobium-fhetch build to be a static archive
+# that links OpenFHE's *_static.a, so both are absorbed into libhaze.so rather
+# than referenced as separate shared objects. These set() calls precede
+# fhetch's option() declarations, so under CMP0077 they take effect without any
+# -D on the command line. (No effect in the prebuilt-fhetch branch.)
+set(BUILD_SHARED_LIBS OFF)
+set(NIOBIUM_FHETCH_OPENFHE_STATIC ON)
+
 if(HAZE_USE_PREBUILT_FHETCH)
   find_package(NiobiumFhetch CONFIG REQUIRED)
   # TODO(niobium-fhetch): export Niobium::fhetch directly. fhetch's
@@ -73,6 +83,19 @@ endif()
 # to the install layout.
 if(NOT DEFINED OPENFHE_LIBRARY_PATH)
   set(OPENFHE_LIBRARY_PATH "${OPENFHE_INSTALL_DIR}/lib")
+endif()
+
+# Resolve the concrete fhetch library target — the one with a TARGET_FILE
+# (static archive) and usage requirements — across both resolution modes:
+#   * in-tree  (add_subdirectory)         -> target `niobium_fhetch`
+#   * prebuilt (find_package NiobiumFhetch)-> imported `Niobium::niobium_fhetch`
+# libhaze absorbs this archive whole; haze_tests pulls its include dirs /
+# compile defs. (Niobium::fhetch is an INTERFACE alias/wrapper with no
+# TARGET_FILE, so it can't be used for the absorb.)
+if(TARGET niobium_fhetch)
+  set(HAZE_FHETCH_LIB niobium_fhetch)
+else()
+  set(HAZE_FHETCH_LIB Niobium::niobium_fhetch)
 endif()
 
 set(CMAKE_CXX_STANDARD 23)
@@ -141,7 +164,13 @@ endif()
 #     BUILD_INTERFACE on the niobium-fhetch target)
 # So haze itself needs no other niobium-side dep.
 
-add_library(haze SHARED
+# haze's own translation units, compiled once as an OBJECT library and shared
+# by two consumers: the shipped libhaze.so (symbol-isolated, below) and
+# haze_tests (which links these objects directly with full visibility, so the
+# suite can reach haze:: internals and drive the bridge's in-process OpenFHE —
+# see the test section). A version script on libhaze.so would otherwise hide
+# the internal C++ symbols the tests link against.
+add_library(haze_objs OBJECT
   # extern "C" boundary — one cpp per public-header section.
   src/api/basis_convert.cpp
   src/api/compute.cpp
@@ -167,41 +196,161 @@ add_library(haze SHARED
   src/common/log.cpp
 )
 
-target_include_directories(haze
+target_include_directories(haze_objs
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    # api/lifecycle.cpp includes <haze/replay_bridge.h> (the bridge's pure-C
+    # control surface). The bridge target isn't defined until the
+    # add_subdirectory below, so name its public include dir directly here.
+    ${CMAKE_CURRENT_SOURCE_DIR}/replay_bridge/include
     # niobium-fhetch's JSON_INCLUDE_DIR cache var is PRIVATE on its
     # target, so haze (a downstream consumer) doesn't inherit it.
     # polynomial_io.cpp uses nlohmann/json — same vendored copy.
     ${JSON_INCLUDE_DIR}
 )
 
-target_compile_definitions(haze PRIVATE HAZE_BUILDING_LIBRARY)
+target_compile_definitions(haze_objs PRIVATE HAZE_BUILDING_LIBRARY)
 
-set_target_properties(haze PROPERTIES
+set_target_properties(haze_objs PROPERTIES
   CXX_VISIBILITY_PRESET     hidden
   VISIBILITY_INLINES_HIDDEN ON
-  OUTPUT_NAME               haze
+  POSITION_INDEPENDENT_CODE  ON
 )
+
+# haze_objs compiles <niobium/...> includes from fhetch (e.g. epoch.cpp); pull
+# fhetch's include-dir usage requirements. OBJECT libraries only compile, so no
+# link happens here — the actual archive link is on the haze target below.
+target_link_libraries(haze_objs PRIVATE Niobium::fhetch)
 
 # ---------------------------------------------------------------------------
 # Replay bridge — OpenFHE-using helper that synthesizes CryptoContext +
 # ciphertext templates the compiler-side replay needs, and provides the
 # niobium::fhetch::result(...) overloads libhaze references from epoch.cpp.
-# Lives in its own subdirectory and target so the OpenFHE includes stay
-# out of libhaze sources; libhaze pulls the bridge in for symbol resolution.
+# Built as an OBJECT library (see replay_bridge/CMakeLists.txt) so all its TUs
+# (incl. result()) are absorbed unconditionally; its OpenFHE includes stay out
+# of libhaze's own sources.
 # ---------------------------------------------------------------------------
 
 add_subdirectory(replay_bridge)
 
-target_link_libraries(haze PRIVATE Niobium::fhetch haze_replay_bridge)
+# ---------------------------------------------------------------------------
+# libhaze — the single shipped artifact: a DYNAMIC shared object that
+# statically absorbs libnbfhetch + the bridge + OpenFHE's *_static.a and
+# exports ONLY the haze* C ABI. FIDESlib links this .so dynamically and calls
+# the C ABI; FIDESlib's own (different, ABI-incompatible) OpenFHE is the static
+# side in the same process. The symbol isolation below is what makes that safe.
+# ---------------------------------------------------------------------------
+
+add_library(haze SHARED
+  $<TARGET_OBJECTS:haze_objs>
+  $<TARGET_OBJECTS:haze_replay_bridge>
+)
+
+set_target_properties(haze PROPERTIES OUTPUT_NAME haze)
+
+target_include_directories(haze PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+find_package(Threads REQUIRED)
+
+# The niobium FHE stack to absorb: fhetch's archive + OpenFHE's *_static.a.
+# OpenFHE must be built with -DBUILD_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+# (haze's Makefile / flake / build-matrix do this; a parent consumer such as
+# niobium-client must do the same in its OpenFHE build, AND force the fhetch
+# subtree static — set(BUILD_SHARED_LIBS OFF) + NIOBIUM_FHETCH_OPENFHE_STATIC=ON
+# before its add_subdirectory(niobium-fhetch) — or these archives won't exist).
+# Fail fast with a clear message rather than a raw linker error if they're absent.
+set(_haze_openfhe_static
+  ${OPENFHE_LIBRARY_PATH}/libOPENFHEpke_static.a
+  ${OPENFHE_LIBRARY_PATH}/libOPENFHEbinfhe_static.a
+  ${OPENFHE_LIBRARY_PATH}/libOPENFHEcore_static.a
+)
+if(NOT APPLE) # paths are .a on both, but only existence-check the linux names here
+  foreach(_a IN LISTS _haze_openfhe_static)
+    if(NOT EXISTS "${_a}")
+      message(FATAL_ERROR
+        "libhaze absorbs OpenFHE statically but ${_a} is missing. Build OpenFHE "
+        "with -DBUILD_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON (see the "
+        "Makefile's OPENFHE_CMAKE_FLAGS), or point OPENFHE_LIBRARY_PATH at an "
+        "install that has the *_static.a archives.")
+    endif()
+  endforeach()
+endif()
+
+# NOTE: the archives are absorbed by raw path (below), which bypasses OpenFHE's
+# imported-target INTERFACE_LINK_LIBRARIES. That is complete ONLY because the
+# niobium OpenFHE build keeps WITH_NTL / WITH_TCM / WITH_OPENMP = OFF (no gmp /
+# ntl / tcmalloc / omp transitive deps). If any of those are enabled upstream,
+# add the corresponding runtime here or libhaze will hit undefined symbols at
+# RUNTIME (a .so link tolerates undefined symbols; the crash surfaces later).
+set(_haze_fhe_archives
+  $<TARGET_FILE:${HAZE_FHETCH_LIB}>
+  ${_haze_openfhe_static}
+)
+
+# Absorb that stack WHOLE: fhetch and the instrumented OpenFHE are mutually
+# recursive (OpenFHE's CPROBES + auto hooks resolve back into fhetch), so plain
+# archive linking would drop needed TUs / fail to resolve on a single pass.
+# `_haze_absorb_fhe` is reused by both libhaze.so and haze_tests (same code on
+# both sides). macOS uses -force_load per archive; GNU ld / LLD use a
+# --whole-archive group. (A clang+lld Windows build also takes the else path.)
+if(APPLE)
+  set(_haze_absorb_fhe "")
+  foreach(_lib ${_haze_fhe_archives})
+    list(APPEND _haze_absorb_fhe "-Wl,-force_load,${_lib}")
+  endforeach()
+else()
+  set(_haze_absorb_fhe
+    -Wl,--whole-archive ${_haze_fhe_archives} -Wl,--no-whole-archive)
+endif()
+
+target_link_libraries(haze PRIVATE ${_haze_absorb_fhe} Threads::Threads)
+
+# Localize every non-haze* symbol so the absorbed OpenFHE cannot collide with a
+# second OpenFHE (e.g. FIDESlib's 1.5.1) in the same process. Hidden visibility
+# alone is NOT enough — objects pulled from a static archive keep the default
+# visibility OpenFHE's build gave them — so --exclude-libs + the version script
+# (allowlisting only the haze* C ABI) are required.
+if(APPLE)
+  # NOTE (macOS): -exported_symbols_list controls the normal export table, but
+  # weak-coalesced defs (C++ vtables/typeinfo, template instantiations) live in
+  # a separate table and, on some ld64 versions, can still be exported as weak.
+  # If OpenFHE 1.4.2 and 1.5.1 share a mangled type name, the loader could
+  # coalesce them across the libhaze/exe boundary. The build-matrix runs the
+  # (name-based) symbol-leak check on the .dylib to catch this; if it ever
+  # fires, switch to per-archive -load_hidden / `ld -r` + localization. Validate
+  # on real macOS before trusting this path.
+  target_link_options(haze PRIVATE
+    -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/linker/haze_exports.sym)
+else()
+  target_link_options(haze PRIVATE
+    -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/linker/haze_exports.map
+    -Wl,--exclude-libs,ALL)
+endif()
+
+# When fhetch is built in-tree, the $<TARGET_FILE:> path reference doesn't carry
+# a build-order edge; make it explicit. (No-op/invalid for the imported
+# prebuilt target, which is already built.)
+if(TARGET niobium_fhetch)
+  add_dependencies(haze niobium_fhetch)
+endif()
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests (opt-out)
 # ---------------------------------------------------------------------------
+# Everything below builds the test suite + isolation/coexistence checks and
+# needs Catch2 v3. Turn OFF to build just libhaze.so (e.g. the build-only CI
+# matrix on platforms without Catch2). Default ON preserves `make test`.
+option(HAZE_BUILD_TESTS "Build the haze test suite + isolation/coexistence tests (needs Catch2 v3)." ON)
+if(NOT HAZE_BUILD_TESTS)
+  return()
+endif()
+
 # One executable, three ctest entries split by Catch2 tag + HAZE_TARGET:
 #   - haze_unit_tests       : runs everything not tagged [integration]
 #                             with HAZE_TARGET=local. Unit tests do not
@@ -220,21 +369,13 @@ target_link_libraries(haze PRIVATE Niobium::fhetch haze_replay_bridge)
 enable_testing()
 find_package(Catch2 3 REQUIRED)
 
-# Test reference oracle (in test_basis_convert.cpp) calls into OpenFHE
-# BigInteger primitives directly. These come from the parent project's
-# OpenFHE install tree.
+# haze_tests links the SAME compiled objects as libhaze.so (haze_objs + the
+# bridge) PLUS the niobium FHE stack absorbed whole (${_haze_absorb_fhe}), but
+# WITHOUT the version script — so internal haze:: symbols, the bridge C++ API,
+# and the BigInteger reference oracle (test_basis_convert.cpp) all resolve at
+# static-link time against one in-exe OpenFHE + one niobium::compiler(). Only
+# the OpenFHE headers are needed explicitly here.
 set(_openfhe_include "${OPENFHE_INSTALL_DIR}/include/openfhe")
-set(_openfhe_core_lib_so   "${OPENFHE_LIBRARY_PATH}/libOPENFHEcore.so")
-set(_openfhe_core_lib_dylib "${OPENFHE_LIBRARY_PATH}/libOPENFHEcore.dylib")
-if(EXISTS "${_openfhe_core_lib_dylib}")
-  set(_openfhe_core_lib "${_openfhe_core_lib_dylib}")
-elseif(EXISTS "${_openfhe_core_lib_so}")
-  set(_openfhe_core_lib "${_openfhe_core_lib_so}")
-else()
-  message(FATAL_ERROR
-    "libOPENFHEcore not found under ${OPENFHE_LIBRARY_PATH}. The haze test "
-    "oracle links it directly; ensure niobium-client built OpenFHE first.")
-endif()
 
 add_executable(haze_tests
   test/test_build.cpp
@@ -261,27 +402,42 @@ add_executable(haze_tests
   test/e2e/test_openfhe_rotate_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
   test/e2e/test_ops_ctx_params_e2e.cpp
+  # Same compiled code as libhaze.so, linked directly — NOT the shipped
+  # libhaze.so, whose version script hides the internal symbols these tests use.
+  $<TARGET_OBJECTS:haze_objs>
+  $<TARGET_OBJECTS:haze_replay_bridge>
 )
 
 target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/test
+  # replay_bridge.h / replay_bridge_cc.hpp — the bridge target is consumed as
+  # objects (not linked), so name its public include dir directly.
+  ${CMAKE_CURRENT_SOURCE_DIR}/replay_bridge/include
 )
-# OpenFHE BigInteger headers — used by test_basis_convert.cpp's reference
-# oracle. Marked SYSTEM so OpenFHE's internal warnings don't trip our -Werror.
+# Headers for the test sources, SYSTEM so neither set's internal warnings trip
+# our -Werror. haze_tests absorbs the fhetch archive via a file path (no usage
+# requirements), so its include dirs are named explicitly:
+#   * The explicit ${_openfhe_include}{,/core,/pke,/binfhe} entries are
+#     LOAD-BEARING: in prebuilt (find_package) mode the installed fhetch target
+#     carries only its own include dir — OpenFHE's dirs are BUILD_INTERFACE-only
+#     on fhetch and do NOT survive install. In-tree mode they'd be covered by
+#     the property below, but don't rely on that; keep these.
+#   * The fhetch interface include dirs supply <niobium/compiler.h> (used by
+#     integration_helpers.hpp) in both modes.
 target_include_directories(haze_tests SYSTEM PRIVATE
   ${_openfhe_include}
   ${_openfhe_include}/core
   ${_openfhe_include}/pke
   ${_openfhe_include}/binfhe
+  $<TARGET_PROPERTY:${HAZE_FHETCH_LIB},INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 target_link_libraries(haze_tests PRIVATE
-  haze
-  haze_replay_bridge
+  ${_haze_absorb_fhe}
+  Threads::Threads
   Catch2::Catch2WithMain
-  ${_openfhe_core_lib}
 )
 
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
@@ -295,6 +451,13 @@ target_compile_options(haze_tests PRIVATE -Wno-missing-field-initializers)
 # Pass the FBC variant choice through to the test oracle.
 target_compile_definitions(haze_tests PRIVATE
   HAZE_FBC_REDUCED_NOISE=$<BOOL:${HAZE_FBC_REDUCED_NOISE}>)
+
+# The niobium-instrumented OpenFHE headers (cryptocontext.h etc.) only declare
+# g_replay_mode / the niobium_auto hooks under OPENFHE_CPROBES. haze_tests
+# absorbs the fhetch archive by file path (no usage requirements), so propagate
+# fhetch's PUBLIC compile definitions (incl. OPENFHE_CPROBES) explicitly.
+target_compile_definitions(haze_tests PRIVATE
+  $<TARGET_PROPERTY:${HAZE_FHETCH_LIB},INTERFACE_COMPILE_DEFINITIONS>)
 
 # ---------------------------------------------------------------------------
 # ctest entries
@@ -340,4 +503,30 @@ if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set_tests_properties(haze_transport_tests PROPERTIES
     ENVIRONMENT
       "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
+endif()
+
+# ---------------------------------------------------------------------------
+# Isolation guard: the shipped libhaze must export ONLY the haze* C ABI, so the
+# absorbed OpenFHE 1.4.2 cannot collide with another OpenFHE in one process.
+# Cheap, always registered; the real proof is haze_coexistence_test below.
+# ---------------------------------------------------------------------------
+if(NOT WIN32)
+  add_test(NAME haze_isolated_symbol_leak
+           COMMAND ${CMAKE_COMMAND}
+                   -DHAZE_LIB=$<TARGET_FILE:haze>
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_symbol_leak.cmake)
+endif()
+
+# ---------------------------------------------------------------------------
+# FIDESlib-coexistence test (opt-in): proves libhaze.so + OpenFHE 1.5.1 coexist
+# in one process. Needs an OpenFHE 1.5.1 install via FIDESLIB_OPENFHE_DIR.
+# ---------------------------------------------------------------------------
+option(HAZE_WITH_COEXISTENCE_TEST
+       "Build the FIDESlib-1.5.1 / libhaze coexistence test. Requires FIDESLIB_OPENFHE_DIR."
+       OFF)
+set(FIDESLIB_OPENFHE_DIR "" CACHE PATH
+    "Path to an OpenFHE 1.5.1 install (built with BUILD_STATIC) for the coexistence test.")
+
+if(HAZE_WITH_COEXISTENCE_TEST)
+  add_subdirectory(test/coexistence)
 endif()

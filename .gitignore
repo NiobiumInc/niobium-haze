@@ -21,6 +21,8 @@ CPackConfig.cmake
 CPackSourceConfig.cmake
 *.cmake
 !CMakeLists.txt
+# First-party CMake helpers (not build artefacts) — keep tracked.
+!cmake/check_symbol_leak.cmake
 
 # Re-include the top-level standalone Makefile (CMake-generated Makefiles
 # in build/ subdirs are still ignored via the build/ rules above).
@@ -101,6 +103,8 @@ result-*
 *.ilk
 *.map
 *.exp
+# First-party linker version script (not build output) — keep tracked.
+!linker/haze_exports.map
 
 # Precompiled Headers
 *.gch

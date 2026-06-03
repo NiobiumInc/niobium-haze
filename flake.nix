@@ -104,6 +104,10 @@
               ./src
               ./test
               ./replay_bridge
+              # Symbol-isolation version script (referenced at libhaze link
+              # time) + the symbol-leak ctest helper.
+              ./linker
+              ./cmake
             ];
           };
 
@@ -113,10 +117,13 @@
             src = openfheSrc;
             nativeBuildInputs = [ pkgs.cmake ];
             # WITH_CPROBES=ON compiles in the niobium probe hooks that
-            # libnbfhetch later links against. Other flags mirror the
-            # Makefile's OPENFHE_CMAKE_FLAGS.
+            # libnbfhetch later links against. Built static + PIC (not shared)
+            # so it can be absorbed whole into the symbol-isolated libhaze.so.
+            # Flags mirror the Makefile's OPENFHE_CMAKE_FLAGS.
             cmakeFlags = [
-              "-DBUILD_SHARED=ON"
+              "-DBUILD_SHARED=OFF"
+              "-DBUILD_STATIC=ON"
+              "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
               "-DBUILD_EXAMPLES=OFF"
               "-DBUILD_UNITTESTS=OFF"
               "-DBUILD_BENCHMARKS=OFF"
@@ -134,8 +141,12 @@
             src = fhetchSrc;
             nativeBuildInputs = [ pkgs.cmake ];
             buildInputs = [ openfhe ];
+            # Static + link OpenFHE's *_static.a, so haze can absorb a static
+            # libnbfhetch (matches the openfhe derivation above and the Makefile).
             cmakeFlags = [
               "-DCMAKE_BUILD_TYPE=Release"
+              "-DBUILD_SHARED_LIBS=OFF"
+              "-DNIOBIUM_FHETCH_OPENFHE_STATIC=ON"
               "-DOPENFHE_INSTALL_DIR=${openfhe}"
               "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
             ];
@@ -258,8 +269,10 @@
               runHook preInstall
               mkdir -p $out/lib $out/bin $out/include
               # cp -a preserves any future SOVERSION/VERSION symlink chains;
-              # install -t would flatten them to copies.
-              cp -a libhaze.* replay_bridge/libhaze_replay_bridge.* $out/lib/
+              # install -t would flatten them to copies. The replay bridge is
+              # now an OBJECT library absorbed into libhaze.so — no separate
+              # libhaze_replay_bridge.* artifact to copy.
+              cp -a libhaze.* $out/lib/
               cp -a haze_tests $out/bin/
               chmod +x $out/bin/haze_tests
               cp -r $src/include/haze $out/include/
@@ -395,6 +408,11 @@
                 # the same wrapper CI uses; set CTCACHE_CLANG_TIDY when
                 # calling it so the wrapper finds the nix-pinned tidy.
                 packages = (hazeTools pkgs) ++ [ p.clang-tidy-cache ];
+                # OpenMP runtime (libomp + omp.h) so `make test-coexistence`
+                # can link FIDESlib's OpenFHE 1.5.1 (its imported targets carry
+                # a bare -fopenmp). haze's own OpenFHE is WITH_OPENMP=OFF, so
+                # nothing else here needs it.
+                buildInputs = [ pkgs.llvmPackages.openmp ];
                 shellHook = ''
                   # Resolve haze worktree root via git so scripts/ stays
                   # on PATH even after `cd`-ing to a subdirectory. Falls
@@ -494,6 +512,26 @@
             HAZE_TARGET=local ${p.haze}/bin/haze_tests "[integration]"
             touch "$out"
           '';
+
+          # Isolation guard: assert the shipped libhaze exports ONLY the haze*
+          # C ABI (no leaked OpenFHE/lbcrypto symbols), so it can coexist with
+          # another OpenFHE in one process. A leak wouldn't fail the build, so
+          # this check is what catches an isolation regression in CI.
+          isolation =
+            pkgs.runCommand "haze-isolation"
+              {
+                nativeBuildInputs = [
+                  pkgs.cmake
+                  pkgs.binutils
+                ];
+              }
+              ''
+                set -euo pipefail
+                lib=$(ls ${p.haze}/lib/libhaze.so ${p.haze}/lib/libhaze.dylib 2>/dev/null | head -1)
+                test -n "$lib" || { echo "libhaze artifact not found in ${p.haze}/lib"; exit 1; }
+                cmake -DHAZE_LIB="$lib" -P ${./cmake/check_symbol_leak.cmake}
+                touch "$out"
+              '';
         }
       );
     };

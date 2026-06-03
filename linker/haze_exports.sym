@@ -1,0 +1,6 @@
+# macOS (ld64) exported-symbols allowlist for libhaze.dylib — the analogue of
+# linker/haze_exports.map. Everything not matched here is made local, so the
+# absorbed OpenFHE/libnbfhetch/bridge symbols stay private and cannot collide
+# with another OpenFHE in the same process. Mach-O prefixes C symbols with an
+# underscore, so haze's `extern "C" haze*` C ABI is `_haze*`.
+_haze*

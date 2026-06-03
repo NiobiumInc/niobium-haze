@@ -1,14 +1,15 @@
 # haze_replay_bridge — OpenFHE-using helper that synthesizes the CryptoContext
 # + ciphertext templates the compiler-side nbcc_fhetch_replay needs to write
-# serialized_probes/ from a haze recording. Linked exclusively by haze_tests
-# (and any other test/replay harness); never by libhaze itself.
-
-add_library(haze_replay_bridge SHARED
+# serialized_probes/ from a haze recording. Built as an OBJECT library so its
+# TUs (incl. the niobium::fhetch::result(...) overloads epoch.cpp references)
+# are absorbed unconditionally into libhaze.so and into haze_tests.
+#
+# Note: this OBJECT library is linked into the SAME final image as haze_objs,
+# which already compiles src/common/log.cpp — so the bridge must NOT compile
+# its own copy (that would be a duplicate definition). It references
+# haze_objs's copy instead.
+add_library(haze_replay_bridge OBJECT
   src/openfhe_template.cpp
-  # Shared with libhaze. Each library compiles its own copy because the
-  # function is hidden-visibility on both sides; no exported symbol means
-  # no cross-library collision when haze_tests links both.
-  ${CMAKE_CURRENT_SOURCE_DIR}/../src/common/log.cpp
 )
 
 target_include_directories(haze_replay_bridge
@@ -23,15 +24,16 @@ target_include_directories(haze_replay_bridge
 )
 
 # Niobium::fhetch supplies <niobium/compiler.h> and (transitively, via
-# BUILD_INTERFACE include dirs) the OpenFHE headers. Linking publicly so
-# downstream test executables that pull haze_replay_bridge in as a PRIVATE
-# dep still resolve OpenFHE symbols at link time.
+# BUILD_INTERFACE include dirs) the OpenFHE headers needed to compile the
+# bridge objects. Consumers (libhaze, haze_tests) pull these objects in via
+# $<TARGET_OBJECTS:haze_replay_bridge>, not as a link dependency.
 target_link_libraries(haze_replay_bridge PUBLIC Niobium::fhetch)
 
+# OBJECT library: no linkable artifact, so OUTPUT_NAME would be a no-op.
 set_target_properties(haze_replay_bridge PROPERTIES
   CXX_VISIBILITY_PRESET     hidden
   VISIBILITY_INLINES_HIDDEN ON
-  OUTPUT_NAME               haze_replay_bridge
+  POSITION_INDEPENDENT_CODE  ON
 )
 
 target_compile_definitions(haze_replay_bridge PRIVATE HAZE_BUILDING_LIBRARY)
