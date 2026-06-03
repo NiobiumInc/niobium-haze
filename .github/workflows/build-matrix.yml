@@ -1,0 +1,128 @@
+name: build-matrix
+
+# Build-only portability matrix for the static, symbol-isolated libhaze.so:
+# arm macOS, linux x86_64 + aarch64, and Windows. It does NOT run tests — its
+# job is to confirm libhaze.so *builds* (OpenFHE 1.4.2 absorbed statically) on
+# each target's native toolchain. The authoritative test + lint gates remain
+# the nix-based build-test.yml / flake-check.yml on linux. Tests are skipped
+# via -DHAZE_BUILD_TESTS=OFF so Catch2 isn't required on every platform.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-matrix-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    # Windows is expected to need porting work (fhetch uses POSIX APIs such as
+    # posix_spawnp, and the symbol-isolation linker flags are ELF/Mach-O only),
+    # so it is informational rather than a hard gate for now.
+    continue-on-error: ${{ matrix.experimental }}
+    # Skip on fork PRs: the org App token needed for the private niobium-fhetch
+    # submodule isn't available there.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            experimental: false
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            experimental: false
+          - name: macos-arm64
+            runner: macos-14
+            experimental: false
+          - name: windows-x86_64
+            runner: windows-latest
+            experimental: true
+    steps:
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout (with private niobium-fhetch submodule)
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          submodules: recursive
+          fetch-depth: 1
+
+      # --- Toolchain (clang >= 19 for C++23 + cmake) -------------------------
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          sudo apt-get install -y cmake ninja-build
+          echo "CC=clang-19"  >> "$GITHUB_ENV"
+          echo "CXX=clang++-19" >> "$GITHUB_ENV"
+
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm cmake ninja
+          echo "CC=$(brew --prefix llvm)/bin/clang"   >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install --no-progress -y llvm ninja
+          echo "CC=clang"   >> $env:GITHUB_ENV
+          echo "CXX=clang++" >> $env:GITHUB_ENV
+
+      # --- Build the niobium OpenFHE 1.4.2 fork as static + PIC --------------
+      # Flags mirror the Makefile's OPENFHE_CMAKE_FLAGS and the flake.
+      - name: Build OpenFHE (static)
+        shell: bash
+        run: |
+          cmake -S vendor/niobium-fhetch/vendor/openfhe -B openfhe-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED=OFF -DBUILD_STATIC=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_UNITTESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXTRAS=OFF \
+            -DWITH_CPROBES=ON -DWITH_OPENMP=OFF -DWITH_REDUCED_NOISE=ON \
+            -DCMAKE_INSTALL_PREFIX="$PWD/openfhe-install"
+          cmake --build openfhe-build --target install
+
+      # --- Build libhaze.so (tests off => no Catch2) -------------------------
+      - name: Build libhaze
+        shell: bash
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENFHE_INSTALL_DIR="$PWD/openfhe-install" \
+            -DHAZE_BUILD_TESTS=OFF
+          cmake --build build --target haze
+
+      # The matrix builds with tests OFF (no Catch2), so the symbol-leak ctest
+      # doesn't run — invoke the standalone checker directly so the isolation
+      # property (esp. the macOS / aarch64 paths) is actually validated here.
+      - name: Check symbol isolation
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          lib=$(ls build/libhaze.so build/libhaze.dylib 2>/dev/null | head -1)
+          test -n "$lib" || { echo "libhaze artifact not found"; exit 1; }
+          cmake -DHAZE_LIB="$lib" -P cmake/check_symbol_leak.cmake

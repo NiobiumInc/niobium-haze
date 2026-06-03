@@ -1,0 +1,20 @@
+# GNU ld / LLD version script for libhaze.so.
+#
+# libhaze statically absorbs the niobium OpenFHE 1.4.2 fork + libnbfhetch + the
+# replay bridge. To let it coexist in one process with another OpenFHE (e.g.
+# FIDESlib's statically-linked 1.5.1), every absorbed symbol must be hidden;
+# only haze's public C ABI may be exported. The C ABI is exactly the set of
+# `extern "C"` entry points whose names start with `haze` (hazeMalloc, hazeAdd,
+# hazeReplayBridgeInitCryptoContext, ...). Internal C++ mangles to `_ZN4haze...`
+# (does not start with `haze`) and is localized along with all lbcrypto/niobium
+# symbols. Paired with -Wl,--exclude-libs,ALL on the link line.
+#
+# The version-node name `HAZE_1.0` is part of the published, versioned ABI of
+# libhaze.so once shipped — renaming or removing it is an ABI break. Add new
+# nodes (HAZE_1.1, ...) rather than mutating this one.
+HAZE_1.0 {
+  global:
+    haze*;
+  local:
+    *;
+};
