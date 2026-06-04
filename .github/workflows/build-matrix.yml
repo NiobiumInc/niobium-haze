@@ -104,6 +104,10 @@ jobs:
       - name: Build OpenFHE (static)
         shell: bash
         run: |
+          # Start from a clean build dir: a reused workspace (self-hosted
+          # runner, or checkout clean disabled) can leave a cache configured
+          # with a different generator, which `-G Ninja` then rejects.
+          rm -rf openfhe-build
           cmake -S vendor/niobium-fhetch/vendor/openfhe -B openfhe-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -122,6 +126,7 @@ jobs:
           # EXTRA_LDFLAGS is set only on macOS (Homebrew libc++ path); empty
           # elsewhere. Applied to the shared + exe link so libhaze.dylib's
           # absorbed objects resolve libc++-19 symbols against the right libc++.
+          rm -rf build  # clean dir: avoid a stale-generator cache on reused workspaces
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
