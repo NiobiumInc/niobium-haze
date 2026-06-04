@@ -208,9 +208,9 @@
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
             "-DHAZE_USE_PREBUILT_FHETCH=ON"
             "-DOPENFHE_INSTALL_DIR=${openfhe}"
-            # haze_e2e_tests' stock OpenFHE; needed so configure passes the
-            # HAZE_TEST_OPENFHE_DIR guard and the e2e TUs land in the
-            # compile_commands.json with the right -isystem paths for clang-tidy.
+            # Build the e2e suite + point it at the stock OpenFHE so its TUs land
+            # in compile_commands.json with the right -isystem paths for clang-tidy.
+            "-DHAZE_BUILD_E2E_TESTS=ON"
             "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
             "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
           ];
@@ -296,7 +296,9 @@
               "-DCMAKE_BUILD_TYPE=Release"
               "-DHAZE_USE_PREBUILT_FHETCH=ON"
               "-DOPENFHE_INSTALL_DIR=${openfhe}"
-              # Stock OpenFHE for haze_e2e_tests (linked SHARED into that exe only).
+              # Build the black-box e2e suite against the stock OpenFHE (linked
+              # SHARED into that exe only; never absorbed into libhaze.so).
+              "-DHAZE_BUILD_E2E_TESTS=ON"
               "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
               # polynomial_io.cpp uses nlohmann/json. fhetch's JSON_INCLUDE_DIR
               # only propagates via add_subdirectory, not find_package; pass it.
@@ -322,9 +324,9 @@
               # now an OBJECT library absorbed into libhaze.so — no separate
               # libhaze_replay_bridge.* artifact to copy.
               cp -a libhaze.* $out/lib/
-              cp -a haze_internal_tests $out/bin/
+              cp -a haze_tests $out/bin/
               cp -a haze_e2e_tests $out/bin/
-              chmod +x $out/bin/haze_internal_tests $out/bin/haze_e2e_tests
+              chmod +x $out/bin/haze_tests $out/bin/haze_e2e_tests
               cp -r $src/include/haze $out/include/
               runHook postInstall
             '';
@@ -551,13 +553,13 @@
 
           unit-tests = pkgs.runCommand "haze-unit-tests" { } ''
             mkdir -p $TMPDIR/runs && cd $TMPDIR/runs
-            HAZE_TARGET=local ${p.haze}/bin/haze_internal_tests "~[integration]"
+            HAZE_TARGET=local ${p.haze}/bin/haze_tests "~[integration]"
             touch "$out"
           '';
 
           sim-tests = pkgs.runCommand "haze-sim-tests" { } ''
             mkdir -p $TMPDIR/runs && cd $TMPDIR/runs
-            HAZE_TARGET=local ${p.haze}/bin/haze_internal_tests "[integration]"
+            HAZE_TARGET=local ${p.haze}/bin/haze_tests "[integration]"
             touch "$out"
           '';
 

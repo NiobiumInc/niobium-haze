@@ -114,10 +114,10 @@ it at the right layer, never paper over by dropping security.
    scalar-mult/mul) carrying `kTech` plus the flags/methods the body
    needs.
 4. For ops needing extra keys: `cc->EvalMultKeyGen(...)` (mul) and/or
-   `cc->EvalRotateKeyGen(...)` (rotate). Use the bridge extract APIs
-   (`hazeReplayBridgeExtractEvalMultKey`,
-   `hazeReplayBridgeExtractAutomorphismKey`) if the haze pipeline needs
-   the KSK limbs.
+   `cc->EvalRotateKeyGen(...)` (rotate). Use the test-side key-extract
+   helpers (`haze::test::extract_evalmult_key_limbs`,
+   `haze::test::extract_automorphism_key_limbs` in
+   `test/openfhe_key_extract.hpp`) if the haze pipeline needs the KSK limbs.
 5. If the op has a stable interface across all four modes, add it to
    `ops.hpp` / `ops.cpp` so the capstone can chain it in.
 6. Keep the bit-exact-then-slot-tolerance assertion ladder when the

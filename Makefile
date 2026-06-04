@@ -96,10 +96,12 @@ endif
 STOCK_OPENFHE_DIR         ?= $(CURDIR)/vendor/openfhe
 STOCK_OPENFHE_INSTALL_DIR ?= $(CURDIR)/vendor/lib/openfhe-stock
 
-# The e2e exe is the stock OpenFHE's only consumer, so build it only when tests
-# are on. HAZE_BUILD_TESTS mirrors the CMake option default.
-HAZE_BUILD_TESTS ?= 1
-ifeq ($(HAZE_BUILD_TESTS),1)
+# The e2e exe (haze_e2e_tests) is the stock OpenFHE's only consumer. Default ON
+# for haze's standalone build; set HAZE_BUILD_E2E_TESTS=0 to skip it and the
+# stock OpenFHE build. Forwarded to CMake's HAZE_BUILD_E2E_TESTS option below so
+# the Make knob and the CMake option never disagree.
+HAZE_BUILD_E2E_TESTS ?= 1
+ifeq ($(HAZE_BUILD_E2E_TESTS),1)
   STOCK_OPENFHE_BUILD_DEP := build-test-openfhe
 else
   STOCK_OPENFHE_BUILD_DEP :=
@@ -256,6 +258,7 @@ config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses 
 	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
 		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
 		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
@@ -271,7 +274,7 @@ test-unit: build ## Run unit suite (HAZE_TARGET=local; no FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
 	@mkdir -p "$(HAZE_RUNS_DIR)"
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" "~[integration]"
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "~[integration]"
 
 test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
@@ -279,7 +282,7 @@ test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE mat
 	@# Target literal must match haze::kLocalTarget in src/core/config.hpp
 	@# AND the haze_sim_tests ENVIRONMENT entry in CMakeLists.txt.
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" "[integration]"
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
 
 test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	@if [ -z "$(NIOBIUM_COMPILER_ROOT)" ]; then \
@@ -292,7 +295,7 @@ test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 		echo "Build it with: (cd $(NIOBIUM_COMPILER_ROOT) && make release)"; \
 		exit 2; \
 	fi
-	@HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" \
+	@HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_tests" \
 	 NIOBIUM_COMPILER_ROOT="$(NIOBIUM_COMPILER_ROOT)" \
 	 OPENFHE_LIB="$(OPENFHE_INSTALL_DIR)/lib" \
 	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \

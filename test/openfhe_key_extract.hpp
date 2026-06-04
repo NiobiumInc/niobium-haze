@@ -135,6 +135,10 @@ extract_evalmult_key_limbs(const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc
             return HAZE_ERROR_INVALID_VALUE;
         return detail::extract_keyswitch_key_into(cc, eval_keys[0], out);
     } catch (...) {
+        // GetEvalMultKeyVector throws when no key is registered for the tag —
+        // an input error, like the null-map case in extract_automorphism_key_limbs.
+        // (Deep, unexpected failures surface as INTERNAL from
+        // extract_keyswitch_key_into, which is noexcept-bodied.)
         return HAZE_ERROR_INVALID_VALUE;
     }
 }
@@ -158,7 +162,10 @@ extract_automorphism_key_limbs(const lbcrypto::CryptoContext<lbcrypto::DCRTPoly>
             return HAZE_ERROR_INVALID_VALUE;
         return detail::extract_keyswitch_key_into(cc, it->second, out);
     } catch (...) {
-        return HAZE_ERROR_INTERNAL;
+        // A throwing key-map lookup is a "no key for this tag" input error,
+        // consistent with extract_evalmult_key_limbs. (Deep, unexpected failures
+        // surface as INTERNAL from extract_keyswitch_key_into, noexcept-bodied.)
+        return HAZE_ERROR_INVALID_VALUE;
     }
 }
 
