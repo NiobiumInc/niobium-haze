@@ -296,9 +296,11 @@ set(_haze_fhe_archives
 # Absorb that stack WHOLE: fhetch and the instrumented OpenFHE are mutually
 # recursive (OpenFHE's CPROBES + auto hooks resolve back into fhetch), so plain
 # archive linking would drop needed TUs / fail to resolve on a single pass.
-# `_haze_absorb_fhe` is reused by both libhaze.so and haze_tests (same code on
-# both sides). macOS uses -force_load per archive; GNU ld / LLD use a
-# --whole-archive group. (A clang+lld Windows build also takes the else path.)
+# `_haze_absorb_fhe` is reused by both libhaze.so and haze_tests. macOS uses
+# -force_load per archive; GNU ld / LLD use a --whole-archive group. It is
+# applied via target_link_options (not _libraries) so CMake cannot reorder or
+# de-duplicate the archive paths out of the --whole-archive/--no-whole-archive
+# pair. (A clang+lld Windows build also takes the else path.)
 if(APPLE)
   set(_haze_absorb_fhe "")
   foreach(_lib ${_haze_fhe_archives})
@@ -309,7 +311,18 @@ else()
     -Wl,--whole-archive ${_haze_fhe_archives} -Wl,--no-whole-archive)
 endif()
 
-target_link_libraries(haze PRIVATE ${_haze_absorb_fhe} Threads::Threads)
+# Fail the LINK (not at runtime) if absorbing the stack leaves any strong symbol
+# undefined -- e.g. GOMP_*/gmp/ntl from an OpenFHE built WITH_OPENMP/NTL/TCM=ON
+# (see the NTL/TCM/OPENMP=OFF note above). A .so otherwise tolerates undefined
+# symbols and defers the crash. macOS ld64 already defaults to -undefined error.
+if(APPLE)
+  set(_haze_no_undef -Wl,-undefined,error)
+else()
+  set(_haze_no_undef -Wl,--no-undefined)
+endif()
+
+target_link_libraries(haze PRIVATE Threads::Threads)
+target_link_options(haze PRIVATE ${_haze_absorb_fhe} ${_haze_no_undef})
 
 # Localize every non-haze* symbol so the absorbed OpenFHE cannot collide with a
 # second OpenFHE (e.g. FIDESlib's 1.5.1) in the same process. Hidden visibility
@@ -317,18 +330,14 @@ target_link_libraries(haze PRIVATE ${_haze_absorb_fhe} Threads::Threads)
 # visibility OpenFHE's build gave them — so --exclude-libs + the version script
 # (allowlisting only the haze* C ABI) are required.
 if(APPLE)
-  # NOTE (macOS), weak-symbol caveat — CURRENTLY VALIDATED ONLY EMPIRICALLY,
-  # NOT STRUCTURALLY. On ELF the version script's `local: *` localizes weak
-  # COMDAT defs too; on Mach-O, -exported_symbols_list governs the normal
-  # export table but weak-coalesced defs (C++ vtables/typeinfo, template
-  # instantiations) live in a separate table and, on some ld64 versions, can
-  # still be exported as weak. If OpenFHE 1.4.2 and 1.5.1 share a mangled type
-  # name, the loader could coalesce them across the libhaze/exe boundary.
-  # There is NO structural guarantee here yet — isolation on Darwin rests on
-  # the build-matrix's (name-based) symbol-leak check passing, not on a linker
-  # invariant. If the leak check ever fires on macOS, switch to per-archive
-  # -load_hidden / `ld -r` + localization. Validate on real macOS before
-  # trusting this path.
+  # macOS: -exported_symbols_list makes every symbol not matching the allowlist
+  # local. Empirically this localizes weak-coalesced defs too (C++ vtables /
+  # typeinfo): a release libhaze.dylib exports exactly the haze* symbols and no
+  # lbcrypto/cprobe symbols (verified with Apple/llvm nm). The symbol-leak check
+  # backstops it on every build -- build-matrix runs it on macos-14 and the
+  # flake `isolation` check on aarch64-darwin, both with llvm/Apple nm (GNU
+  # binutils nm misreads Mach-O private-extern symbols and must not be used). If
+  # the leak check ever fires on macOS, switch to per-archive -load_hidden.
   target_link_options(haze PRIVATE
     -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/linker/haze_exports.sym)
 else()
@@ -439,10 +448,18 @@ target_include_directories(haze_tests SYSTEM PRIVATE
 )
 
 target_link_libraries(haze_tests PRIVATE
-  ${_haze_absorb_fhe}
   Threads::Threads
   Catch2::Catch2WithMain
 )
+# Absorb the same fhetch+OpenFHE stack as libhaze (via options, to pin the
+# --whole-archive ordering). haze_tests is an executable, so it gets no version
+# script (it needs the internal haze:: symbols) and -undefined error by default.
+target_link_options(haze_tests PRIVATE ${_haze_absorb_fhe})
+# target_link_options drops the $<TARGET_FILE:> auto-dependency, so make the
+# in-tree fhetch build-order edge explicit (matches the haze target above).
+if(TARGET niobium_fhetch)
+  add_dependencies(haze_tests niobium_fhetch)
+endif()
 
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
 # initializers that omit fields with default member initializers. clang's
@@ -509,17 +526,10 @@ if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
       "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
 endif()
 
-# ---------------------------------------------------------------------------
-# Isolation guard: the shipped libhaze must export ONLY the haze* C ABI, so the
-# absorbed OpenFHE 1.4.2 cannot collide with another (ABI-incompatible) OpenFHE
-# loaded in the same process. Combined with libhaze having NO undefined OpenFHE
-# symbols (it is fully self-contained), exporting only haze* structurally
-# guarantees there is no symbol either side could interpose. Cheap, dependency-
-# free, always registered — this is the isolation proof.
-# ---------------------------------------------------------------------------
+# Isolation proof: assert the shipped libhaze exports ONLY the haze* C ABI, so
+# its absorbed OpenFHE 1.4.2 cannot collide with another OpenFHE in one process.
 if(NOT WIN32)
   add_test(NAME haze_isolated_symbol_leak
-           COMMAND ${CMAKE_COMMAND}
-                   -DHAZE_LIB=$<TARGET_FILE:haze>
-                   -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_symbol_leak.cmake)
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_symbol_leak.sh
+                   $<TARGET_FILE:haze>)
 endif()

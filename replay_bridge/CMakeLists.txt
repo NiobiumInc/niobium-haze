@@ -24,9 +24,12 @@ target_include_directories(haze_replay_bridge
 )
 
 # Niobium::fhetch supplies <niobium/compiler.h> and (transitively, via
-# BUILD_INTERFACE include dirs) the OpenFHE headers needed to compile the
-# bridge objects. Consumers (libhaze, haze_tests) pull these objects in via
-# $<TARGET_OBJECTS:haze_replay_bridge>, not as a link dependency.
+# BUILD_INTERFACE include dirs) the OpenFHE headers needed to COMPILE the bridge
+# objects. Consumers (libhaze, haze_tests) pull these objects in via
+# $<TARGET_OBJECTS:haze_replay_bridge>, which carries no usage requirements: the
+# bridge's fhetch/OpenFHE symbol references resolve against the same stack the
+# consumer absorbs (_haze_absorb_fhe), and libhaze's -undefined error link turns
+# any gap into a link error rather than a runtime fault.
 target_link_libraries(haze_replay_bridge PUBLIC Niobium::fhetch)
 
 # OBJECT library: no linkable artifact, so OUTPUT_NAME would be a no-op.
