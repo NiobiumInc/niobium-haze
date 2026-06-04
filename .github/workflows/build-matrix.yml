@@ -1,7 +1,7 @@
 name: build-matrix
 
 # Build-only portability matrix for the static, symbol-isolated libhaze.so:
-# arm macOS, linux x86_64 + aarch64, and Windows. It does NOT run tests — its
+# arm macOS, linux x86_64 + aarch64. It does NOT run tests — its
 # job is to confirm libhaze.so *builds* (OpenFHE 1.4.2 absorbed statically) on
 # each target's native toolchain. The authoritative test + lint gates remain
 # the nix-based build-test.yml / flake-check.yml on linux. Tests are skipped
@@ -23,10 +23,6 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    # Windows is expected to need porting work (fhetch uses POSIX APIs such as
-    # posix_spawnp, and the symbol-isolation linker flags are ELF/Mach-O only),
-    # so it is informational rather than a hard gate for now.
-    continue-on-error: ${{ matrix.experimental }}
     # Skip on fork PRs: the org App token needed for the private niobium-fhetch
     # submodule isn't available there.
     if: >-
@@ -38,16 +34,10 @@ jobs:
         include:
           - name: linux-x86_64
             runner: ubuntu-24.04
-            experimental: false
           - name: linux-aarch64
             runner: ubuntu-24.04-arm
-            experimental: false
           - name: macos-arm64
             runner: macos-14
-            experimental: false
-          - name: windows-x86_64
-            runner: windows-latest
-            experimental: true
     steps:
       - name: Generate token
         id: app-token
@@ -92,13 +82,6 @@ jobs:
           [ -d "$llvm/lib/unwind" ] && ldf="$ldf -L$llvm/lib/unwind -lunwind"
           echo "EXTRA_LDFLAGS=$ldf" >> "$GITHUB_ENV"
 
-      - name: Install toolchain (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install --no-progress -y llvm ninja
-          echo "CC=clang"   >> $env:GITHUB_ENV
-          echo "CXX=clang++" >> $env:GITHUB_ENV
-
       # --- Build the niobium OpenFHE 1.4.2 fork as static + PIC --------------
       # Flags mirror the Makefile's OPENFHE_CMAKE_FLAGS and the flake.
       - name: Build OpenFHE (static)
@@ -140,7 +123,6 @@ jobs:
       # doesn't run — invoke the standalone checker directly so the isolation
       # property (esp. the macOS / aarch64 paths) is actually validated here.
       - name: Check symbol isolation
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           # Pick whichever artifact exists without tripping `set -eo pipefail`
