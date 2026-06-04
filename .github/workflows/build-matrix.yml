@@ -78,9 +78,11 @@ jobs:
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install llvm cmake ninja
-          echo "CC=$(brew --prefix llvm)/bin/clang"   >> "$GITHUB_ENV"
-          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          # Pin to a versioned LLVM (matches the Linux clang-19 floor) so a
+          # Homebrew `llvm` bump can't cause a macOS-only drift between PRs.
+          brew install llvm@19 cmake ninja
+          echo "CC=$(brew --prefix llvm@19)/bin/clang"   >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm@19)/bin/clang++" >> "$GITHUB_ENV"
 
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'

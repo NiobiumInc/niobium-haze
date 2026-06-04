@@ -270,17 +270,17 @@ set(_haze_openfhe_static
   ${OPENFHE_LIBRARY_PATH}/libOPENFHEbinfhe_static.a
   ${OPENFHE_LIBRARY_PATH}/libOPENFHEcore_static.a
 )
-if(NOT APPLE) # paths are .a on both, but only existence-check the linux names here
-  foreach(_a IN LISTS _haze_openfhe_static)
-    if(NOT EXISTS "${_a}")
-      message(FATAL_ERROR
-        "libhaze absorbs OpenFHE statically but ${_a} is missing. Build OpenFHE "
-        "with -DBUILD_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON (see the "
-        "Makefile's OPENFHE_CMAKE_FLAGS), or point OPENFHE_LIBRARY_PATH at an "
-        "install that has the *_static.a archives.")
-    endif()
-  endforeach()
-endif()
+# OpenFHE static archives are libOPENFHE*_static.a on Linux AND macOS, so the
+# existence check applies to both platforms.
+foreach(_a IN LISTS _haze_openfhe_static)
+  if(NOT EXISTS "${_a}")
+    message(FATAL_ERROR
+      "libhaze absorbs OpenFHE statically but ${_a} is missing. Build OpenFHE "
+      "with -DBUILD_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON (see the "
+      "Makefile's OPENFHE_CMAKE_FLAGS), or point OPENFHE_LIBRARY_PATH at an "
+      "install that has the *_static.a archives.")
+  endif()
+endforeach()
 
 # NOTE: the archives are absorbed by raw path (below), which bypasses OpenFHE's
 # imported-target INTERFACE_LINK_LIBRARIES. That is complete ONLY because the
@@ -317,14 +317,18 @@ target_link_libraries(haze PRIVATE ${_haze_absorb_fhe} Threads::Threads)
 # visibility OpenFHE's build gave them — so --exclude-libs + the version script
 # (allowlisting only the haze* C ABI) are required.
 if(APPLE)
-  # NOTE (macOS): -exported_symbols_list controls the normal export table, but
-  # weak-coalesced defs (C++ vtables/typeinfo, template instantiations) live in
-  # a separate table and, on some ld64 versions, can still be exported as weak.
-  # If OpenFHE 1.4.2 and 1.5.1 share a mangled type name, the loader could
-  # coalesce them across the libhaze/exe boundary. The build-matrix runs the
-  # (name-based) symbol-leak check on the .dylib to catch this; if it ever
-  # fires, switch to per-archive -load_hidden / `ld -r` + localization. Validate
-  # on real macOS before trusting this path.
+  # NOTE (macOS), weak-symbol caveat — CURRENTLY VALIDATED ONLY EMPIRICALLY,
+  # NOT STRUCTURALLY. On ELF the version script's `local: *` localizes weak
+  # COMDAT defs too; on Mach-O, -exported_symbols_list governs the normal
+  # export table but weak-coalesced defs (C++ vtables/typeinfo, template
+  # instantiations) live in a separate table and, on some ld64 versions, can
+  # still be exported as weak. If OpenFHE 1.4.2 and 1.5.1 share a mangled type
+  # name, the loader could coalesce them across the libhaze/exe boundary.
+  # There is NO structural guarantee here yet — isolation on Darwin rests on
+  # the build-matrix's (name-based) symbol-leak check + the coexistence test
+  # passing, not on a linker invariant. If the leak check ever fires on macOS,
+  # switch to per-archive -load_hidden / `ld -r` + localization. Validate on
+  # real macOS before trusting this path.
   target_link_options(haze PRIVATE
     -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/linker/haze_exports.sym)
 else()

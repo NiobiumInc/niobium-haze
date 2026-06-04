@@ -47,10 +47,11 @@ foreach(_line IN LISTS _lines)
   # an unexpected type (Mach-O 'S' section syms, GNU 'u' unique, weak 'V/W',
   # etc.) is still caught. Skip undefined (U/u-as-undefined handled by flags)
   # and absolute 'A/a' (the version-node pseudo-symbol, e.g. HAZE_1.0).
-  if(_line MATCHES "^[0-9a-fA-F]+[ \t]+([A-Za-z])[ \t]+([^ \t]+.*)$")
+  if(_line MATCHES "^[0-9a-fA-F]+[ \t]+([A-Za-z])[ \t]+([^ \t]+)")
     set(_type "${CMAKE_MATCH_1}")
     set(_name "${CMAKE_MATCH_2}")
     string(REGEX REPLACE "@.*$" "" _name "${_name}") # strip @@HAZE_1.0
+    string(STRIP "${_name}" _name)                   # belt-and-suspenders
     if(_type STREQUAL "A" OR _type STREQUAL "a" OR _type STREQUAL "U")
       continue()
     endif()
