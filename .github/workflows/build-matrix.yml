@@ -81,8 +81,16 @@ jobs:
           # Pin to a versioned LLVM (matches the Linux clang-19 floor) so a
           # Homebrew `llvm` bump can't cause a macOS-only drift between PRs.
           brew install llvm@19 cmake ninja
-          echo "CC=$(brew --prefix llvm@19)/bin/clang"   >> "$GITHUB_ENV"
-          echo "CXX=$(brew --prefix llvm@19)/bin/clang++" >> "$GITHUB_ENV"
+          llvm="$(brew --prefix llvm@19)"
+          echo "CC=$llvm/bin/clang"   >> "$GITHUB_ENV"
+          echo "CXX=$llvm/bin/clang++" >> "$GITHUB_ENV"
+          # Homebrew clang compiles against ITS libc++ headers (which reference
+          # libc++-19 internals like std::__1::__is_posix_terminal) but, unless
+          # told otherwise, links the older system libc++ that lacks them — so
+          # point the linker at Homebrew LLVM's libc++ (its documented caveat).
+          ldf="-L$llvm/lib/c++ -Wl,-rpath,$llvm/lib/c++"
+          [ -d "$llvm/lib/unwind" ] && ldf="$ldf -L$llvm/lib/unwind -lunwind"
+          echo "EXTRA_LDFLAGS=$ldf" >> "$GITHUB_ENV"
 
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'
@@ -111,11 +119,16 @@ jobs:
       - name: Build libhaze
         shell: bash
         run: |
+          # EXTRA_LDFLAGS is set only on macOS (Homebrew libc++ path); empty
+          # elsewhere. Applied to the shared + exe link so libhaze.dylib's
+          # absorbed objects resolve libc++-19 symbols against the right libc++.
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOPENFHE_INSTALL_DIR="$PWD/openfhe-install" \
-            -DHAZE_BUILD_TESTS=OFF
+            -DHAZE_BUILD_TESTS=OFF \
+            -DCMAKE_SHARED_LINKER_FLAGS="${EXTRA_LDFLAGS:-}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${EXTRA_LDFLAGS:-}"
           cmake --build build --target haze
 
       # The matrix builds with tests OFF (no Catch2), so the symbol-leak ctest
