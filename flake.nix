@@ -408,11 +408,6 @@
                 # the same wrapper CI uses; set CTCACHE_CLANG_TIDY when
                 # calling it so the wrapper finds the nix-pinned tidy.
                 packages = (hazeTools pkgs) ++ [ p.clang-tidy-cache ];
-                # OpenMP runtime (libomp + omp.h) so `make test-coexistence`
-                # can link FIDESlib's OpenFHE 1.5.1 (its imported targets carry
-                # a bare -fopenmp). haze's own OpenFHE is WITH_OPENMP=OFF, so
-                # nothing else here needs it.
-                buildInputs = [ pkgs.llvmPackages.openmp ];
                 shellHook = ''
                   # Resolve haze worktree root via git so scripts/ stays
                   # on PATH even after `cd`-ing to a subdirectory. Falls

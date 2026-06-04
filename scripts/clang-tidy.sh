@@ -55,10 +55,6 @@ fi
 parallel="${PARALLEL_JOBS:-${NIX_BUILD_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}}"
 clang_tidy="${CLANG_TIDY:-clang-tidy}"
 
-# test/coexistence is the opt-in FIDESlib-1.5.1 coexistence test
-# (HAZE_WITH_COEXISTENCE_TEST, default OFF). It isn't in the default
-# compile_commands.json, so clang-tidy can't resolve its flags — exclude it
-# from the sweep rather than fail with "compile command not found".
-find src replay_bridge test -name '*.cpp' -not -path '*/coexistence/*' -print0 \
+find src replay_bridge test -name '*.cpp' -print0 \
     | xargs -0 -n4 -P"$parallel" "$clang_tidy" -p "$build_dir" \
         --warnings-as-errors='*' --quiet
