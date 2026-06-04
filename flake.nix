@@ -527,7 +527,12 @@
               }
               ''
                 set -euo pipefail
-                lib=$(ls ${p.haze}/lib/libhaze.so ${p.haze}/lib/libhaze.dylib 2>/dev/null | head -1)
+                # Pick whichever artifact exists without an `ls` of the absent
+                # .so/.dylib tripping `set -e`.
+                lib=""
+                for cand in ${p.haze}/lib/libhaze.so ${p.haze}/lib/libhaze.dylib; do
+                  if [ -f "$cand" ]; then lib="$cand"; break; fi
+                done
                 test -n "$lib" || { echo "libhaze artifact not found in ${p.haze}/lib"; exit 1; }
                 cmake -DHAZE_LIB="$lib" -P ${./cmake/check_symbol_leak.cmake}
                 touch "$out"

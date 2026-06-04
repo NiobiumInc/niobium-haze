@@ -125,6 +125,11 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          lib=$(ls build/libhaze.so build/libhaze.dylib 2>/dev/null | head -1)
-          test -n "$lib" || { echo "libhaze artifact not found"; exit 1; }
+          # Pick whichever artifact exists without tripping `set -eo pipefail`
+          # (an `ls` of the absent .so/.dylib would exit non-zero).
+          lib=""
+          for cand in build/libhaze.so build/libhaze.dylib; do
+            if [ -f "$cand" ]; then lib="$cand"; break; fi
+          done
+          test -n "$lib" || { echo "libhaze artifact not found under build/"; exit 1; }
           cmake -DHAZE_LIB="$lib" -P cmake/check_symbol_leak.cmake
