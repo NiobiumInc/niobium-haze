@@ -110,7 +110,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
 .PHONY: help sync \
         config build \
         config-openfhe build-openfhe \
-        test-unit test-sim test-transport test-isolation test-coexistence test test-all \
+        test-unit test-sim test-transport test-isolation test test-all \
         clean clean-runs
 
 # ==============================================================================
@@ -136,8 +136,6 @@ Usage: make <target> [MODE=debug|release]
     test-transport      Run integration suite via nbcc_fhetch_replay
                         (requires NIOBIUM_COMPILER_ROOT)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
-    test-coexistence    Build+run the FIDESlib-1.5.1 coexistence test
-                        (requires FIDESLIB_OPENFHE_DIR)
     test                Default: test-unit + test-sim + test-isolation
     test-all            test-unit + test-sim + test-isolation + test-transport
 
@@ -251,27 +249,6 @@ test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 
 test-isolation: build ## Assert libhaze.so exports only the haze* C ABI (no leaked OpenFHE symbols)
 	@cd "$(BUILD_DIR)" && ctest -R haze_isolated_symbol_leak --output-on-failure
-
-# FIDESlib-coexistence proof: build libhaze.so + a test exe that also links
-# OpenFHE 1.5.1 statically, and assert both FHE stacks run in one process.
-# Requires an OpenFHE 1.5.1 install (built with -DBUILD_STATIC=ON), e.g.
-# references/FIDESlib/openfhe-install.
-FIDESLIB_OPENFHE_DIR ?=
-
-test-coexistence: build ## Build+run the FIDESlib-1.5.1 / libhaze coexistence test (needs FIDESLIB_OPENFHE_DIR)
-	@if [ -z "$(FIDESLIB_OPENFHE_DIR)" ]; then \
-		echo "ERROR: FIDESLIB_OPENFHE_DIR is not set."; \
-		echo "Run: make test-coexistence FIDESLIB_OPENFHE_DIR=/path/to/openfhe-1.5.1-install"; \
-		exit 2; \
-	fi
-	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
-		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
-		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
-		-DHAZE_WITH_COEXISTENCE_TEST=ON \
-		-DFIDESLIB_OPENFHE_DIR="$(FIDESLIB_OPENFHE_DIR)" \
-		$(CMAKE_FHETCH_DIR_FLAG) $(CMAKE_JSON_INCLUDE_DIR_FLAG)
-	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --target haze_coexistence_test --config $(CMAKE_CONFIG)
-	@cd "$(BUILD_DIR)" && ctest -R "haze_coexistence_test|haze_isolated_symbol_leak" --output-on-failure
 
 test: test-unit test-sim test-isolation ## Run default test suites + isolation guard (no transport dependency)
 

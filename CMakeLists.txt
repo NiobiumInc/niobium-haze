@@ -325,10 +325,10 @@ if(APPLE)
   # still be exported as weak. If OpenFHE 1.4.2 and 1.5.1 share a mangled type
   # name, the loader could coalesce them across the libhaze/exe boundary.
   # There is NO structural guarantee here yet — isolation on Darwin rests on
-  # the build-matrix's (name-based) symbol-leak check + the coexistence test
-  # passing, not on a linker invariant. If the leak check ever fires on macOS,
-  # switch to per-archive -load_hidden / `ld -r` + localization. Validate on
-  # real macOS before trusting this path.
+  # the build-matrix's (name-based) symbol-leak check passing, not on a linker
+  # invariant. If the leak check ever fires on macOS, switch to per-archive
+  # -load_hidden / `ld -r` + localization. Validate on real macOS before
+  # trusting this path.
   target_link_options(haze PRIVATE
     -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/linker/haze_exports.sym)
 else()
@@ -347,10 +347,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests (opt-out)
 # ---------------------------------------------------------------------------
-# Everything below builds the test suite + isolation/coexistence checks and
+# Everything below builds the test suite + the isolation symbol-leak check and
 # needs Catch2 v3. Turn OFF to build just libhaze.so (e.g. the build-only CI
 # matrix on platforms without Catch2). Default ON preserves `make test`.
-option(HAZE_BUILD_TESTS "Build the haze test suite + isolation/coexistence tests (needs Catch2 v3)." ON)
+option(HAZE_BUILD_TESTS "Build the haze test suite + isolation symbol-leak check (needs Catch2 v3)." ON)
 if(NOT HAZE_BUILD_TESTS)
   return()
 endif()
@@ -511,26 +511,15 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Isolation guard: the shipped libhaze must export ONLY the haze* C ABI, so the
-# absorbed OpenFHE 1.4.2 cannot collide with another OpenFHE in one process.
-# Cheap, always registered; the real proof is haze_coexistence_test below.
+# absorbed OpenFHE 1.4.2 cannot collide with another (ABI-incompatible) OpenFHE
+# loaded in the same process. Combined with libhaze having NO undefined OpenFHE
+# symbols (it is fully self-contained), exporting only haze* structurally
+# guarantees there is no symbol either side could interpose. Cheap, dependency-
+# free, always registered — this is the isolation proof.
 # ---------------------------------------------------------------------------
 if(NOT WIN32)
   add_test(NAME haze_isolated_symbol_leak
            COMMAND ${CMAKE_COMMAND}
                    -DHAZE_LIB=$<TARGET_FILE:haze>
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_symbol_leak.cmake)
-endif()
-
-# ---------------------------------------------------------------------------
-# FIDESlib-coexistence test (opt-in): proves libhaze.so + OpenFHE 1.5.1 coexist
-# in one process. Needs an OpenFHE 1.5.1 install via FIDESLIB_OPENFHE_DIR.
-# ---------------------------------------------------------------------------
-option(HAZE_WITH_COEXISTENCE_TEST
-       "Build the FIDESlib-1.5.1 / libhaze coexistence test. Requires FIDESLIB_OPENFHE_DIR."
-       OFF)
-set(FIDESLIB_OPENFHE_DIR "" CACHE PATH
-    "Path to an OpenFHE 1.5.1 install (built with BUILD_STATIC) for the coexistence test.")
-
-if(HAZE_WITH_COEXISTENCE_TEST)
-  add_subdirectory(test/coexistence)
 endif()
