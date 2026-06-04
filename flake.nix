@@ -104,10 +104,8 @@
               ./src
               ./test
               ./replay_bridge
-              # Symbol-isolation version script (referenced at libhaze link
-              # time) + the symbol-leak ctest helper.
+              # Symbol-isolation version script, referenced at libhaze link time.
               ./linker
-              ./cmake
             ];
           };
 
@@ -119,7 +117,8 @@
             # WITH_CPROBES=ON compiles in the niobium probe hooks that
             # libnbfhetch later links against. Built static + PIC (not shared)
             # so it can be absorbed whole into the symbol-isolated libhaze.so.
-            # Flags mirror the Makefile's OPENFHE_CMAKE_FLAGS.
+            # Keep in sync with the canonical set in the Makefile's
+            # OPENFHE_CMAKE_FLAGS (also mirrored in build-matrix.yml).
             cmakeFlags = [
               "-DBUILD_SHARED=OFF"
               "-DBUILD_STATIC=ON"
@@ -508,28 +507,20 @@
             touch "$out"
           '';
 
-          # Isolation guard: assert the shipped libhaze exports ONLY the haze*
-          # C ABI (no leaked OpenFHE/lbcrypto symbols), so it can coexist with
-          # another OpenFHE in one process. A leak wouldn't fail the build, so
-          # this check is what catches an isolation regression in CI.
+          # Isolation guard: assert the shipped libhaze exports ONLY the haze* C
+          # ABI (no leaked OpenFHE symbols), the property that lets it coexist
+          # with another OpenFHE in one process. A leak wouldn't fail the build,
+          # so this check is what catches an isolation regression in CI.
+          # Darwin needs llvm-nm (GNU binutils nm misreads Mach-O private-extern
+          # symbols as global); ELF is fine with GNU nm.
           isolation =
             pkgs.runCommand "haze-isolation"
               {
-                nativeBuildInputs = [
-                  pkgs.cmake
-                  pkgs.binutils
-                ];
+                nativeBuildInputs = [ (if pkgs.stdenv.isDarwin then pkgs.llvm else pkgs.binutils) ];
               }
               ''
                 set -euo pipefail
-                # Pick whichever artifact exists without an `ls` of the absent
-                # .so/.dylib tripping `set -e`.
-                lib=""
-                for cand in ${p.haze}/lib/libhaze.so ${p.haze}/lib/libhaze.dylib; do
-                  if [ -f "$cand" ]; then lib="$cand"; break; fi
-                done
-                test -n "$lib" || { echo "libhaze artifact not found in ${p.haze}/lib"; exit 1; }
-                cmake -DHAZE_LIB="$lib" -P ${./cmake/check_symbol_leak.cmake}
+                bash ${./scripts/check_symbol_leak.sh} ${p.haze}/lib
                 touch "$out"
               '';
         }

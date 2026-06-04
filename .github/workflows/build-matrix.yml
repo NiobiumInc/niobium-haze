@@ -1,11 +1,8 @@
 name: build-matrix
 
-# Build-only portability matrix for the static, symbol-isolated libhaze.so:
-# arm macOS, linux x86_64 + aarch64. It does NOT run tests — its
-# job is to confirm libhaze.so *builds* (OpenFHE 1.4.2 absorbed statically) on
-# each target's native toolchain. The authoritative test + lint gates remain
-# the nix-based build-test.yml / flake-check.yml on linux. Tests are skipped
-# via -DHAZE_BUILD_TESTS=OFF so Catch2 isn't required on every platform.
+# Build-only portability matrix for the static, symbol-isolated libhaze: arm
+# macOS + linux x86_64/aarch64. Tests and lint stay on the nix build-test.yml /
+# flake-check.yml gates, so this builds with -DHAZE_BUILD_TESTS=OFF (no Catch2).
 
 on:
   pull_request:
@@ -54,7 +51,6 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      # --- Toolchain (clang >= 19 for C++23 + cmake) -------------------------
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -68,29 +64,31 @@ jobs:
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
         run: |
-          # Pin to a versioned LLVM (matches the Linux clang-19 floor) so a
-          # Homebrew `llvm` bump can't cause a macOS-only drift between PRs.
+          # Pin a versioned LLVM (matches the linux clang-19 floor) so a Homebrew
+          # `llvm` bump can't cause macOS-only drift.
           brew install llvm@19 cmake ninja
           llvm="$(brew --prefix llvm@19)"
           echo "CC=$llvm/bin/clang"   >> "$GITHUB_ENV"
           echo "CXX=$llvm/bin/clang++" >> "$GITHUB_ENV"
-          # Homebrew clang compiles against ITS libc++ headers (which reference
-          # libc++-19 internals like std::__1::__is_posix_terminal) but, unless
-          # told otherwise, links the older system libc++ that lacks them — so
-          # point the linker at Homebrew LLVM's libc++ (its documented caveat).
-          ldf="-L$llvm/lib/c++ -Wl,-rpath,$llvm/lib/c++"
+          # Homebrew clang uses its own libc++ headers (libc++-19 internals like
+          # __is_posix_terminal) but links the older system libc++ by default;
+          # point the linker at Homebrew's libc++. It lives under lib/c++ (the
+          # documented caveat); probe for the actual dylib so a layout change
+          # leaves EXTRA_LDFLAGS empty rather than a dangling -L/-rpath.
+          ldf=""
+          for d in "$llvm/lib/c++" "$llvm/lib"; do
+            if [ -f "$d/libc++.dylib" ]; then ldf="-L$d -Wl,-rpath,$d"; break; fi
+          done
           [ -d "$llvm/lib/unwind" ] && ldf="$ldf -L$llvm/lib/unwind -lunwind"
           echo "EXTRA_LDFLAGS=$ldf" >> "$GITHUB_ENV"
 
-      # --- Build the niobium OpenFHE 1.4.2 fork as static + PIC --------------
-      # Flags mirror the Makefile's OPENFHE_CMAKE_FLAGS and the flake.
+      # OpenFHE 1.4.2 fork as static + PIC. Keep these flags in sync with the
+      # canonical set in the Makefile's OPENFHE_CMAKE_FLAGS (also mirrored in
+      # flake.nix's openfhe derivation).
       - name: Build OpenFHE (static)
         shell: bash
         run: |
-          # Start from a clean build dir: a reused workspace (self-hosted
-          # runner, or checkout clean disabled) can leave a cache configured
-          # with a different generator, which `-G Ninja` then rejects.
-          rm -rf openfhe-build
+          rm -rf openfhe-build  # fresh dir: a reused workspace can leave a foreign-generator cache
           cmake -S vendor/niobium-fhetch/vendor/openfhe -B openfhe-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -102,14 +100,12 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/openfhe-install"
           cmake --build openfhe-build --target install
 
-      # --- Build libhaze.so (tests off => no Catch2) -------------------------
       - name: Build libhaze
         shell: bash
         run: |
-          # EXTRA_LDFLAGS is set only on macOS (Homebrew libc++ path); empty
-          # elsewhere. Applied to the shared + exe link so libhaze.dylib's
-          # absorbed objects resolve libc++-19 symbols against the right libc++.
-          rm -rf build  # clean dir: avoid a stale-generator cache on reused workspaces
+          # EXTRA_LDFLAGS carries the macOS libc++ path (empty elsewhere),
+          # applied to both links so the absorbed objects bind the right libc++.
+          rm -rf build
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -119,17 +115,8 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="${EXTRA_LDFLAGS:-}"
           cmake --build build --target haze
 
-      # The matrix builds with tests OFF (no Catch2), so the symbol-leak ctest
-      # doesn't run — invoke the standalone checker directly so the isolation
-      # property (esp. the macOS / aarch64 paths) is actually validated here.
+      # Tests are OFF here, so the symbol-leak ctest does not run; invoke the
+      # checker directly to validate isolation on each native target.
       - name: Check symbol isolation
         shell: bash
-        run: |
-          # Pick whichever artifact exists without tripping `set -eo pipefail`
-          # (an `ls` of the absent .so/.dylib would exit non-zero).
-          lib=""
-          for cand in build/libhaze.so build/libhaze.dylib; do
-            if [ -f "$cand" ]; then lib="$cand"; break; fi
-          done
-          test -n "$lib" || { echo "libhaze artifact not found under build/"; exit 1; }
-          cmake -DHAZE_LIB="$lib" -P cmake/check_symbol_leak.cmake
+        run: scripts/check_symbol_leak.sh build

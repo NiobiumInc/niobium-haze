@@ -248,7 +248,9 @@ test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	 scripts/test_haze_integration_standalone.sh
 
 test-isolation: build ## Assert libhaze.so exports only the haze* C ABI (no leaked OpenFHE symbols)
-	@cd "$(BUILD_DIR)" && ctest -R haze_isolated_symbol_leak --output-on-failure
+	# --no-tests=error: fail loudly if the test isn't registered (e.g. a
+	# tests-off BUILD_DIR) instead of passing on a zero-match ctest filter.
+	@cd "$(BUILD_DIR)" && ctest -R haze_isolated_symbol_leak --no-tests=error --output-on-failure
 
 test: test-unit test-sim test-isolation ## Run default test suites + isolation guard (no transport dependency)
 
