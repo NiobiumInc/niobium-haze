@@ -77,7 +77,7 @@ if(HAZE_USE_PREBUILT_FHETCH)
   )
 endif()
 
-# OPENFHE_LIBRARY_PATH is used by haze_internal_tests's libOPENFHEcore reference
+# OPENFHE_LIBRARY_PATH is used by haze_tests's libOPENFHEcore reference
 # oracle (test_basis_convert.cpp). Parents (e.g. niobium-client) may
 # set it explicitly to point at OpenFHE's build dir; otherwise default
 # to the install layout.
@@ -89,7 +89,7 @@ endif()
 # (static archive) and usage requirements — across both resolution modes:
 #   * in-tree  (add_subdirectory)         -> target `niobium_fhetch`
 #   * prebuilt (find_package NiobiumFhetch)-> imported `Niobium::niobium_fhetch`
-# libhaze absorbs this archive whole; haze_internal_tests pulls its include dirs /
+# libhaze absorbs this archive whole; haze_tests pulls its include dirs /
 # compile defs. (Niobium::fhetch is an INTERFACE alias/wrapper with no
 # TARGET_FILE, so it can't be used for the absorb.)
 if(TARGET niobium_fhetch)
@@ -166,7 +166,7 @@ endif()
 
 # haze's own translation units, compiled once as an OBJECT library and shared
 # by two consumers: the shipped libhaze.so (symbol-isolated, below) and
-# haze_internal_tests (which links these objects directly with full visibility, so the
+# haze_tests (which links these objects directly with full visibility, so the
 # suite can reach haze:: internals and drive the bridge's in-process OpenFHE —
 # see the test section). A version script on libhaze.so would otherwise hide
 # the internal C++ symbols the tests link against.
@@ -296,7 +296,7 @@ set(_haze_fhe_archives
 # Absorb that stack WHOLE: fhetch and the instrumented OpenFHE are mutually
 # recursive (OpenFHE's CPROBES + auto hooks resolve back into fhetch), so plain
 # archive linking would drop needed TUs / fail to resolve on a single pass.
-# `_haze_absorb_fhe` is reused by both libhaze.so and haze_internal_tests. macOS uses
+# `_haze_absorb_fhe` is reused by both libhaze.so and haze_tests. macOS uses
 # -force_load per archive; GNU ld / LLD use a --whole-archive group. It is
 # applied via target_link_options (not _libraries) so CMake cannot reorder or
 # de-duplicate the archive paths out of the --whole-archive/--no-whole-archive
@@ -382,27 +382,39 @@ endif()
 enable_testing()
 find_package(Catch2 3 REQUIRED)
 
-# Stock (unmodified upstream) OpenFHE for haze_e2e_tests' reference crypto. Built
-# SHARED and linked ONLY into that exe, NEVER absorbed into libhaze.so. It MUST
-# be a different install than OPENFHE_INSTALL_DIR (the instrumented 1.4.2 fork
-# libhaze absorbs) so the two can never collide in one image. haze's Makefile
-# builds vendor/openfhe and points this at vendor/lib/openfhe-stock.
-set(HAZE_TEST_OPENFHE_DIR "" CACHE PATH
-    "Install prefix of the stock OpenFHE for haze_e2e_tests (distinct from OPENFHE_INSTALL_DIR).")
-if(NOT HAZE_TEST_OPENFHE_DIR)
-  message(FATAL_ERROR
-    "HAZE_TEST_OPENFHE_DIR must be set when HAZE_BUILD_TESTS=ON. Pass "
-    "-DHAZE_TEST_OPENFHE_DIR=<stock-openfhe-install>, or use haze's Makefile "
-    "(it builds vendor/openfhe into vendor/lib/openfhe-stock).")
-endif()
-if(HAZE_TEST_OPENFHE_DIR STREQUAL OPENFHE_INSTALL_DIR)
-  message(FATAL_ERROR
-    "HAZE_TEST_OPENFHE_DIR must differ from OPENFHE_INSTALL_DIR: the stock "
-    "OpenFHE must never share an install with the instrumented fork libhaze.so "
-    "absorbs.")
+# Black-box e2e suite (opt-in). Builds haze_e2e_tests, which links the SHIPPED
+# libhaze.so (haze* C ABI only) + a SEPARATE stock OpenFHE. Default OFF so plain
+# `-DHAZE_BUILD_TESTS=ON` consumers (e.g. niobium-client via add_subdirectory)
+# are unaffected and need not know about the stock OpenFHE; haze's own Makefile
+# and flake turn it ON and supply HAZE_TEST_OPENFHE_DIR.
+option(HAZE_BUILD_E2E_TESTS
+       "Build the black-box e2e suite (haze_e2e_tests; needs HAZE_TEST_OPENFHE_DIR)." OFF)
+
+if(HAZE_BUILD_E2E_TESTS)
+  # Stock (unmodified upstream) OpenFHE for haze_e2e_tests' reference crypto.
+  # Built SHARED and linked ONLY into that exe, NEVER absorbed into libhaze.so.
+  # It MUST be a different install than OPENFHE_INSTALL_DIR (the instrumented
+  # 1.4.2 fork libhaze absorbs) so the two can never collide in one image.
+  set(HAZE_TEST_OPENFHE_DIR "" CACHE PATH
+      "Install prefix of the stock OpenFHE for haze_e2e_tests (distinct from OPENFHE_INSTALL_DIR).")
+  if(NOT HAZE_TEST_OPENFHE_DIR)
+    message(FATAL_ERROR
+      "HAZE_BUILD_E2E_TESTS=ON requires -DHAZE_TEST_OPENFHE_DIR=<stock-openfhe-install> "
+      "(haze's Makefile builds vendor/openfhe into vendor/lib/openfhe-stock).")
+  endif()
+  # Compare resolved real paths so a trailing slash / symlink / relative form
+  # cannot alias the instrumented install past this guard.
+  get_filename_component(_haze_test_ofhe_real "${HAZE_TEST_OPENFHE_DIR}" REALPATH)
+  get_filename_component(_haze_instr_ofhe_real "${OPENFHE_INSTALL_DIR}" REALPATH)
+  if(_haze_test_ofhe_real STREQUAL _haze_instr_ofhe_real)
+    message(FATAL_ERROR
+      "HAZE_TEST_OPENFHE_DIR must differ from OPENFHE_INSTALL_DIR: the stock "
+      "OpenFHE must never share an install with the instrumented fork libhaze.so "
+      "absorbs (both resolved to ${_haze_test_ofhe_real}).")
+  endif()
 endif()
 
-# haze_internal_tests links the SAME compiled objects as libhaze.so (haze_objs + the
+# haze_tests links the SAME compiled objects as libhaze.so (haze_objs + the
 # bridge) PLUS the niobium FHE stack absorbed whole (${_haze_absorb_fhe}), but
 # WITHOUT the version script — so internal haze:: symbols, the bridge C++ API,
 # and the BigInteger reference oracle (test_basis_convert.cpp) all resolve at
@@ -410,7 +422,7 @@ endif()
 # the OpenFHE headers are needed explicitly here.
 set(_openfhe_include "${OPENFHE_INSTALL_DIR}/include/openfhe")
 
-add_executable(haze_internal_tests
+add_executable(haze_tests
   test/test_build.cpp
   test/test_memory.cpp
   test/test_config.cpp
@@ -441,7 +453,7 @@ add_executable(haze_internal_tests
   $<TARGET_OBJECTS:haze_replay_bridge>
 )
 
-target_include_directories(haze_internal_tests PRIVATE
+target_include_directories(haze_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/test
@@ -450,7 +462,7 @@ target_include_directories(haze_internal_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/replay_bridge/include
 )
 # Headers for the test sources, SYSTEM so neither set's internal warnings trip
-# our -Werror. haze_internal_tests absorbs the fhetch archive via a file path (no usage
+# our -Werror. haze_tests absorbs the fhetch archive via a file path (no usage
 # requirements), so its include dirs are named explicitly:
 #   * The explicit ${_openfhe_include}{,/core,/pke,/binfhe} entries are
 #     LOAD-BEARING: in prebuilt (find_package) mode the installed fhetch target
@@ -459,7 +471,7 @@ target_include_directories(haze_internal_tests PRIVATE
 #     the property below, but don't rely on that; keep these.
 #   * The fhetch interface include dirs supply <niobium/compiler.h> (used by
 #     integration_helpers.hpp) in both modes.
-target_include_directories(haze_internal_tests SYSTEM PRIVATE
+target_include_directories(haze_tests SYSTEM PRIVATE
   ${_openfhe_include}
   ${_openfhe_include}/core
   ${_openfhe_include}/pke
@@ -467,18 +479,18 @@ target_include_directories(haze_internal_tests SYSTEM PRIVATE
   $<TARGET_PROPERTY:${HAZE_FHETCH_LIB},INTERFACE_INCLUDE_DIRECTORIES>
 )
 
-target_link_libraries(haze_internal_tests PRIVATE
+target_link_libraries(haze_tests PRIVATE
   Threads::Threads
   Catch2::Catch2WithMain
 )
 # Absorb the same fhetch+OpenFHE stack as libhaze (via options, to pin the
-# --whole-archive ordering). haze_internal_tests is an executable, so it gets no version
+# --whole-archive ordering). haze_tests is an executable, so it gets no version
 # script (it needs the internal haze:: symbols) and -undefined error by default.
-target_link_options(haze_internal_tests PRIVATE ${_haze_absorb_fhe})
+target_link_options(haze_tests PRIVATE ${_haze_absorb_fhe})
 # target_link_options drops the $<TARGET_FILE:> auto-dependency, so make the
 # in-tree fhetch build-order edge explicit (matches the haze target above).
 if(TARGET niobium_fhetch)
-  add_dependencies(haze_internal_tests niobium_fhetch)
+  add_dependencies(haze_tests niobium_fhetch)
 endif()
 
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
@@ -487,17 +499,17 @@ endif()
 # well-defined — silence here so tests can use the clean form
 # `make_ctx({.mode=..., .mult_depth=..., ...})` without spelling out the
 # defaulted keyswitch-key fields they don't need.
-target_compile_options(haze_internal_tests PRIVATE -Wno-missing-field-initializers)
+target_compile_options(haze_tests PRIVATE -Wno-missing-field-initializers)
 
 # Pass the FBC variant choice through to the test oracle.
-target_compile_definitions(haze_internal_tests PRIVATE
+target_compile_definitions(haze_tests PRIVATE
   HAZE_FBC_REDUCED_NOISE=$<BOOL:${HAZE_FBC_REDUCED_NOISE}>)
 
 # The niobium-instrumented OpenFHE headers (cryptocontext.h etc.) only declare
-# g_replay_mode / the niobium_auto hooks under OPENFHE_CPROBES. haze_internal_tests
+# g_replay_mode / the niobium_auto hooks under OPENFHE_CPROBES. haze_tests
 # absorbs the fhetch archive by file path (no usage requirements), so propagate
 # fhetch's PUBLIC compile definitions (incl. OPENFHE_CPROBES) explicitly.
-target_compile_definitions(haze_internal_tests PRIVATE
+target_compile_definitions(haze_tests PRIVATE
   $<TARGET_PROPERTY:${HAZE_FHETCH_LIB},INTERFACE_COMPILE_DEFINITIONS>)
 
 # ---------------------------------------------------------------------------
@@ -510,6 +522,7 @@ target_compile_definitions(haze_internal_tests PRIVATE
 # whole-archive absorb. ops.cpp is shared with the internal exe; built here
 # without OPENFHE_CPROBES, its PausedRecording guard compiles away to a no-op.
 # ---------------------------------------------------------------------------
+if(HAZE_BUILD_E2E_TESTS)
 set(_stock_openfhe_include "${HAZE_TEST_OPENFHE_DIR}/include/openfhe")
 set(_stock_openfhe_lib "${HAZE_TEST_OPENFHE_DIR}/lib")
 
@@ -555,6 +568,7 @@ target_compile_options(haze_e2e_tests PRIVATE -Wno-missing-field-initializers)
 # is left to the global CMAKE_INSTALL_RPATH (the nix build appends the stock lib
 # dir there) so it can also reach the installed libhaze under $ORIGIN/../lib.
 set_target_properties(haze_e2e_tests PROPERTIES BUILD_RPATH "${_stock_openfhe_lib}")
+endif() # HAZE_BUILD_E2E_TESTS
 
 # ---------------------------------------------------------------------------
 # ctest entries
@@ -570,7 +584,7 @@ option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
 # state-machine and recording behaviour only -- they do not perform a
 # D2H (which would trigger replay) and do not validate FHE math results.
 add_test(NAME haze_unit_tests
-         COMMAND haze_internal_tests "~[integration]")
+         COMMAND haze_tests "~[integration]")
 set_tests_properties(haze_unit_tests PROPERTIES
     ENVIRONMENT "HAZE_TARGET=local")
 
@@ -581,16 +595,22 @@ set_tests_properties(haze_unit_tests PROPERTIES
 # Target literal must match haze::kLocalTarget in src/core/config.hpp
 # AND the test-sim recipe in Makefile.
 add_test(NAME haze_sim_tests
-         COMMAND haze_internal_tests "[integration]")
+         COMMAND haze_tests "[integration]")
 set_tests_properties(haze_sim_tests PROPERTIES
     ENVIRONMENT "HAZE_TARGET=local")
 
 # E2E suite: the public-C-ABI + stock-OpenFHE black-box exe. HAZE_TARGET=local
-# runs the in-process FHETCH simulator inside libhaze.so.
-add_test(NAME haze_e2e_tests
-         COMMAND haze_e2e_tests)
-set_tests_properties(haze_e2e_tests PROPERTIES
-    ENVIRONMENT "HAZE_TARGET=local")
+# runs the in-process FHETCH simulator inside libhaze.so. WORKING_DIRECTORY
+# (created at configure) keeps probe/trace artifacts under build/runs and out of
+# the build root when invoked via `ctest` directly; the Makefile/flake cd here too.
+if(HAZE_BUILD_E2E_TESTS)
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/runs)
+  add_test(NAME haze_e2e_tests
+           COMMAND haze_e2e_tests)
+  set_tests_properties(haze_e2e_tests PROPERTIES
+      ENVIRONMENT "HAZE_TARGET=local"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runs")
+endif()
 
 if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set(NIOBIUM_COMPILER_ROOT "" CACHE PATH
@@ -606,7 +626,7 @@ if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_haze_integration.sh)
   set_tests_properties(haze_transport_tests PROPERTIES
     ENVIRONMENT
-      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_internal_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
+      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
 endif()
 
 # Isolation proof: assert the shipped libhaze exports ONLY the haze* C ABI, so

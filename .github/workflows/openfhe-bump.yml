@@ -12,7 +12,11 @@ name: openfhe-bump
 
 on:
   schedule:
-    - cron: "17 6 * * *" # daily ~06:17 UTC
+    # Daily at 12:00 UTC. Adjust freely; a few minutes' GitHub-Actions queue
+    # delay is irrelevant for a dependency check. Scheduled runs only fire from
+    # the DEFAULT branch (main) once merged — use the workflow_dispatch button
+    # to run it on demand.
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
 permissions:
@@ -45,10 +49,10 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: Configure git author
+      - name: Configure git author (bot identity for automated bumps)
         run: |
-          git config user.name  "Ryan Orendorff"
-          git config user.email "12442942+ryanorendorff@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Resolve latest upstream release vs vendored rev
         id: cmp
