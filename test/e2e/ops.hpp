@@ -7,11 +7,12 @@
 
 #pragma once
 
+#include "openfhe_key_extract.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge_cc.hpp>
 #include <map>
 #include <openfhe.h>
 #include <optional>
@@ -79,13 +80,13 @@ class Ct {
 
 struct RotationKeyEntry {
     std::uint32_t auto_index{};
-    haze::HybridKeyswitchLimbs limbs;
+    HybridKeyswitchLimbs limbs;
 };
 
 struct OpCtx {
     lbcrypto::CryptoContext<lbcrypto::DCRTPoly> cc;
     lbcrypto::KeyPair<lbcrypto::DCRTPoly> keys;
-    haze::HybridKeyswitchLimbs relin_key;
+    HybridKeyswitchLimbs relin_key;
     std::map<std::int32_t, RotationKeyEntry> rotation_keys;
     std::vector<uint64_t> q_base;
     std::vector<uint64_t> p_base;

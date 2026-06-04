@@ -6,6 +6,7 @@
 // SRP-only cases (modulus-error, hazeAutomorph, sync no-op) stay TEST_CASE.
 
 #include "integration_helpers.hpp"
+#include "integration_introspect.hpp"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_template_test_macros.hpp>

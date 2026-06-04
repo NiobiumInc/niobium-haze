@@ -58,28 +58,33 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Capture OpenFHE submodule commit
-        # Cache key tracks the OpenFHE submodule rev (not niobium-fhetch's),
-        # matching niobium-client/ci.yml. Any OpenFHE bump invalidates.
+      - name: Capture OpenFHE submodule commits
+        # Cache key tracks both OpenFHE submodule revs (instrumented fork inside
+        # niobium-fhetch, and the stock vendor/openfhe). Any bump invalidates.
         id: openfhe_rev
         run: |
-          cd vendor/niobium-fhetch/vendor/openfhe
-          rev=$(git rev-parse HEAD)
+          rev=$(git -C vendor/niobium-fhetch/vendor/openfhe rev-parse HEAD)
+          stock_rev=$(git -C vendor/openfhe rev-parse HEAD)
           echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "stock_rev=$stock_rev" >> "$GITHUB_OUTPUT"
 
-      - name: Cache OpenFHE install dir
+      - name: Cache OpenFHE install dirs
         # The build/ directory caches CMake state, including absolute
         # paths to compilers in /nix/store. Bumping flake.lock changes
         # those store paths, which would leave CMakeCache.txt pointing
         # at non-existent compiler binaries on a fresh runner. Hashing
         # flake.lock into the key invalidates the cache whenever the
-        # nix toolchain moves.
+        # nix toolchain moves. The stock OpenFHE (vendor/openfhe) builds
+        # into the same release `build/` dir and installs to
+        # vendor/lib/openfhe-stock; cache both alongside the instrumented one.
         uses: actions/cache@v5
         with:
           path: |
             vendor/niobium-fhetch/vendor/lib/openfhe
             vendor/niobium-fhetch/vendor/openfhe/build
-          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}
+            vendor/lib/openfhe-stock
+            vendor/openfhe/build
+          key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
           restore-keys: |
             ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
 
@@ -119,6 +124,9 @@ jobs:
 
       - name: Run sim suite (in-process FHETCH simulator)
         run: nix develop --command make test-sim MODE=release
+
+      - name: Run e2e suite (public C ABI + stock OpenFHE, decrypt-verified)
+        run: nix develop --command make test-e2e MODE=release
 
       - name: Upload build logs on failure
         if: failure()

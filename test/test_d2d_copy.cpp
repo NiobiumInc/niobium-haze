@@ -6,6 +6,7 @@
 // pass-through fhetch IR node so replay materializes dst correctly.
 
 #include "integration_helpers.hpp"
+#include "integration_introspect.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>

@@ -87,38 +87,35 @@ probe `.ct` back as an `fhetch::` type.
 
 ## Public surface
 
-C ABI (in [`include/haze/replay_bridge.h`](include/haze/replay_bridge.h)):
+The bridge is a pure-C ABI (in
+[`include/haze/replay_bridge.h`](include/haze/replay_bridge.h)):
 
 ```c
 hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
                                               uint64_t desired_modulus,
                                               uint64_t *picked_modulus);
 void        hazeReplayBridgeReset(void);
+int         hazeReplayBridgeTakeHookHadError(void);
 ```
 
-C++ (in [`include/haze/replay_bridge_cc.hpp`](include/haze/replay_bridge_cc.hpp)),
-for callers that want to supply their own CryptoContext (e.g. with a
-non-default scaling technique):
-
-```cpp
-namespace haze {
-hazeError_t hazeReplayBridgeRegisterCryptoContext(
-    const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc);
-}
-```
+There is no live-`lbcrypto`-object entry point: callers convey everything haze
+needs as scalars + uint64 limbs. `Init` builds the CryptoContext from
+`(ring_dim, desired_modulus)` and the per-shape moduli recovered from the trace;
+keyswitch keys are extracted to raw limbs caller-side (see
+[`test/openfhe_key_extract.hpp`](../test/openfhe_key_extract.hpp)) and replayed
+through haze's MRP C ABI, so the bridge never touches a caller's OpenFHE objects.
 
 Init must be called after every `hazeDeviceReset` (which fires
 `hazeReplayBridgeReset` for you);
 [`test/integration_helpers.hpp`](../test/integration_helpers.hpp)'s
-`setup_integration_compute_config` is the canonical caller. Register*
-replaces a prior Init/Register; the lambda holding its state lives until
-the next install or the next device reset.
+`setup_integration_compute_config` is the canonical caller. A new Init replaces
+a prior one; the lambda holding its state lives until the next install or the
+next device reset.
 
 ## Source layout
 
 | Path                                       | What                                                  |
 | ------------------------------------------ | ----------------------------------------------------- |
-| `include/haze/replay_bridge.h`             | Two-symbol public C ABI.                              |
-| `include/haze/replay_bridge_cc.hpp`        | C++ entry for caller-built `CryptoContext`s.          |
+| `include/haze/replay_bridge.h`             | The public C ABI (Init / Reset / TakeHookHadError).  |
 | `src/openfhe_template.cpp`                 | Everything else: `build_context`, shape dispatch (SRP/MRP/SRPArray/MRPArray) via `SetElements`, the `on_post_recording` hook lambda, `fhetch::result` overloads. |
 | `CMakeLists.txt`                           | Builds `haze_replay_bridge` SHARED, linked PRIVATE into `libhaze`. |

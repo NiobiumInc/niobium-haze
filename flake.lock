@@ -50,11 +50,31 @@
         "type": "github"
       }
     },
+    "openfhe-stock-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1775844454,
+        "narHash": "sha256-BBHhnn5uQEsoUDPwFhe32oRDs5xJqh/YyUD5nd+hfp8=",
+        "ref": "refs/tags/v1.5.1",
+        "rev": "1306d14f8c26bb6150d3e6ad54f28dfe1007689e",
+        "revCount": 770,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/openfheorg/openfhe-development.git"
+      },
+      "original": {
+        "ref": "refs/tags/v1.5.1",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/openfheorg/openfhe-development.git"
+      }
+    },
     "root": {
       "inputs": {
         "ctcache-src": "ctcache-src",
         "niobium-fhetch-src": "niobium-fhetch-src",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "openfhe-stock-src": "openfhe-stock-src"
       }
     }
   },

@@ -1,0 +1,140 @@
+name: openfhe-bump
+
+# Daily check for a newer stock OpenFHE release. When upstream
+# openfheorg/openfhe-development publishes a newer release than the one vendored
+# at vendor/openfhe, this bumps the submodule + the openfhe-stock-src flake input
+# (kept in lockstep) and opens/updates a PR so the e2e suite runs against it.
+#
+# The stock OpenFHE is the haze_e2e_tests reference oracle ONLY; it is built
+# shared with WITH_REDUCED_NOISE=ON and never enters libhaze.so's link graph.
+# That flag is load-bearing for the oracle/simulator alignment, so this workflow
+# refuses to bump to a release that drops it.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily ~06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read # writes happen via the App token below, not GITHUB_TOKEN
+
+concurrency:
+  group: openfhe-bump-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      # Same App-token pattern as build-test.yml; used here to push the bump
+      # branch and open the PR (GITHUB_TOKEN can't trigger downstream CI).
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # vendor/openfhe is public; the private niobium-fhetch submodule isn't
+          # needed for a bump, so don't recurse.
+          submodules: false
+          fetch-depth: 0
+
+      - name: Configure git author
+        run: |
+          git config user.name  "Ryan Orendorff"
+          git config user.email "12442942+ryanorendorff@users.noreply.github.com"
+
+      - name: Resolve latest upstream release vs vendored rev
+        id: cmp
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/openfheorg/openfhe-development/releases/latest --jq '.tag_name')
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::unexpected release tag '$tag'"; exit 1
+          fi
+          git submodule update --init vendor/openfhe
+          cur_rev=$(git -C vendor/openfhe rev-parse HEAD)
+          new_rev=$(git -C vendor/openfhe ls-remote origin "refs/tags/${tag}^{}" | awk '{print $1}')
+          [ -z "$new_rev" ] && new_rev=$(git -C vendor/openfhe ls-remote origin "refs/tags/${tag}" | awk '{print $1}')
+          if ! [[ "$new_rev" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not resolve ${tag} to a commit"; exit 1
+          fi
+          echo "tag=$tag"          >> "$GITHUB_OUTPUT"
+          echo "new_rev=$new_rev"  >> "$GITHUB_OUTPUT"
+          if [ "$cur_rev" = "$new_rev" ]; then
+            echo "Already at ${tag} (${cur_rev}); nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Upstream ${tag} (${new_rev}) is newer than vendored ${cur_rev}."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hard gate — WITH_REDUCED_NOISE must survive the bump
+        if: steps.cmp.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git -C vendor/openfhe fetch --depth 1 origin "${{ steps.cmp.outputs.new_rev }}"
+          git -C vendor/openfhe checkout --detach "${{ steps.cmp.outputs.new_rev }}"
+          if ! grep -qE 'option\(WITH_REDUCED_NOISE' vendor/openfhe/CMakeLists.txt; then
+            echo "::error::WITH_REDUCED_NOISE option not found in ${{ steps.cmp.outputs.tag }};"
+            echo "::error::the e2e oracle/simulator alignment can no longer be guaranteed. Manual review required."
+            exit 1
+          fi
+
+      - name: Install Nix
+        if: steps.cmp.outputs.changed == 'true'
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Bump submodule + flake input, open/update PR
+        if: steps.cmp.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.cmp.outputs.tag }}
+          NEW_REV: ${{ steps.cmp.outputs.new_rev }}
+        run: |
+          set -euo pipefail
+          BRANCH="auto/bump-openfhe"
+          git fetch origin main --depth=1
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git checkout -B "$BRANCH" origin/main
+          else
+            git checkout -b "$BRANCH" origin/main
+          fi
+
+          # Submodule -> new tag commit.
+          git submodule update --init vendor/openfhe
+          git -C vendor/openfhe fetch --depth 1 origin "refs/tags/${TAG}"
+          git -C vendor/openfhe checkout --detach "$NEW_REV"
+          git add vendor/openfhe
+
+          # Flake input tag + lockfile, kept in lockstep with the submodule.
+          sed -i -E "s#(openfhe-development\.git\?ref=refs/tags/)v[0-9]+\.[0-9]+\.[0-9]+#\1${TAG}#" flake.nix
+          nix --extra-experimental-features 'nix-command flakes' flake lock
+          git add flake.nix flake.lock
+
+          if git diff --cached --quiet; then
+            echo "No net change after bump; nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore: bump stock OpenFHE to ${TAG}"
+          git push origin "$BRANCH" --force-with-lease
+
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --title "chore: bump stock OpenFHE to ${TAG}" \
+              --body "Automated daily bump of the **stock** OpenFHE (vendor/openfhe + the openfhe-stock-src flake input) to **${TAG}**.
+
+The stock OpenFHE is the \`haze_e2e_tests\` reference oracle only — built shared with \`WITH_REDUCED_NOISE=ON\`, never absorbed into libhaze.so. The flag was verified present in the new release. The build-test, flake-check, and build-matrix gates validate the bump." \
+              --base main --head "$BRANCH"
+          else
+            echo "PR #${EXISTING} already open for ${BRANCH}; refreshed by push."
+          fi
