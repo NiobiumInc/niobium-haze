@@ -20,15 +20,14 @@
 // 1.4.2 and 1.5.1 (prime selection, NTT/twiddle layout) cannot affect the
 // result — this proves linkage isolation, not cross-stack interchange.
 
-#include <haze/haze.h>            // haze C ABI (no OpenFHE types)
-#include <haze/replay_bridge.h>  // pure-C bridge control surface (no OpenFHE types)
-
 #include "openfhe.h" // OpenFHE 1.5.1 (FIDESlib's), linked statically into this exe
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <haze/haze.h>          // haze C ABI (no OpenFHE types)
+#include <haze/replay_bridge.h> // pure-C bridge control surface (no OpenFHE types)
 #include <vector>
 
 namespace {
@@ -95,15 +94,21 @@ bool run_haze_polynomial_add() {
     constexpr uint64_t kBytes = kN * sizeof(uint64_t);
     constexpr uint64_t kDesiredModulus = 576460752303415297ULL; // q ≡ 1 (mod 2N)
 
-    if (hazeDeviceReset() != HAZE_SUCCESS) return false;
-    if (hazeSetRingDimension(kN) != HAZE_SUCCESS) return false;
+    if (hazeDeviceReset() != HAZE_SUCCESS)
+        return false;
+    if (hazeSetRingDimension(kN) != HAZE_SUCCESS)
+        return false;
 
     uint64_t picked = 0;
-    if (hazeReplayBridgeInitCryptoContext(kN, kDesiredModulus, &picked) != HAZE_SUCCESS) return false;
-    if (picked == 0) return false; // libhaze's hidden 1.4.2 OpenFHE picked a prime
+    if (hazeReplayBridgeInitCryptoContext(kN, kDesiredModulus, &picked) != HAZE_SUCCESS)
+        return false;
+    if (picked == 0)
+        return false; // libhaze's hidden 1.4.2 OpenFHE picked a prime
 
-    if (hazeSetCiphertextModulus(0, picked) != HAZE_SUCCESS) return false;
-    if (hazeConfigureDevice() != HAZE_SUCCESS) return false;
+    if (hazeSetCiphertextModulus(0, picked) != HAZE_SUCCESS)
+        return false;
+    if (hazeConfigureDevice() != HAZE_SUCCESS)
+        return false;
 
     // Allocate all three up front; a single null-guarded cleanup at the end
     // frees whatever was allocated on every path (no leak if a later step
@@ -112,8 +117,7 @@ bool run_haze_polynomial_add() {
     void *db = nullptr;
     void *dc = nullptr;
     bool ok = false;
-    if (hazeMalloc(&da, kBytes) == HAZE_SUCCESS &&
-        hazeMalloc(&db, kBytes) == HAZE_SUCCESS &&
+    if (hazeMalloc(&da, kBytes) == HAZE_SUCCESS && hazeMalloc(&db, kBytes) == HAZE_SUCCESS &&
         hazeMalloc(&dc, kBytes) == HAZE_SUCCESS) {
         std::vector<uint64_t> ha(kN);
         std::vector<uint64_t> hb(kN);
@@ -130,14 +134,18 @@ bool run_haze_polynomial_add() {
             ok = true;
             for (uint64_t i = 0; ok && i < kN; ++i) {
                 const uint64_t expected = (ha[i] + hb[i]) % picked;
-                if (hc[i] != expected) ok = false;
+                if (hc[i] != expected)
+                    ok = false;
             }
         }
     }
 
-    if (da) hazeFree(da);
-    if (db) hazeFree(db);
-    if (dc) hazeFree(dc);
+    if (da)
+        hazeFree(da);
+    if (db)
+        hazeFree(db);
+    if (dc)
+        hazeFree(dc);
     return ok;
 }
 
