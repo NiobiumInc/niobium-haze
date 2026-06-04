@@ -103,8 +103,11 @@ result-*
 *.ilk
 *.map
 *.exp
-# First-party linker version script (not build output) — keep tracked.
+# First-party linker scripts (not build output) — keep tracked. haze_exports.sym
+# isn't matched by any ignore rule above (no *.sym), but list it alongside the
+# .map so the intent to track both is explicit.
 !linker/haze_exports.map
+!linker/haze_exports.sym
 
 # Precompiled Headers
 *.gch

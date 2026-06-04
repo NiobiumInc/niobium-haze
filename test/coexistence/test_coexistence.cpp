@@ -105,37 +105,39 @@ bool run_haze_polynomial_add() {
     if (hazeSetCiphertextModulus(0, picked) != HAZE_SUCCESS) return false;
     if (hazeConfigureDevice() != HAZE_SUCCESS) return false;
 
+    // Allocate all three up front; a single null-guarded cleanup at the end
+    // frees whatever was allocated on every path (no leak if a later step
+    // fails). Short-circuit && stops at the first failed malloc.
     void *da = nullptr;
     void *db = nullptr;
     void *dc = nullptr;
-    if (hazeMalloc(&da, kBytes) != HAZE_SUCCESS) return false;
-    if (hazeMalloc(&db, kBytes) != HAZE_SUCCESS) return false;
-    if (hazeMalloc(&dc, kBytes) != HAZE_SUCCESS) return false;
+    bool ok = false;
+    if (hazeMalloc(&da, kBytes) == HAZE_SUCCESS &&
+        hazeMalloc(&db, kBytes) == HAZE_SUCCESS &&
+        hazeMalloc(&dc, kBytes) == HAZE_SUCCESS) {
+        std::vector<uint64_t> ha(kN);
+        std::vector<uint64_t> hb(kN);
+        for (uint64_t i = 0; i < kN; ++i) {
+            ha[i] = (i * 1315423911ULL + 7ULL) % picked;
+            hb[i] = (i * 2654435761ULL + 13ULL) % picked;
+        }
 
-    std::vector<uint64_t> ha(kN);
-    std::vector<uint64_t> hb(kN);
-    for (uint64_t i = 0; i < kN; ++i) {
-        ha[i] = (i * 1315423911ULL + 7ULL) % picked;
-        hb[i] = (i * 2654435761ULL + 13ULL) % picked;
+        std::vector<uint64_t> hc(kN, 0xDEADBEEFULL);
+        if (hazeMemcpy(da, ha.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS &&
+            hazeMemcpy(db, hb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS &&
+            hazeAdd(dc, da, db, /*mod_idx=*/0, /*stream=*/nullptr) == HAZE_SUCCESS &&
+            hazeMemcpy(hc.data(), dc, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS) {
+            ok = true;
+            for (uint64_t i = 0; ok && i < kN; ++i) {
+                const uint64_t expected = (ha[i] + hb[i]) % picked;
+                if (hc[i] != expected) ok = false;
+            }
+        }
     }
 
-    if (hazeMemcpy(da, ha.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) != HAZE_SUCCESS) return false;
-    if (hazeMemcpy(db, hb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) != HAZE_SUCCESS) return false;
-
-    if (hazeAdd(dc, da, db, /*mod_idx=*/0, /*stream=*/nullptr) != HAZE_SUCCESS) return false;
-
-    std::vector<uint64_t> hc(kN, 0xDEADBEEFULL);
-    if (hazeMemcpy(hc.data(), dc, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) != HAZE_SUCCESS) return false;
-
-    bool ok = true;
-    for (uint64_t i = 0; ok && i < kN; ++i) {
-        const uint64_t expected = (ha[i] + hb[i]) % picked;
-        if (hc[i] != expected) ok = false;
-    }
-
-    hazeFree(da);
-    hazeFree(db);
-    hazeFree(dc);
+    if (da) hazeFree(da);
+    if (db) hazeFree(db);
+    if (dc) hazeFree(dc);
     return ok;
 }
 
