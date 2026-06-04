@@ -89,6 +89,22 @@ else
   OPENFHE_BUILD_DEP := build-openfhe
 endif
 
+# Stock (unmodified upstream) OpenFHE, vendored at vendor/openfhe, built ONLY
+# for haze_e2e_tests' reference crypto. NEVER absorbed into libhaze.so: it is
+# built SHARED and linked only by the e2e test exe, so it cannot collide with
+# the instrumented OpenFHE hidden inside libhaze.so. Distinct install prefix.
+STOCK_OPENFHE_DIR         ?= $(CURDIR)/vendor/openfhe
+STOCK_OPENFHE_INSTALL_DIR ?= $(CURDIR)/vendor/lib/openfhe-stock
+
+# The e2e exe is the stock OpenFHE's only consumer, so build it only when tests
+# are on. HAZE_BUILD_TESTS mirrors the CMake option default.
+HAZE_BUILD_TESTS ?= 1
+ifeq ($(HAZE_BUILD_TESTS),1)
+  STOCK_OPENFHE_BUILD_DEP := build-test-openfhe
+else
+  STOCK_OPENFHE_BUILD_DEP :=
+endif
+
 # CMake -D flags emitted only when the corresponding override is set.
 CMAKE_FHETCH_DIR_FLAG       := $(if $(NIOBIUM_HAZE_FHETCH_DIR),-DNIOBIUM_HAZE_FHETCH_DIR="$(NIOBIUM_HAZE_FHETCH_DIR)")
 CMAKE_JSON_INCLUDE_DIR_FLAG := $(if $(JSON_INCLUDE_DIR),-DJSON_INCLUDE_DIR="$(JSON_INCLUDE_DIR)")
@@ -110,7 +126,8 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
 .PHONY: help sync \
         config build \
         config-openfhe build-openfhe \
-        test-unit test-sim test-transport test-isolation test test-all \
+        config-test-openfhe build-test-openfhe \
+        test-unit test-sim test-e2e test-transport test-isolation test test-all \
         clean clean-runs
 
 # ==============================================================================
@@ -126,18 +143,21 @@ Usage: make <target> [MODE=debug|release]
     build               Build haze
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
-    sync                Init vendor/niobium-fhetch submodule
+    config-test-openfhe Configure the stock OpenFHE (for haze_e2e_tests)
+    build-test-openfhe  Build + install the stock OpenFHE (vendor/openfhe)
+    sync                Init vendor/niobium-fhetch + vendor/openfhe submodules
     sync-flake-lock     Realign flake.lock niobium-fhetch-src rev with
                         the vendor/niobium-fhetch submodule rev in HEAD
 
   Test:
     test-unit           Run unit suite (HAZE_TARGET=local; no FHE math)
     test-sim            Run sim suite (HAZE_TARGET=local; in-process simulator)
+    test-e2e            Run e2e suite (public C ABI + stock OpenFHE, decrypt)
     test-transport      Run integration suite via nbcc_fhetch_replay
                         (requires NIOBIUM_COMPILER_ROOT)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
-    test                Default: test-unit + test-sim + test-isolation
-    test-all            test-unit + test-sim + test-isolation + test-transport
+    test                Default: test-unit + test-sim + test-e2e + test-isolation
+    test-all            test + test-transport
 
   Cleanup:
     clean-runs          Remove test runs/ artifacts
@@ -159,8 +179,9 @@ help: ## Display this help message
 # Submodule sync (standalone use only)
 # ==============================================================================
 
-sync: ## Init vendor/niobium-fhetch + its nested openfhe / json submodules (recursive)
+sync: ## Init vendor/niobium-fhetch (recursive) + vendor/openfhe (stock, for e2e tests)
 	git submodule update --init --recursive vendor/niobium-fhetch
+	git submodule update --init vendor/openfhe
 
 sync-flake-lock: ## Realign flake.lock niobium-fhetch-src rev to match the submodule rev recorded in HEAD
 	scripts/sync-fhetch-rev.sh
@@ -198,13 +219,44 @@ build-openfhe: config-openfhe ## Build and install OpenFHE locally
 	cd "$(OPENFHE_DIR)" && cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --target install --config $(CMAKE_CONFIG)
 
 # ==============================================================================
+# Stock OpenFHE build (for haze_e2e_tests only; never absorbed into libhaze.so)
+# ==============================================================================
+
+# Stock OpenFHE for the e2e test exe: SHARED (so it is never a candidate for
+# libhaze's *_static.a whole-archive absorb), no CPROBES (stock = uninstrumented),
+# WITH_REDUCED_NOISE=ON so its CKKS keyswitch/ModDown math matches the recorder.
+STOCK_OPENFHE_CMAKE_FLAGS = \
+	-DBUILD_SHARED=ON \
+	-DBUILD_STATIC=OFF \
+	-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+	-DBUILD_EXAMPLES=OFF \
+	-DBUILD_UNITTESTS=OFF \
+	-DBUILD_BENCHMARKS=OFF \
+	-DBUILD_EXTRAS=OFF \
+	-DWITH_OPENMP=OFF \
+	-DWITH_REDUCED_NOISE=ON
+
+config-test-openfhe: ## Configure the stock OpenFHE for haze_e2e_tests
+	@if [ ! -f "$(STOCK_OPENFHE_DIR)/CMakeLists.txt" ]; then \
+		echo "ERROR: $(STOCK_OPENFHE_DIR) is empty. Run 'make sync' first."; exit 2; \
+	fi
+	cd "$(STOCK_OPENFHE_DIR)" && cmake -S . -B "$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		$(STOCK_OPENFHE_CMAKE_FLAGS) \
+		-DCMAKE_INSTALL_PREFIX="$(STOCK_OPENFHE_INSTALL_DIR)"
+
+build-test-openfhe: config-test-openfhe ## Build + install the stock OpenFHE locally
+	cd "$(STOCK_OPENFHE_DIR)" && cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --target install --config $(CMAKE_CONFIG)
+
+# ==============================================================================
 # Haze Build
 # ==============================================================================
 
-config: $(OPENFHE_BUILD_DEP) ## Configure haze (uses MODE)
+config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses MODE)
 	cmake -S "$(CURDIR)" -B "$(CURDIR)/$(BUILD_DIR)" \
 		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
 		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
+		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
 		$(CMAKE_FHETCH_DIR_FLAG) \
 		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
 
@@ -219,7 +271,7 @@ test-unit: build ## Run unit suite (HAZE_TARGET=local; no FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
 	@mkdir -p "$(HAZE_RUNS_DIR)"
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "~[integration]"
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" "~[integration]"
 
 test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE math)
 	@rm -rf "$(HAZE_RUNS_DIR)/haze"
@@ -227,7 +279,7 @@ test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE mat
 	@# Target literal must match haze::kLocalTarget in src/core/config.hpp
 	@# AND the haze_sim_tests ENVIRONMENT entry in CMakeLists.txt.
 	@cd "$(HAZE_RUNS_DIR)" && \
-	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" "[integration]"
 
 test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	@if [ -z "$(NIOBIUM_COMPILER_ROOT)" ]; then \
@@ -240,7 +292,7 @@ test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 		echo "Build it with: (cd $(NIOBIUM_COMPILER_ROOT) && make release)"; \
 		exit 2; \
 	fi
-	@HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_tests" \
+	@HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_internal_tests" \
 	 NIOBIUM_COMPILER_ROOT="$(NIOBIUM_COMPILER_ROOT)" \
 	 OPENFHE_LIB="$(OPENFHE_INSTALL_DIR)/lib" \
 	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
@@ -252,9 +304,15 @@ test-isolation: build ## Assert libhaze.so exports only the haze* C ABI (no leak
 	# tests-off BUILD_DIR) instead of passing on a zero-match ctest filter.
 	@cd "$(BUILD_DIR)" && ctest -R haze_isolated_symbol_leak --no-tests=error --output-on-failure
 
-test: test-unit test-sim test-isolation ## Run default test suites + isolation guard (no transport dependency)
+test-e2e: build ## Run the e2e suite (public C ABI + stock OpenFHE, decrypt-verified)
+	@rm -rf "$(HAZE_RUNS_DIR)/haze"
+	@mkdir -p "$(HAZE_RUNS_DIR)"
+	@cd "$(HAZE_RUNS_DIR)" && \
+	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_e2e_tests"
 
-test-all: test-unit test-sim test-isolation test-transport ## Run everything (incl. transport path)
+test: test-unit test-sim test-e2e test-isolation ## Run default test suites + isolation guard (no transport dependency)
+
+test-all: test-unit test-sim test-e2e test-isolation test-transport ## Run everything (incl. transport path)
 
 # ==============================================================================
 # Cleanup
@@ -277,3 +335,12 @@ clean: clean-runs ## Remove all build artifacts (keeps vendor/ checkouts; refuse
 	else \
 	  echo "skipping clean of OpenFHE build/install dirs (EXTERNAL_OPENFHE=1)"; \
 	fi
+	@# Stock OpenFHE (vendor/openfhe) build + install dirs; only under $(CURDIR).
+	@case "$(STOCK_OPENFHE_DIR)" in \
+	   "$(CURDIR)"/*) rm -rf "$(STOCK_OPENFHE_DIR)/build" "$(STOCK_OPENFHE_DIR)/dbuild" ;; \
+	   *) echo "skipping clean of external STOCK_OPENFHE_DIR=$(STOCK_OPENFHE_DIR)" ;; \
+	 esac
+	@case "$(STOCK_OPENFHE_INSTALL_DIR)" in \
+	   "$(CURDIR)"/*) rm -rf "$(STOCK_OPENFHE_INSTALL_DIR)" ;; \
+	   *) echo "skipping clean of external STOCK_OPENFHE_INSTALL_DIR=$(STOCK_OPENFHE_INSTALL_DIR)" ;; \
+	 esac

@@ -2,18 +2,26 @@
 
 #include "ops.hpp"
 
+#include "openfhe_key_extract.hpp"
+
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge_cc.hpp>
+#include <haze/replay_bridge.h>
 #include <memory>
-#include <niobium/compiler.h>
 #include <openfhe.h>
 #include <utility>
 #include <vector>
+
+// PausedRecording drives the instrumented OpenFHE's CPROBES recorder; only the
+// instrumented build defines OPENFHE_CPROBES. Against a stock OpenFHE the guard
+// is a no-op and needs no niobium:: symbols (ops links the shipped libhaze.so).
+#ifdef OPENFHE_CPROBES
+#include <niobium/compiler.h>
+#endif
 
 namespace haze::test::ops {
 
@@ -51,13 +59,20 @@ uint64_t signed_lift(uint64_t v_drop, uint64_t q_drop, uint64_t q_target) {
     return v_drop % q_target;
 }
 
-// Pause fhetch recording for the lifetime of this object. OpenFHE
-// CPROBES emits sr_* IR for plaintext / poly-format conversions; if such
-// a conversion runs mid-epoch, those emits would overwrite live haze
-// registers. Wrap the OpenFHE-touching block in this guard.
+// Pause fhetch recording for the lifetime of this object. The instrumented
+// OpenFHE's CPROBES emits sr_* IR for plaintext / poly-format conversions; if
+// such a conversion runs mid-epoch, those emits would overwrite live haze
+// registers, so the OpenFHE-touching blocks below wrap themselves in this guard.
+// Against a stock OpenFHE (no OPENFHE_CPROBES) nothing is recorded, so the guard
+// compiles away to a no-op and ops.cpp needs no niobium:: symbols.
 struct PausedRecording {
+#ifdef OPENFHE_CPROBES
     PausedRecording() noexcept { niobium::compiler().pause(); }
     ~PausedRecording() noexcept { niobium::compiler().resume(); }
+#else
+    PausedRecording() noexcept = default;
+    ~PausedRecording() noexcept = default;
+#endif
     PausedRecording(const PausedRecording &) = delete;
     PausedRecording &operator=(const PausedRecording &) = delete;
     PausedRecording(PausedRecording &&) = delete;
@@ -163,7 +178,7 @@ struct KsContribution {
 // automorphism key (rotation). Returns the (b, a) contribution in EVAL
 // form at `towers` Q-primes.
 KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t towers,
-                                const haze::HybridKeyswitchLimbs &key) {
+                                const HybridKeyswitchLimbs &key) {
     const std::size_t num_part_q = key.a_limbs.size();
     REQUIRE(num_part_q > 0);
     const std::size_t alpha = (ctx.q_base.size() + num_part_q - 1) / num_part_q;
@@ -375,15 +390,16 @@ OpCtx make_ctx(const CtxParams &params) {
 
     ctx.ring_dim = ctx.cc->GetRingDimension();
     ctx.poly_bytes = static_cast<std::size_t>(ctx.ring_dim) * sizeof(uint64_t);
-    REQUIRE(hazeSetRingDimension(ctx.ring_dim) == HAZE_SUCCESS);
-    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(ctx.cc) == HAZE_SUCCESS);
 
-    // Any keyswitch key (relin or rotation) needs P-base for Q∥P intermediates.
+    // Pull the Q (and, for keyswitch, P) moduli straight off the caller-built
+    // CC. The test -> haze boundary is limbs + scalars: haze rebuilds a matching
+    // context from these scalars, never from the live OpenFHE object.
     const bool needs_p_base = ctx.with_relin_key || !params.rotate_indices.empty();
     const auto &q_eparams = ctx.cc->GetCryptoParameters()->GetElementParams()->GetParams();
     ctx.q_base.reserve(q_eparams.size());
     for (const auto &p : q_eparams)
         ctx.q_base.push_back(p->GetModulus().ConvertToInt());
+    REQUIRE(!ctx.q_base.empty());
 
     if (needs_p_base) {
         const auto rns_params =
@@ -395,6 +411,16 @@ OpCtx make_ctx(const CtxParams &params) {
             ctx.p_base.push_back(p->GetModulus().ConvertToInt());
     }
 
+    REQUIRE(hazeSetRingDimension(ctx.ring_dim) == HAZE_SUCCESS);
+    // Pure-C bridge: build haze's CryptoContext from (ring_dim, first Q prime).
+    // The full Q∥P chain is conveyed below via hazeSetCiphertextModulus; per-op
+    // shapes are rebuilt from the trace moduli, so the exact picked prime here
+    // only seeds the fallback primary context.
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ctx.ring_dim, ctx.q_base.front(), &picked) ==
+            HAZE_SUCCESS);
+    REQUIRE(picked != 0);
+
     int mod_idx = 0;
     for (uint64_t q : ctx.q_base) {
         REQUIRE(hazeSetCiphertextModulus(mod_idx++, q) == HAZE_SUCCESS);
@@ -405,8 +431,8 @@ OpCtx make_ctx(const CtxParams &params) {
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     if (ctx.with_relin_key) {
-        REQUIRE(haze::hazeReplayBridgeExtractEvalMultKey(ctx.cc, ctx.keys.secretKey,
-                                                         ctx.relin_key) == HAZE_SUCCESS);
+        REQUIRE(extract_evalmult_key_limbs(ctx.cc, ctx.keys.secretKey, ctx.relin_key) ==
+                HAZE_SUCCESS);
         REQUIRE(ctx.relin_key.q_base == ctx.q_base);
         REQUIRE(ctx.relin_key.p_base == ctx.p_base);
     }
@@ -416,8 +442,8 @@ OpCtx make_ctx(const CtxParams &params) {
         for (std::int32_t slot_idx : params.rotate_indices) {
             RotationKeyEntry entry;
             entry.auto_index = ctx.cc->FindAutomorphismIndex(static_cast<std::uint32_t>(slot_idx));
-            REQUIRE(haze::hazeReplayBridgeExtractAutomorphismKey(
-                        ctx.cc, ctx.keys.secretKey, entry.auto_index, entry.limbs) == HAZE_SUCCESS);
+            REQUIRE(extract_automorphism_key_limbs(ctx.cc, ctx.keys.secretKey, entry.auto_index,
+                                                   entry.limbs) == HAZE_SUCCESS);
             REQUIRE(entry.limbs.q_base == ctx.q_base);
             REQUIRE(entry.limbs.p_base == ctx.p_base);
             ctx.rotation_keys.emplace(slot_idx, std::move(entry));
@@ -450,7 +476,7 @@ Ct h2d_ct(const OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &src)
     std::vector<std::vector<uint64_t>> c0_data;
     std::vector<std::vector<uint64_t>> c1_data;
     {
-        PausedRecording _pause;
+        [[maybe_unused]] PausedRecording _pause;
         c0_data = extract_chain(0);
         c1_data = extract_chain(1);
     }
@@ -501,7 +527,7 @@ void inject_ct(const OpCtx &ctx, const CtBytes &src,
             np.SetValues(nv, np.GetFormat());
         }
     };
-    PausedRecording _pause;
+    [[maybe_unused]] PausedRecording _pause;
     inject_elem(0, src.c0);
     inject_elem(1, src.c1);
 }
@@ -536,7 +562,7 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
     // so the extraction runs under PausedRecording.
     std::vector<uint64_t> scalars(a.towers());
     {
-        PausedRecording _pause;
+        [[maybe_unused]] PausedRecording _pause;
         auto pt_elem = pt->GetElement<lbcrypto::DCRTPoly>();
         pt_elem.SetFormat(Format::EVALUATION);
         const std::size_t pt_towers = pt_elem.GetNumOfElements();

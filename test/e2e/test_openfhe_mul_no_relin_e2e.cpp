@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge_cc.hpp>
+#include <haze/replay_bridge.h>
 #include <vector>
 
 namespace {
@@ -125,13 +125,21 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
 
     const uint64_t ring_dim = cc->GetRingDimension();
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(cc) == HAZE_SUCCESS);
 
     const auto &eparams = cc->GetCryptoParameters()->GetElementParams()->GetParams();
     std::vector<uint64_t> base;
     base.reserve(eparams.size());
-    for (std::size_t i = 0; i < eparams.size(); ++i) {
-        base.push_back(eparams[i]->GetModulus().ConvertToInt());
+    for (const auto &p : eparams) {
+        base.push_back(p->GetModulus().ConvertToInt());
+    }
+    REQUIRE(!base.empty());
+
+    // Pure-C bridge: seed haze's context from the first Q prime, then convey the
+    // full chain via hazeSetCiphertextModulus.
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, base.front(), &picked) == HAZE_SUCCESS);
+    REQUIRE(picked != 0);
+    for (std::size_t i = 0; i < base.size(); ++i) {
         REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
     }
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);

@@ -16,6 +16,18 @@
       flake = false;
     };
 
+    # Stock (unmodified) upstream OpenFHE, built SHARED for haze_e2e_tests'
+    # reference crypto ONLY — never absorbed into libhaze.so. `?submodules=1`
+    # pulls third-party/cereal (serialization), which the build needs.
+    # `flake = false` keeps it lazy (dev shell never resolves it). The
+    # vendor/openfhe submodule is the source of truth for non-nix `make`; CI
+    # gates that its rev matches the one pinned here, and the daily openfhe-bump
+    # workflow updates both together.
+    openfhe-stock-src = {
+      url = "git+https://github.com/openfheorg/openfhe-development.git?ref=refs/tags/v1.5.1&submodules=1";
+      flake = false;
+    };
+
     # ctcache (clang-tidy-cache): content-addressed clang-tidy wrapper that
     # returns the prior verdict for unchanged TUs; CI's clang-tidy gate uses
     # it. Pinned to a release; bump via `nix flake update --update-input
@@ -31,6 +43,7 @@
       self,
       nixpkgs,
       niobium-fhetch-src,
+      openfhe-stock-src,
       ctcache-src,
     }:
     let
@@ -134,6 +147,31 @@
             meta.platforms = pkgs.lib.platforms.unix;
           };
 
+          # Stock (unmodified) upstream OpenFHE for haze_e2e_tests' reference
+          # crypto. Built SHARED (so it is never a candidate for libhaze's
+          # *_static.a whole-archive absorb) and WITHOUT CPROBES (no niobium
+          # instrumentation). WITH_REDUCED_NOISE=ON keeps its CKKS
+          # keyswitch/ModDown math aligned with the recorder. Keep these flags
+          # in sync with the Makefile's STOCK_OPENFHE_CMAKE_FLAGS.
+          openfhe-stock = stdenv.mkDerivation {
+            pname = "openfhe-stock";
+            version = "1.5.1";
+            src = openfhe-stock-src;
+            nativeBuildInputs = [ pkgs.cmake ];
+            cmakeFlags = [
+              "-DBUILD_SHARED=ON"
+              "-DBUILD_STATIC=OFF"
+              "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
+              "-DBUILD_EXAMPLES=OFF"
+              "-DBUILD_UNITTESTS=OFF"
+              "-DBUILD_BENCHMARKS=OFF"
+              "-DBUILD_EXTRAS=OFF"
+              "-DWITH_OPENMP=OFF"
+              "-DWITH_REDUCED_NOISE=ON"
+            ];
+            meta.platforms = pkgs.lib.platforms.unix;
+          };
+
           niobium-fhetch = stdenv.mkDerivation {
             pname = "niobium-fhetch";
             version = "1.0.0";
@@ -170,6 +208,10 @@
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
             "-DHAZE_USE_PREBUILT_FHETCH=ON"
             "-DOPENFHE_INSTALL_DIR=${openfhe}"
+            # haze_e2e_tests' stock OpenFHE; needed so configure passes the
+            # HAZE_TEST_OPENFHE_DIR guard and the e2e TUs land in the
+            # compile_commands.json with the right -isystem paths for clang-tidy.
+            "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
             "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
           ];
 
@@ -214,6 +256,7 @@
               ];
               buildInputs = [
                 openfhe
+                openfhe-stock
                 niobium-fhetch
                 pkgs.catch2_3
               ];
@@ -245,6 +288,7 @@
             nativeBuildInputs = [ pkgs.cmake ];
             buildInputs = [
               openfhe
+              openfhe-stock
               niobium-fhetch
               pkgs.catch2_3
             ];
@@ -252,14 +296,20 @@
               "-DCMAKE_BUILD_TYPE=Release"
               "-DHAZE_USE_PREBUILT_FHETCH=ON"
               "-DOPENFHE_INSTALL_DIR=${openfhe}"
+              # Stock OpenFHE for haze_e2e_tests (linked SHARED into that exe only).
+              "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
               # polynomial_io.cpp uses nlohmann/json. fhetch's JSON_INCLUDE_DIR
               # only propagates via add_subdirectory, not find_package; pass it.
               "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
               # TODO(haze): add install() rules upstream. Without them cmake
               # skips its install RPATH rewrite, so bake the install RPATH at
-              # build time (@loader_path on darwin, $ORIGIN on linux).
+              # build time (@loader_path on darwin, $ORIGIN on linux). The stock
+              # OpenFHE store path is appended so haze_e2e_tests resolves its
+              # libOPENFHE*.so at run time.
               "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON"
-              "-DCMAKE_INSTALL_RPATH=${if stdenv.isDarwin then "@loader_path/../lib" else "$ORIGIN/../lib"}"
+              "-DCMAKE_INSTALL_RPATH=${
+                if stdenv.isDarwin then "@loader_path/../lib" else "$ORIGIN/../lib"
+              };${openfhe-stock}/lib"
             ];
             # No install() rules upstream yet, so cmake's `make install` would
             # fail; skip it and place artifacts manually.
@@ -272,8 +322,9 @@
               # now an OBJECT library absorbed into libhaze.so — no separate
               # libhaze_replay_bridge.* artifact to copy.
               cp -a libhaze.* $out/lib/
-              cp -a haze_tests $out/bin/
-              chmod +x $out/bin/haze_tests
+              cp -a haze_internal_tests $out/bin/
+              cp -a haze_e2e_tests $out/bin/
+              chmod +x $out/bin/haze_internal_tests $out/bin/haze_e2e_tests
               cp -r $src/include/haze $out/include/
               runHook postInstall
             '';
@@ -338,6 +389,7 @@
             nativeBuildInputs = [ pkgs.cmake ];
             buildInputs = [
               openfhe
+              openfhe-stock
               niobium-fhetch
               pkgs.catch2_3
             ];
@@ -376,6 +428,7 @@
         {
           inherit
             openfhe
+            openfhe-stock
             niobium-fhetch
             haze
             haze-clang-format
@@ -457,6 +510,7 @@
         {
           inherit (p)
             openfhe
+            openfhe-stock
             niobium-fhetch
             haze
             haze-compile-commands
@@ -497,13 +551,22 @@
 
           unit-tests = pkgs.runCommand "haze-unit-tests" { } ''
             mkdir -p $TMPDIR/runs && cd $TMPDIR/runs
-            HAZE_TARGET=local ${p.haze}/bin/haze_tests "~[integration]"
+            HAZE_TARGET=local ${p.haze}/bin/haze_internal_tests "~[integration]"
             touch "$out"
           '';
 
           sim-tests = pkgs.runCommand "haze-sim-tests" { } ''
             mkdir -p $TMPDIR/runs && cd $TMPDIR/runs
-            HAZE_TARGET=local ${p.haze}/bin/haze_tests "[integration]"
+            HAZE_TARGET=local ${p.haze}/bin/haze_internal_tests "[integration]"
+            touch "$out"
+          '';
+
+          # E2E suite: the public-C-ABI + stock-OpenFHE black-box exe (the
+          # simple.cpp capstone + the interleave/no-clobber proof). Runs the
+          # in-process FHETCH simulator inside libhaze.so via HAZE_TARGET=local.
+          e2e-tests = pkgs.runCommand "haze-e2e-tests" { } ''
+            mkdir -p $TMPDIR/runs && cd $TMPDIR/runs
+            HAZE_TARGET=local ${p.haze}/bin/haze_e2e_tests
             touch "$out"
           '';
 

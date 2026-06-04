@@ -1,12 +1,13 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// Integration test for the bridge's user-provided CryptoContext path.
-// Builds a CC with a non-default scaling technique (FIXEDAUTO) and feeds
-// it to the bridge via hazeReplayBridgeRegisterCryptoContext, then runs an
-// MRP add and verifies the per-residue result via D2H. No KeyPair is
+// Integration test that an MRP add round-trips over a chain of primes pulled
+// from a user-built CC with a non-default scaling technique (FIXEDAUTO). The
+// limb-level replay is scaling-technique-agnostic, so haze's own pure-C Init
+// context replays a FIXEDAUTO-derived chain unchanged. No KeyPair is
 // constructed: the bridge synthesizes CT shells via SetElements, no Encrypt.
 
 #include "integration_helpers.hpp"
+#include "integration_introspect.hpp"
 #include "openfhe.h"
 
 #include <catch2/catch_message.hpp>
@@ -15,7 +16,7 @@
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge_cc.hpp>
+#include <haze/replay_bridge.h>
 #include <vector>
 
 namespace {
@@ -30,21 +31,19 @@ inline uint64_t add_mod(uint64_t a, uint64_t b, uint64_t q) {
 
 } // namespace
 
-TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[integration]") {
+TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integration]") {
     using namespace lbcrypto;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
 
-    // Caller-built CC with a scaling technique the bridge's default path
-    // (hazeReplayBridgeInitCryptoContext) would force to FIXEDMANUAL. The
-    // chain is deliberately deeper than the 3-residue MRP add below so the
-    // bridge's per-output `trim_towers_to` path is exercised — without that
-    // trim, MRP template synthesis would throw on the tower-count mismatch.
+    // Caller-built CC with a non-default scaling technique (FIXEDAUTO) and a
+    // chain deeper than the 3-residue MRP add below, so the primes come from a
+    // realistic multi-level context rather than hand-picked toy values.
     CCParams<CryptoContextCKKSRNS> params;
     params.SetSecurityLevel(HEStd_NotSet);
     params.SetRingDim(static_cast<uint32_t>(kRingDim));
-    params.SetMultiplicativeDepth(4); // 5-tower chain; output uses 3
+    params.SetMultiplicativeDepth(4); // 5-tower chain; the add below uses 3
     params.SetFirstModSize(60);
     params.SetScalingModSize(59);
     params.SetScalingTechnique(FIXEDAUTO);
@@ -54,18 +53,21 @@ TEST_CASE("user-registered CC: hazeAddMrp round-trips through FIXEDAUTO", "[inte
     cc->Enable(KEYSWITCH);
     cc->Enable(LEVELEDSHE);
 
-    REQUIRE(haze::hazeReplayBridgeRegisterCryptoContext(cc) == HAZE_SUCCESS);
-
-    // Pull OpenFHE's picked primes out of the CC and seed haze's modulus
-    // table with them so the trace and the templates use the same moduli.
+    // Pull OpenFHE's picked primes out of the user CC and seed haze with them
+    // via the pure-C bridge (scalars only); the trace and templates then use the
+    // same moduli regardless of the CC's scaling technique.
     const auto &eparams = cc->GetCryptoParameters()->GetElementParams()->GetParams();
     REQUIRE(eparams.size() >= 3);
     std::vector<uint64_t> base;
     base.reserve(3);
-    for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t i = 0; i < 3; ++i)
         base.push_back(eparams[i]->GetModulus().ConvertToInt());
+
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base.front(), &picked) == HAZE_SUCCESS);
+    REQUIRE(picked != 0);
+    for (std::size_t i = 0; i < 3; ++i)
         REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
-    }
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     // Build per-residue inputs + expected output for hazeAddMrp.

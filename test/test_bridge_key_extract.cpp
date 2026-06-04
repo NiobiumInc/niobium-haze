@@ -1,10 +1,12 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// Targeted unit test for the bridge key-extract APIs. Builds a CC, gens
-// the relin + rotation keys, calls the Extract APIs, asserts shape and
-// base-prime content match the CC's CryptoParametersRNS.
+// Targeted unit test for the test-side key-extract helpers
+// (test/openfhe_key_extract.hpp). Builds a CC, gens the relin + rotation keys,
+// calls the extractors, asserts shape and base-prime content match the CC's
+// CryptoParametersRNS.
 
 #include "openfhe.h"
+#include "openfhe_key_extract.hpp"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -12,7 +14,6 @@
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge_cc.hpp>
 #include <memory>
 #include <vector>
 
@@ -53,7 +54,7 @@ std::vector<uint64_t> p_base_of(const lbcrypto::CryptoContext<lbcrypto::DCRTPoly
     return out;
 }
 
-void check_limb_shape(const haze::HybridKeyswitchLimbs &limbs,
+void check_limb_shape(const haze::test::HybridKeyswitchLimbs &limbs,
                       const lbcrypto::CryptoContext<lbcrypto::DCRTPoly> &cc) {
     const auto rns =
         std::dynamic_pointer_cast<lbcrypto::CryptoParametersRNS>(cc->GetCryptoParameters());
@@ -81,29 +82,29 @@ void check_limb_shape(const haze::HybridKeyswitchLimbs &limbs,
 
 } // namespace
 
-TEST_CASE("bridge: ExtractEvalMultKey returns Q∥P limbs matching the CC", "[integration]") {
+TEST_CASE("key-extract: ExtractEvalMultKey returns Q∥P limbs matching the CC", "[integration]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     auto cc = build_cc();
     auto keys = cc->KeyGen();
     cc->EvalMultKeyGen(keys.secretKey);
 
-    haze::HybridKeyswitchLimbs limbs;
-    REQUIRE(haze::hazeReplayBridgeExtractEvalMultKey(cc, keys.secretKey, limbs) == HAZE_SUCCESS);
+    haze::test::HybridKeyswitchLimbs limbs;
+    REQUIRE(haze::test::extract_evalmult_key_limbs(cc, keys.secretKey, limbs) == HAZE_SUCCESS);
     check_limb_shape(limbs, cc);
 }
 
-TEST_CASE("bridge: ExtractEvalMultKey fails without prior EvalMultKeyGen", "[integration]") {
+TEST_CASE("key-extract: ExtractEvalMultKey fails without prior EvalMultKeyGen", "[integration]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     auto cc = build_cc();
     auto keys = cc->KeyGen();
 
-    haze::HybridKeyswitchLimbs limbs;
-    REQUIRE(haze::hazeReplayBridgeExtractEvalMultKey(cc, keys.secretKey, limbs) != HAZE_SUCCESS);
+    haze::test::HybridKeyswitchLimbs limbs;
+    REQUIRE(haze::test::extract_evalmult_key_limbs(cc, keys.secretKey, limbs) != HAZE_SUCCESS);
     REQUIRE(limbs.a_limbs.empty());
     REQUIRE(limbs.b_limbs.empty());
 }
 
-TEST_CASE("bridge: ExtractAutomorphismKey returns limbs for each registered slot",
+TEST_CASE("key-extract: ExtractAutomorphismKey returns limbs for each registered slot",
           "[integration]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     auto cc = build_cc();
@@ -115,19 +116,20 @@ TEST_CASE("bridge: ExtractAutomorphismKey returns limbs for each registered slot
     for (int32_t slot : slots) {
         INFO("slot " << slot);
         const uint32_t auto_index = cc->FindAutomorphismIndex(static_cast<uint32_t>(slot));
-        haze::HybridKeyswitchLimbs limbs;
-        REQUIRE(haze::hazeReplayBridgeExtractAutomorphismKey(cc, keys.secretKey, auto_index,
-                                                             limbs) == HAZE_SUCCESS);
+        haze::test::HybridKeyswitchLimbs limbs;
+        REQUIRE(haze::test::extract_automorphism_key_limbs(cc, keys.secretKey, auto_index, limbs) ==
+                HAZE_SUCCESS);
         check_limb_shape(limbs, cc);
     }
 }
 
-TEST_CASE("bridge: ExtractAutomorphismKey fails for unknown automorphism index", "[integration]") {
+TEST_CASE("key-extract: ExtractAutomorphismKey fails for unknown automorphism index",
+          "[integration]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     auto cc = build_cc();
     auto keys = cc->KeyGen();
 
-    haze::HybridKeyswitchLimbs limbs;
-    REQUIRE(haze::hazeReplayBridgeExtractAutomorphismKey(cc, keys.secretKey, /*auto_index=*/1,
-                                                         limbs) != HAZE_SUCCESS);
+    haze::test::HybridKeyswitchLimbs limbs;
+    REQUIRE(haze::test::extract_automorphism_key_limbs(cc, keys.secretKey, /*auto_index=*/1,
+                                                       limbs) != HAZE_SUCCESS);
 }

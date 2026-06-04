@@ -5,6 +5,7 @@
 // σ_k slot permutation.
 
 #include "integration_helpers.hpp"
+#include "integration_introspect.hpp"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_template_test_macros.hpp>

@@ -68,6 +68,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify flake.lock openfhe-stock rev matches submodule
+        # Same strict gate for the stock OpenFHE used by haze_e2e_tests: the
+        # openfhe-stock-src flake input must pin the same rev as the
+        # vendor/openfhe submodule. The daily openfhe-bump workflow updates both;
+        # scripts/sync-openfhe-stock-rev.sh realigns them by hand.
+        run: |
+          submodule_rev=$(git ls-tree HEAD vendor/openfhe | awk '{print $3}')
+          lock_rev=$(jq -r '.nodes."openfhe-stock-src".locked.rev' flake.lock)
+          if [ "$submodule_rev" != "$lock_rev" ]; then
+            echo "::error::vendor/openfhe submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
+            echo "Run scripts/sync-openfhe-stock-rev.sh and commit flake.lock."
+            exit 1
+          fi
+
       - name: Configure git to use App token for github.com fetches
         # The runner has no SSH key, so rewrite ssh://git@github.com/ ->
         # https with the App token; nix's libgit2 fetcher honors insteadOf
@@ -198,6 +212,20 @@ jobs:
           if [ "$submodule_rev" != "$lock_rev" ]; then
             echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
             echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
+            exit 1
+          fi
+
+      - name: Verify flake.lock openfhe-stock rev matches submodule
+        # Same strict gate for the stock OpenFHE used by haze_e2e_tests: the
+        # openfhe-stock-src flake input must pin the same rev as the
+        # vendor/openfhe submodule. The daily openfhe-bump workflow updates both;
+        # scripts/sync-openfhe-stock-rev.sh realigns them by hand.
+        run: |
+          submodule_rev=$(git ls-tree HEAD vendor/openfhe | awk '{print $3}')
+          lock_rev=$(jq -r '.nodes."openfhe-stock-src".locked.rev' flake.lock)
+          if [ "$submodule_rev" != "$lock_rev" ]; then
+            echo "::error::vendor/openfhe submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
+            echo "Run scripts/sync-openfhe-stock-rev.sh and commit flake.lock."
             exit 1
           fi
 
