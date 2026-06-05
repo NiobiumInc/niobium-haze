@@ -68,7 +68,9 @@ void EpochState::invalidate(DevAddr addr) noexcept {
         auto group_names = std::move(rev_it->second);
         addr_to_mrp_groups_.erase(rev_it);
         for (const auto &name : group_names) {
-            auto group_it = pending_mrp_groups_.find(name);
+            auto group_it = known_mrp_groups_.find(name);
+            if (group_it == known_mrp_groups_.end())
+                continue;
             for (DevAddr other : group_it->second.addrs) {
                 if (other == addr)
                     continue;
@@ -79,7 +81,8 @@ void EpochState::invalidate(DevAddr addr) noexcept {
                 if (o->second.empty())
                     addr_to_mrp_groups_.erase(o);
             }
-            pending_mrp_groups_.erase(group_it);
+            known_mrp_groups_.erase(group_it);
+            pending_mrp_groups_.erase(name);
         }
     }
     // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1), so
@@ -119,11 +122,32 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 void EpochState::store_compute_result_locked(DevAddr addr,
                                              niobium::fhetch::Polynomial poly) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // First store at `addr` reserves a pending output name; re-stores keep
-    // it, and invalidate() wipes it so post-H2D/memset stores get a new one.
-    if (!pending_outputs_.contains(addr)) {
-        pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
+}
+
+std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr addr) {
+    // Nothing to read back unless `addr` names a value produced this epoch.
+    if (!poly_map_.contains(addr)) {
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "tag_output_locked: addr not bound in poly_map_");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
     }
+    // MRP residue: tag every residue (each needs a shadow on flush) and
+    // promote the group so the multi-residue view is emitted too.
+    if (auto rev = addr_to_mrp_groups_.find(addr); rev != addr_to_mrp_groups_.end()) {
+        for (const auto &group_name : rev->second) {
+            auto g = known_mrp_groups_.find(group_name);
+            if (g == known_mrp_groups_.end())
+                continue;
+            for (DevAddr a : g->second.addrs)
+                if (!pending_outputs_.contains(a))
+                    pending_outputs_.emplace(a, "haze_out_" + std::to_string(output_counter_++));
+            pending_mrp_groups_.try_emplace(group_name, g->second);
+        }
+        return {};
+    }
+    if (!pending_outputs_.contains(addr))
+        pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
+    return {};
 }
 
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst,
@@ -156,8 +180,10 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
     // Overwrite any prior binding — the new H2D bytes are the truth at addr.
-    // Prior MRP-group entries naming addr stay valid (the group's claim is
-    // addr-bound; the new poly is just the residue's new value).
+    // This also silently drops any hazeTagOutput tag on addr: a re-uploaded
+    // input is no longer a computed output. Prior MRP-group entries naming addr
+    // stay valid (the group's claim is addr-bound; the new poly is the residue's
+    // new value).
     poly_map_.insert_or_assign(addr, std::move(poly));
     pending_outputs_.erase(addr);
     return {};
@@ -183,8 +209,10 @@ EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
         return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
     }
     // try_emplace dedups re-registrations for the same op (e.g. in-place
-    // hazeMulMrp called twice) since the leading-addr name is stable.
-    auto [it, inserted] = pending_mrp_groups_.try_emplace(std::move(name));
+    // hazeMulMrp called twice) since the leading-addr name is stable. The
+    // group is only captured here (known set); tag_output_locked promotes it
+    // into pending_mrp_groups_ when the caller declares it an output.
+    auto [it, inserted] = known_mrp_groups_.try_emplace(std::move(name));
     if (!inserted)
         return {};
     it->second.addrs.assign(addrs.begin(), addrs.end());
@@ -339,6 +367,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
 void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
+    known_mrp_groups_.clear();
     pending_mrp_groups_.clear();
     addr_to_mrp_groups_.clear();
     mrp_input_tagged_names_.clear();
@@ -348,6 +377,11 @@ void EpochState::clear_state_locked() noexcept {
     // Mirror clears to libnbfhetch so a failed materialise can't leak
     // captures into the next epoch; pairs with EpochSession's setup.
     niobium::compiler().clear_captured();
+}
+
+std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noexcept {
+    HazeLockGuard lock(mutex_);
+    return tag_output_locked(addr);
 }
 
 void EpochState::reset() noexcept {
@@ -363,11 +397,10 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
 }
 
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    // D2H is the sole flush trigger: finalize, replay, and populate shadows
-    // before reading. No-op when not recording, so H2D-then-D2H round-trips
-    // and follow-up D2H reads in the same epoch are free.
-    if (auto replay_result = epoch().replay_and_populate(); !replay_result)
-        return std::unexpected(replay_result.error());
+    // Pure shadow read; the program must already have run via hazeFlush() /
+    // hazeDeviceSynchronize(). An address with no materialized bytes (untagged
+    // output or missing flush) returns OutputNotFlushed; a plain H2D-then-D2H
+    // round-trip still reads back the uploaded bytes.
     return allocator().copy_to_host(dst, src, count);
 }
 
@@ -376,6 +409,18 @@ std::expected<void, HazeInternalError> write_program() noexcept {
     // Unlike copy_to_host, there is no shadow read afterward — the caller
     // ships the directory and replays it out of process (e.g. on the FPGA).
     return epoch().materialize_only();
+}
+
+std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
+    // Not a compute op: lock without starting a recording, so tagging with
+    // nothing recorded fails cleanly instead of opening a phantom epoch.
+    return epoch().tag_output(addr);
+}
+
+std::expected<void, HazeInternalError> flush() noexcept {
+    // Run the recorded program and populate shadows for the tagged outputs.
+    // No-op when not recording; safe to call repeatedly.
+    return epoch().replay_and_populate();
 }
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,

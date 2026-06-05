@@ -48,6 +48,7 @@ TEMPLATE_TEST_CASE("openfhe sub e2e", "[integration][e2e]", haze::test::scaling:
     auto a = ops::h2d_ct(ctx, ct_a);
     auto b = ops::h2d_ct(ctx, ct_b);
     auto haze_diff = ops::sub(ctx, a, b);
+    ops::flush_cts({&haze_diff});
     const auto haze_bytes = ops::d2h_ct(ctx, haze_diff);
 
     REQUIRE(haze_diff.openfhe_level(ctx.q_base.size()) == ct_ref->GetLevel());

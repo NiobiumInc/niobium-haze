@@ -46,7 +46,8 @@ enum class HazeInternalError : std::uint8_t {
     BackendOutputDecodeFailed,  // extract_polynomial_values returned false
     BridgeHookFailed,           // replay_bridge post-recording hook reported failures
     PoolMapDesync,              // pool_free_ entry has no `alloc_set_` peer
-    SourceUnavailable           // compute / D2D source has no shadow data and no poly_map_ binding
+    SourceUnavailable,          // compute / D2D source has no shadow data and no poly_map_ binding
+    OutputNotFlushed            // D2H of an address with no materialized bytes: tag + flush first
 };
 
 // Map an internal error to the public hazeError_t the C ABI returns.

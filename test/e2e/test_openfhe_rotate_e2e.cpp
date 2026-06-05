@@ -51,6 +51,7 @@ TEMPLATE_TEST_CASE("openfhe rotate e2e", "[integration][e2e]", haze::test::scali
 
         auto a = ops::h2d_ct(ctx, ct);
         auto haze_rot = ops::rotate(ctx, a, slot_idx);
+        ops::flush_cts({&haze_rot});
         const auto haze_bytes = ops::d2h_ct(ctx, haze_rot);
 
         REQUIRE(haze_rot.openfhe_level(ctx.q_base.size()) == ct_ref->GetLevel());

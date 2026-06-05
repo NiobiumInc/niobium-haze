@@ -194,6 +194,11 @@ void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
                                const std::vector<std::vector<uint64_t>> &expected) {
     REQUIRE(dst.size() == Driver::kNumResidues);
     REQUIRE(expected.size() == Driver::kNumResidues);
+    // Declare the results and run the program before reading them back. For an
+    // MRP driver, tagging the residues also promotes the group for the cross-check.
+    for (std::size_t i = 0; i < Driver::kNumResidues; ++i)
+        REQUIRE(hazeTagOutput(dst[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
         REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
@@ -671,6 +676,10 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
     d.ntt(d_b_eval, haze::test::to_const(d_b));
     d.mul(d_c_eval, haze::test::to_const(d_a_eval), haze::test::to_const(d_b_eval));
     d.intt(d_c, haze::test::to_const(d_c_eval));
+
+    for (std::size_t i = 0; i < Driver::kNumResidues; ++i)
+        REQUIRE(hazeTagOutput(d_c[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     std::vector<std::vector<uint64_t>> c(Driver::kNumResidues, std::vector<uint64_t>(kRingDim, 0));
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
@@ -1160,7 +1169,7 @@ TEMPLATE_TEST_CASE("memset after compute invalidates the polymap binding", "[int
 // SRP coverage is sufficient.
 // ===========================================================================
 
-TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integration]") {
+TEST_CASE("hazeDeviceSynchronize does not flush; hazeFlush does", "[integration]") {
     haze::test::setup_integration_compute_config();
 
     void *d_a = nullptr;
@@ -1174,11 +1183,22 @@ TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integratio
     std::vector<uint64_t> b(kRingDim, 3);
     REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
     REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
+    // Compute then D2H with no flush — the rawest mistake under the explicit model.
+    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+
+    // Synchronize is a no-op: it does not execute the recording, so even after
+    // tagging the read still finds no materialized bytes.
+    REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+
+    // hazeFlush executes the recording; only now does the read succeed.
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(result[i] == 6);
@@ -1187,6 +1207,39 @@ TEST_CASE("hazeDeviceSynchronize does not trigger materialization", "[integratio
     REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+}
+
+TEST_CASE("D2H of an untagged result is pruned and returns NOT_FLUSHED", "[integration]") {
+    haze::test::setup_integration_compute_config();
+
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_keep = nullptr;
+    void *d_drop = nullptr;
+    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_keep, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_drop, kBytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> a(kRingDim, 3);
+    std::vector<uint64_t> b(kRingDim, 4);
+    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(d_keep, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(d_drop, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+
+    // Only d_keep is declared an output; d_drop is an intermediate that is
+    // never materialized, so its D2H fails while d_keep's succeeds.
+    REQUIRE(hazeTagOutput(d_keep) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    std::vector<uint64_t> got(kRingDim, 0);
+    REQUIRE(hazeMemcpy(got.data(), d_keep, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(got.data(), d_drop, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+
+    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_keep) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_drop) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {

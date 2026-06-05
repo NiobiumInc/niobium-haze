@@ -315,6 +315,12 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
         final_d2 = &r_d2_owned;
     }
 
+    // Three output components from one epoch: tag all before the single flush.
+    for (const std::vector<void *> *chain : {final_d0, final_d1, final_d2})
+        for (void *p : *chain)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     const auto haze_d0 = d2h_chain(*final_d0, out_towers);
     const auto haze_d1 = d2h_chain(*final_d1, out_towers);
     const auto haze_d2 = d2h_chain(*final_d2, out_towers);

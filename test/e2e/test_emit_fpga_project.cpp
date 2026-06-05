@@ -59,14 +59,17 @@ TEST_CASE("emit fpga project for replay", "[emit][.]") {
     if (do_replay) {
         // In-process simulator: writes serialized_probes/, usable as a golden
         // to diff against the FPGA result for the same project.
+        ops::flush_cts({&sum});
         const ops::CtBytes bytes = ops::d2h_ct(ctx, sum);
         REQUIRE(bytes.c0.size() == sum.towers());
         INFO("emitted project + simulator probes to " << out);
     } else {
-        // Write the project only — no replay, no serialized_probes/. This is
-        // the directory to ship to the FPGA host. `sum` stays alive until
-        // here so its output binding survives into the trace.
+        // Write-without-replay: hazeWriteProgram is the finalize step here, so
+        // there is no flush (replay is the whole thing being skipped). Tag the
+        // result so the emitted outputs.json lists it, then write the dir to
+        // ship to the FPGA host.
         REQUIRE(sum.towers() > 0);
+        ops::tag_ct(sum);
         REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
         INFO("emitted project (no replay) to " << out);
     }

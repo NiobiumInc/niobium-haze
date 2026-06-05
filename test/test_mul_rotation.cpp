@@ -172,6 +172,13 @@ TEMPLATE_TEST_CASE("mul→automorph→automorph: two rotations sharing one produ
     d.automorph(d_r1, haze::test::to_const(d_c), kIdx1);
     d.automorph(d_r2, haze::test::to_const(d_c), kIdx2);
 
+    // Fan-out: both rotations are outputs, so tag both before the single flush.
+    for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
+        REQUIRE(hazeTagOutput(d_r1[i]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(d_r2[i]) == HAZE_SUCCESS);
+    }
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     check_against_per_residue(d, d_r1, r1_expected);
     check_against_per_residue(d, d_r2, r2_expected);
 

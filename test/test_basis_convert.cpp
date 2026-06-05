@@ -127,6 +127,8 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]"
     REQUIRE(hazeMemcpy(a, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(b, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
     REQUIRE(hazeMemcpy(out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 3);
@@ -252,6 +254,11 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[inte
     p.dst_base_len = 3;
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
+    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d2) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     std::vector<uint64_t> out0(kRingDim, 0);
     std::vector<uint64_t> out1(kRingDim, 0);
     std::vector<uint64_t> out2(kRingDim, 0);
@@ -296,6 +303,10 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") 
     p.dst_base_len = 2;
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
+    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
     REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
@@ -335,6 +346,8 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integr
     p.dst_base_len = 1;
     REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
+    REQUIRE(hazeTagOutput(p0) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
     REQUIRE(hazeMemcpy(out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out[0] == 42);
@@ -381,6 +394,10 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
     REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+
+    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     // Initialise to non-zero so a no-op D2H would surface as a failure.
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
@@ -442,6 +459,10 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
     p.p_base = p_base;
     p.p_base_len = 1;
     REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+
+    for (auto *slot : dst_storage)
+        REQUIRE(hazeTagOutput(slot) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     // D2H every output and verify exact zero. Initialise the host
     // buffer to a sentinel so a skipped D2H is detectable.
@@ -796,6 +817,10 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[int
     REQUIRE(hazeBasisConvert(dst_ptrs.data(), src_const_ptrs.data(), &params, nullptr) ==
             HAZE_SUCCESS);
 
+    for (void *p : dst_ptrs)
+        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     auto expected = ref::fast_base_convert(residues, src_base, dst_base);
     check_against_reference(dst_ptrs, expected, dst_base);
 
@@ -834,6 +859,9 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
     // in src_base's original order.
     const std::vector<uint64_t> dst_base(src_base.begin(),
                                          src_base.begin() + static_cast<long>(dst_count));
+    for (void *p : dst_ptrs)
+        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
     check_against_reference(dst_ptrs, expected, dst_base);
 
     free_all(src_ptrs);
@@ -894,6 +922,11 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
     std::vector<uint64_t> per_digit_dst_base = src_base;
     per_digit_dst_base.insert(per_digit_dst_base.end(), p_base.begin(), p_base.end());
     REQUIRE(per_digit_dst_base.size() == per_digit);
+
+    // One ModUp, all digits in one epoch: tag every output before the flush.
+    for (void *p : dst_ptrs)
+        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     for (size_t d = 0; d < kDigitCount; ++d) {
         std::vector<void *> digit_dst(dst_ptrs.begin() + static_cast<long>(d * per_digit),

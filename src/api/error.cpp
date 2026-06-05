@@ -43,6 +43,8 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
         return "allocation size below polynomial size";
     case HAZE_ERROR_SOURCE_UNAVAILABLE:
         return "compute / D2D source has no shadow data and no poly_map_ binding";
+    case HAZE_ERROR_NOT_FLUSHED:
+        return "D2H of an untagged / unflushed address (tag output + hazeFlush first)";
     case HAZE_ERROR_INTERNAL:
         return "internal haze error (set HAZE_DEBUG=1 for details)";
     default:

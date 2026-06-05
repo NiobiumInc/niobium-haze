@@ -52,7 +52,7 @@ plaintext → MakeCKKSPackedPlaintext → Encrypt
         → run OpenFHE reference first (oracle) → Decrypt slots
         → extract per-tower uint64_t limbs of c0,c1 → H2D into haze
         → run haze pipeline (single epoch)
-        → D2H each result tower
+        → tag outputs + flush_cts, then D2H each result tower
         → inject back into a Clone of an input ct → Decrypt
         → compare: bit-exact limbs + slot-tolerance ladder
 ```
@@ -76,7 +76,8 @@ flowchart TD
     PT[plaintext slots] --> ENC["OpenFHE Encrypt<br/>(degree-1 ct)"]
     ENC --> H2D["h2d_ct<br/>(per-tower limbs → hazeMalloc + Memcpy)"]
     H2D --> OPS["ops::* (add, sub, mult, rotate, …)<br/>records fhetch sr_* IR"]
-    OPS --> D2H["d2h_ct<br/>(first Memcpy flushes the epoch)"]
+    OPS --> FLUSH["flush_cts<br/>(tag outputs + run the epoch)"]
+    FLUSH --> D2H["d2h_ct<br/>(read result towers)"]
     D2H --> TRACE["fhetch trace + cryptocontext<br/>+ input ciphertexts (.bin)<br/>+ output templates (empty shells)"]
     TRACE --> DISPATCH{{"HAZE_TARGET"}}
 

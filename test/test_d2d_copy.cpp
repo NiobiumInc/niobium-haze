@@ -62,6 +62,9 @@ TEST_CASE("hazeMemcpy(D2D) copies a compute-produced polynomial via IR", "[integ
     REQUIRE(hazeMemcpy(dst_copy, dst_compute, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) ==
             HAZE_SUCCESS);
 
+    REQUIRE(hazeTagOutput(dst_copy) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     std::vector<uint64_t> out(kRingDim);
     REQUIRE(hazeMemcpy(out.data(), dst_copy, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
 
@@ -120,6 +123,11 @@ TEST_CASE("hazeMemcpy(D2D) copies a residue into an MRP-registered addr", "[inte
     REQUIRE(hazeAddScalar(single, srcs[0], /*scalar=*/13, 0, nullptr) == HAZE_SUCCESS);
 
     REQUIRE(hazeMemcpy(outs[0], single, kBytesMrp, HAZE_MEMCPY_DEVICE_TO_DEVICE) == HAZE_SUCCESS);
+
+    for (std::size_t r = 0; r < 3; ++r)
+        REQUIRE(hazeTagOutput(outs[r]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(single) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     std::vector<uint64_t> out_copy(kRingDimMrp);
     std::vector<uint64_t> out_mrp1(kRingDimMrp);
@@ -181,6 +189,9 @@ TEST_CASE("hazeMemcpy(D2D) promotes an H2D'd source through the IR copy", "[inte
     REQUIRE(hazeMemcpy(src, residue.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(dst, src, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) == HAZE_SUCCESS);
 
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     std::vector<uint64_t> out(kRingDim);
     REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (std::size_t i = 0; i < kRingDim; ++i) {
@@ -211,6 +222,10 @@ TEST_CASE("hazeMemcpyMrp(D2D) copies a compute-produced MRP via per-residue IR",
     REQUIRE(hazeMemcpyMrp(copied.data(), haze::test::to_const(computed).data(), kBytes,
                           HAZE_MEMCPY_DEVICE_TO_DEVICE, base.data(), base.size()) == HAZE_SUCCESS);
 
+    for (std::size_t r = 0; r < 3; ++r)
+        REQUIRE(hazeTagOutput(copied[r]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     for (std::size_t r = 0; r < 3; ++r) {
         std::vector<uint64_t> out(kRingDim);
         REQUIRE(hazeMemcpy(out.data(), copied[r], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
@@ -237,6 +252,10 @@ TEST_CASE("hazeMemcpyMrp(D2D) promotes H2D'd sources and registers the output gr
 
     REQUIRE(hazeMemcpyMrp(dst.data(), haze::test::to_const(srcs).data(), kBytes,
                           HAZE_MEMCPY_DEVICE_TO_DEVICE, base.data(), base.size()) == HAZE_SUCCESS);
+
+    for (std::size_t r = 0; r < 3; ++r)
+        REQUIRE(hazeTagOutput(dst[r]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     for (std::size_t r = 0; r < 3; ++r) {
         std::vector<uint64_t> out(kRingDim);
@@ -305,6 +324,9 @@ TEST_CASE("hazeMemcpyMrp(D2D) with base_len 1 copies without registering a group
     const std::vector<void *> dst_arr = {dst};
     REQUIRE(hazeMemcpyMrp(dst_arr.data(), src_arr.data(), kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE, &q,
                           1) == HAZE_SUCCESS);
+
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim);
     REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
