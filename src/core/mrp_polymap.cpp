@@ -114,8 +114,8 @@ std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
                                                         std::size_t count,
                                                         std::size_t len) noexcept {
-    // The first copy_to_host flushes the recording; the rest read shadow bytes
-    // (replay_and_populate is a no-op once the recording is flushed).
+    // Per-residue pure shadow read; the caller must have tagged the group and
+    // flushed, or each residue errors as OutputNotFlushed.
     for (std::size_t i = 0; i < len; ++i)
         if (auto d2h = copy_to_host(dst[i], to_dev_addr(src[i]), count); !d2h)
             return d2h;

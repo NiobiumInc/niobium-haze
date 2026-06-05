@@ -56,6 +56,11 @@ class EpochState {
     // replay-elsewhere (e.g. FPGA) flow. No-op when not recording.
     std::expected<void, HazeInternalError> materialize_only() noexcept HAZE_EXCLUDES(mutex_);
 
+    // Declare `addr` an output of the active recording (backs hazeTagOutput).
+    // Takes mutex_ but does NOT start a recording: tagging with nothing
+    // recorded (empty poly_map_) returns SourceUnavailable.
+    std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -68,10 +73,15 @@ class EpochState {
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
-    // Bind `addr` to `poly` and emit a pending-output name on first
-    // store. Re-stores keep the original name; invalidate() wipes it.
+    // Bind `addr` to `poly`. Output-hood is declared explicitly via
+    // tag_output_locked, not inferred from being computed.
     void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
         HAZE_REQUIRES(mutex_);
+
+    // Declare `addr` an output (idempotent); it must name a value bound in
+    // poly_map_ or it is a caller error. Tagging any residue of a known MRP
+    // group tags the whole ciphertext and promotes the group for emission.
+    std::expected<void, HazeInternalError> tag_output_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Record a pass-through copy dst <- src under the COPY_MODULUS sentinel.
     // A copy is modulus-agnostic and H2D eager-tags inputs, so the op needn't
@@ -133,9 +143,15 @@ class EpochState {
         std::vector<DevAddr> addrs;   // residue addrs in encounter order
         std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
     };
+    // Every MRP group seen this epoch (auto-registered by the MRP ops). Holds
+    // the group structure so tag_output_locked can expand a tagged residue to
+    // the whole ciphertext; membership alone does not materialize anything.
+    std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups_ HAZE_GUARDED_BY(mutex_);
+    // The explicitly-tagged subset of known_mrp_groups_ that gets emitted as a
+    // fhetch MRP output at materialize time.
     std::unordered_map<std::string, PendingMrpGroup> pending_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // Reverse index addr → group names, kept in lockstep with
-    // pending_mrp_groups_ so invalidate() drops stale registrations in O(group_size).
+    // known_mrp_groups_ so invalidate() drops stale registrations in O(group_size).
     std::unordered_map<DevAddr, std::unordered_set<std::string>>
         addr_to_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // Dedup set for MRP input tags; reset by clear_state_locked.
@@ -186,6 +202,16 @@ std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size
 // replay, no shadow population. Peer of copy_to_host for the hazeWriteProgram
 // path; no-op when not recording. The api/ shim translates the error.
 std::expected<void, HazeInternalError> write_program() noexcept;
+
+// Declare a device address an output of the current recording (backs
+// hazeTagOutput). Starts an epoch if none is active. The api/ shim
+// translates the error at the C ABI edge.
+std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
+
+// Execute the recorded program: finalize, dispatch replay, and populate the
+// shadow buffers for the tagged outputs (backs hazeFlush). No-op when not
+// recording. The api/ shim translates the error.
+std::expected<void, HazeInternalError> flush() noexcept;
 
 // D2D as a recorded copy: promotes `src` if needed (via
 // `lookup_or_create_locked`), emits a pass-through fhetch IR node, and

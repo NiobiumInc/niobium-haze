@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <initializer_list>
 #include <map>
 #include <openfhe.h>
 #include <optional>
@@ -142,10 +143,16 @@ struct CtBytes {
     std::vector<std::vector<uint64_t>> c1;
 };
 
-// First hazeMemcpy here flushes the epoch and dispatches replay.
-// All OpenFHE reference compute must run BEFORE the epoch opens or AFTER
-// this call closes it; CPROBES emits fhetch IR while recording is active.
+// Pure D2H read: the recording must already have been flushed (tag the
+// ciphertext via flush_cts first), or each residue read errors.
 CtBytes d2h_ct(const OpCtx &ctx, const Ct &src);
+
+// Tag every residue of `ct`'s c0/c1 chains as an output of the recording.
+void tag_ct(const Ct &ct);
+
+// Tag the given ciphertexts and flush once — the "outputs ready" step run
+// after all compute and before d2h_ct reads.
+void flush_cts(std::initializer_list<const Ct *> cts);
 
 void inject_ct(const OpCtx &ctx, const CtBytes &src,
                lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &shell);

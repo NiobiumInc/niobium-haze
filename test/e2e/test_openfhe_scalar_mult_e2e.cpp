@@ -115,6 +115,7 @@ TEMPLATE_TEST_CASE("openfhe scalar-mult e2e", "[integration][e2e]", FixedManualN
     if constexpr (P::kPostRescale) {
         haze_prod = ops::rescale(ctx, haze_prod);
     }
+    ops::flush_cts({&haze_prod});
     const auto haze_bytes = ops::d2h_ct(ctx, haze_prod);
 
     REQUIRE(haze_prod.openfhe_level(ctx.q_base.size()) == ct_ref->GetLevel());

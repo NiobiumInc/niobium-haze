@@ -124,6 +124,7 @@ std::set<std::string> run_epochs(bool interleave) {
 
     // Haze epoch 1: add.
     auto haze_add = ops::add(ctx, a, b);
+    ops::flush_cts({&haze_add});
     const auto bytes_add = ops::d2h_ct(ctx, haze_add);
 
     if (interleave)
@@ -131,6 +132,7 @@ std::set<std::string> run_epochs(bool interleave) {
 
     // Haze epoch 2: sub.
     auto haze_sub = ops::sub(ctx, a, b);
+    ops::flush_cts({&haze_sub});
     const auto bytes_sub = ops::d2h_ct(ctx, haze_sub);
 
     std::vector<double> e_add(kX1.size());

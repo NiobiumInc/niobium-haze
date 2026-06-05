@@ -34,6 +34,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_ALLOC_TOO_SMALL;
     case HazeInternalError::SourceUnavailable:
         return HAZE_ERROR_SOURCE_UNAVAILABLE;
+    case HazeInternalError::OutputNotFlushed:
+        return HAZE_ERROR_NOT_FLUSHED;
     // Internal: haze invariants / backend failed. Caller can't recover;
     // the specific variant survives in the HAZE_DEBUG=1 stderr log.
     case HazeInternalError::BackendInitFailed:
@@ -90,6 +92,8 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "pool/map desync";
     case HazeInternalError::SourceUnavailable:
         return "compute / D2D source has no shadow data and no poly_map_ binding";
+    case HazeInternalError::OutputNotFlushed:
+        return "D2H read of address with no materialized bytes (tag output + flush before D2H)";
     }
     return "unknown";
 }

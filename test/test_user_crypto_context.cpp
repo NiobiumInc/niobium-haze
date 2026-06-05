@@ -91,6 +91,10 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     REQUIRE(hazeAddMrp(dst.data(), da_const.data(), db_const.data(), base.data(), base.size(),
                        nullptr) == HAZE_SUCCESS);
 
+    for (std::size_t i = 0; i < 3; ++i)
+        REQUIRE(hazeTagOutput(dst[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
     for (std::size_t i = 0; i < 3; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
         REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);

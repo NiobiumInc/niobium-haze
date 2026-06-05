@@ -49,6 +49,7 @@ TEMPLATE_TEST_CASE("openfhe addition e2e", "[integration][e2e]", haze::test::sca
     auto a = ops::h2d_ct(ctx, ct_a);
     auto b = ops::h2d_ct(ctx, ct_b);
     auto haze_sum = ops::add(ctx, a, b);
+    ops::flush_cts({&haze_sum});
     const auto haze_bytes = ops::d2h_ct(ctx, haze_sum);
 
     REQUIRE(haze_sum.towers() == ct_ref->GetElements()[0].GetNumOfElements());

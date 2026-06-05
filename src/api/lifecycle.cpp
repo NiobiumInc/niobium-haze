@@ -17,6 +17,7 @@
 // torn down).
 
 #include "common/errors.hpp"
+#include "common/handle.hpp"
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
@@ -61,4 +62,14 @@ extern "C" hazeError_t hazeWriteProgram(void) noexcept {
     // Finalize + write the project directory without replaying; see
     // haze::write_program and the hazeWriteProgram doc in haze.h.
     return set_internal_result(haze::write_program());
+}
+
+extern "C" hazeError_t hazeTagOutput(void *ptr) noexcept {
+    if (ptr == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::tag_output(haze::to_dev_addr(ptr)));
+}
+
+extern "C" hazeError_t hazeFlush(void) noexcept {
+    return set_internal_result(haze::flush());
 }

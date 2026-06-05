@@ -11,6 +11,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <initializer_list>
 #include <memory>
 #include <openfhe.h>
 #include <utility>
@@ -486,6 +487,19 @@ Ct h2d_ct(const OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &src)
     Allocs c1_alloc(c1_data);
     return {std::move(c0_alloc), std::move(c1_alloc), towers,
             static_cast<std::uint32_t>(src->GetNoiseScaleDeg())};
+}
+
+void tag_ct(const Ct &ct) {
+    for (std::size_t t = 0; t < ct.towers(); ++t) {
+        REQUIRE(hazeTagOutput(ct.c0()[t]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(ct.c1()[t]) == HAZE_SUCCESS);
+    }
+}
+
+void flush_cts(std::initializer_list<const Ct *> cts) {
+    for (const Ct *ct : cts)
+        tag_ct(*ct);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
 }
 
 CtBytes d2h_ct(const OpCtx &ctx, const Ct &src) {

@@ -241,11 +241,14 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
         return std::unexpected(HazeInternalError::AllocTooSmall);
     auto data_it = shadow_data_.find(src);
     if (data_it == shadow_data_.end()) {
-        // Address allocated but no bytes ever written or already
-        // consumed by compute. Match the prior eager-zero semantic:
-        // return zeros, success. Do not erase any state.
-        std::memset(dst, 0, count);
-        return {};
+        // Address allocated but no materialized bytes: never written, or a
+        // compute result that was never tagged as an output and flushed.
+        // Under the explicit-output model this is a caller error rather than
+        // a silent zero read.
+        record_internal_error(
+            HazeInternalError::OutputNotFlushed,
+            "DeviceAllocator::copy_to_host: no shadow bytes (tag output + flush?)");
+        return std::unexpected(HazeInternalError::OutputNotFlushed);
     }
     std::memcpy(dst, reinterpret_cast<const uint8_t *>(data_it->second.data()), count);
     return {};

@@ -22,11 +22,10 @@ extern "C" {
 
 // Device management.
 //
-// hazeDeviceSynchronize is a no-op today. CUDA blocks until the device
-// is idle; HAZE has no equivalent notion until hazeMemcpy(D2H) flushes
-// a recording. Returns HAZE_SUCCESS so calling code structured as
-// "compute -> sync -> D2H" continues to work; the sync is implicit in
-// the D2H itself.
+// hazeDeviceSynchronize is a no-op returning HAZE_SUCCESS. CUDA blocks until
+// async device work drains; HAZE records synchronously and has nothing running
+// in the background, so there is nothing to wait for. It does NOT execute the
+// recording — run it explicitly with hazeFlush() before reading results back.
 //
 // hazeDeviceReset clears all process-global HAZE state (allocator pool,
 // epoch, compiler backend, configuration, streams, events, active
@@ -75,6 +74,13 @@ HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
                                               const void *ptr) HAZE_NOEXCEPT;
 
 // Data transfer: H2D, D2H, D2D, memset, peer copies.
+//
+// Output model (explicit): HAZE records compute lazily and does not infer
+// which results you want back. The canonical pattern is
+// compute -> hazeTagOutput(ptr) -> hazeFlush() -> hazeMemcpy(D2H). A D2H of an
+// address that was not tagged-and-flushed returns HAZE_ERROR_NOT_FLUSHED. A
+// plain H2D-then-D2H round-trip needs no tag/flush — the uploaded bytes are
+// returned as-is.
 
 HAZE_API hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
                                 hazeMemcpyKind kind) HAZE_NOEXCEPT;
@@ -94,6 +100,23 @@ HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *
 HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
+
+// Explicit outputs and execution.
+//
+// hazeTagOutput declares `ptr` an output of the in-flight recording, so the
+// next hazeFlush() materializes it and a later hazeMemcpy(D2H) can read it
+// back. For an MRP ciphertext, tagging any one residue pointer tags the whole
+// multi-residue value. Tagging an address that names no recorded value (no
+// compute / D2D / H2D result bound to it) returns HAZE_ERROR_SOURCE_UNAVAILABLE.
+// A later H2D to a tagged address drops the tag — the new uploaded bytes are
+// the truth at that address, not a computed output.
+//
+// hazeFlush executes the recorded program for the configured target (finalize
+// -> replay -> populate the tagged outputs' shadow buffers) and resets the
+// recording. No-op returning HAZE_SUCCESS when no recording is in flight or no
+// outputs were tagged. (hazeDeviceSynchronize does NOT flush — see above.)
+HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,
 // program metadata, target selection, lifecycle reset.
@@ -159,11 +182,12 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 /* Finalize the current recording and write the project directory WITHOUT
  * running replay.
  *
- * Where hazeMemcpy(D2H) finalizes the recording, dispatches replay, and
- * reads results back into host memory, hazeWriteProgram() stops after the
- * project directory is written: the .fhetch trace, serialized inputs,
- * ciphertext templates, and cryptocontext.dat. Nothing is executed and no
- * results are produced.
+ * Where hazeFlush() finalizes the recording, dispatches replay, and reads
+ * results back into host memory, hazeWriteProgram() stops after the project
+ * directory is written: the .fhetch trace, serialized inputs, ciphertext
+ * templates, and cryptocontext.dat. Nothing is executed and no results are
+ * produced. Only outputs declared with hazeTagOutput() are emitted, so tag
+ * them before calling this.
  *
  * Use it to emit a self-contained directory on a machine without the
  * compiler/hardware, then replay it elsewhere — e.g. ship it to the FPGA

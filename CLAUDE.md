@@ -11,12 +11,12 @@ shapes one-for-one (`cudaMalloc` → `hazeMalloc`, `cudaMemcpy` → `hazeMemcpy`
 against CUDA — primarily FIDESlib — can port by mechanical prefix substitution.
 
 The implementation does not execute polynomial math. Every compute call records
-a node into FHETCH IR via `niobium::fhetch::sr_*`; the next `hazeMemcpy(D2H)`
-finalizes the trace, dispatches it to a backend (in-process simulator or HTTP
-transport to `nbcc_fhetch_replay`), writes the simulator-computed values into
-shadow buffers, and only then copies the shadow bytes to the host destination.
-D2H is therefore the sole flush trigger; there is no separate explicit-replay
-entry point.
+a node into FHETCH IR via `niobium::fhetch::sr_*`. Outputs are explicit: declare
+each result with `hazeTagOutput`, then `hazeFlush` finalizes the trace, dispatches it to a backend
+(in-process simulator or HTTP transport to `nbcc_fhetch_replay`), and writes the
+simulator-computed values into the tagged outputs' shadow buffers. `hazeMemcpy(D2H)`
+is then a pure shadow read; reading an address that was not tagged-and-flushed
+returns `HAZE_ERROR_NOT_FLUSHED`.
 
 ## Toolchain
 
@@ -355,28 +355,28 @@ guard that:
    `fhetch::Polynomial` tagged as input.
 4. Emits the FHETCH instruction (`fhetch::sr_addp` etc.) and stores the
    result polynomial into the polymap via
-   `store_compute_result_locked(dst_addr, poly)`.
+   `store_compute_result_locked(dst_addr, poly)`. Output-hood is not inferred
+   here — `hazeTagOutput` declares it explicitly.
 
 No hardware, simulator, or polynomial math runs at this point. The
 recording phase only appends nodes to the FHETCH trace.
 
-Materialization is triggered implicitly by `hazeMemcpy(D2H)`. The D2H
-path in `haze::copy_to_host` (src/core/epoch.cpp) calls
-`EpochState::replay_and_populate()` before reading the shadow buffer:
+Materialization is triggered by `hazeFlush`, which calls
+`EpochState::replay_and_populate()`:
 
-1. `EpochState::replay_and_populate()` tags every output binding for
-   `fhetch::tag_output`. No-op when no recording is in flight, so plain
-   H2D-then-D2H round-trips elide it for free.
+1. `tag_pending_outputs_locked()` tags the explicitly-declared outputs (and
+   their MRP groups) for `fhetch::tag_output`. No-op when no recording is in
+   flight, so plain H2D-then-D2H round-trips elide it for free.
 2. `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch` trace.
 3. `CompilerBackend::replay()` dispatches per the configured target.
 4. `niobium::fhetch::result(...)` is called for each tagged output to read
    the simulator-computed polynomial back, and `update_shadow` writes the
    bytes into the allocator's sparse `shadow_data_` map.
-5. `copy_to_host` then performs the shadow read into the host buffer.
 
-`hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops returning
-`HAZE_SUCCESS` — synchronization is implicit in the D2H itself. Streams
-and events exist for CUDA-shape parity but do not model ordering.
+`hazeMemcpy(D2H)` (`haze::copy_to_host`) is then a pure shadow read.
+`hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops — nothing runs
+asynchronously, so there is no device work to wait for; they exist for
+CUDA-shape parity but do not flush and do not model ordering.
 
 ### Shadow storage model
 
@@ -389,9 +389,9 @@ and events exist for CUDA-shape parity but do not model ordering.
   carries user-written or materialized bytes. H2D / memset / D2D /
   `update_shadow` create entries; `extract_polynomial_components` (used
   when promoting bytes to a FHETCH input) and `hazeFree` evict them.
-  Reads from a missing entry return zero (D2H) or `SourceUnavailable`
-  (compute / D2D extract path — using an addr that was never written
-  is a contract violation).
+  Reads from a missing entry return `OutputNotFlushed` (D2H of an untagged /
+  unflushed addr) or `SourceUnavailable` (compute / D2D extract path — using an
+  addr that was never written is a contract violation).
 
 Every `hazeMalloc` allocation must equal the configured polynomial size
 (`ring_dim * sizeof(uint64_t)`). `hazeSetRingDimension` is required before

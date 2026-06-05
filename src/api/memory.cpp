@@ -93,9 +93,8 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
-        // D2H finalises any in-flight recording (replay + shadow
-        // populate) before reading the shadow buffer. See
-        // haze::copy_to_host for the contract.
+        // D2H is a pure shadow read; the program must already have run via
+        // hazeFlush(). See haze::copy_to_host for the contract.
         return set_internal_result(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
     }
 
