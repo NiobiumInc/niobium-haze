@@ -309,7 +309,20 @@ Compiler diagnostics: `-Wall -Wextra -Werror -Wpedantic -Wshadow -Wconversion`,
 plus `-Wthread-safety` under clang. Clang's TSA is the canonical enforcement
 path for the lock contracts in `src/common/thread_safety.hpp`.
 
-## High-level architecture
+### Finishing a task: self-review + local PR review
+
+Before calling a change done (and before pushing), do two reviews on top of the
+gates above:
+
+1. **Self-review the diff** for correctness — lock order, the flush contract,
+   shadow-storage invariants, and the C ABI boundary (the areas section 3 of
+   `.github/instructions/CODE_REVIEW_GUIDE.md` covers).
+2. **Run the local PR review**: `scripts/local-pr-review.sh`. It reproduces the
+   GitHub "PR - Claude Code Review" (`.github/workflows/pr-claude-code-review.yml`)
+   locally — same model, Read-only, same guide — over this branch's changes vs
+   `main` (committed and uncommitted), printing findings instead of posting a PR
+   comment. Address them now rather than after CI flags them. `--dry-run` lists
+   the files without calling `claude`; `BASE=<ref>` reviews against another base.
 
 ### Layered structure
 
