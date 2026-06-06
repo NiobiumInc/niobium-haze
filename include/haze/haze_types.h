@@ -87,8 +87,10 @@ typedef enum {
     HAZE_ERROR_NO_DATA,            // address allocated but never written
     HAZE_ERROR_ALLOC_TOO_SMALL,    // allocation size < polynomial size
     HAZE_ERROR_SOURCE_UNAVAILABLE, // compute / D2D source has no shadow + no poly_map_
-    HAZE_ERROR_NOT_FLUSHED,        // D2H of an untagged / unflushed address: tag output + hazeFlush
     HAZE_ERROR_INTERNAL,           // haze invariant broke or backend failed; see HAZE_DEBUG log
+    // Appended after HAZE_ERROR_INTERNAL so prior enumerator values stay
+    // ABI-stable — new codes are added at the end, never inserted.
+    HAZE_ERROR_NOT_FLUSHED, // D2H of an untagged / unflushed address: tag output + hazeFlush
 } hazeError_t;
 
 // ---------------------------------------------------------------------------
