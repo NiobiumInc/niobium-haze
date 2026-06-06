@@ -54,8 +54,8 @@ class AllocatorTestAccess;
 // keyed by DevAddr, with each entry a `vector<uint64_t>` sized to the
 // allocation. An entry exists only when the address currently carries
 // user-written or materialized components; addresses without an entry
-// hold zero shadow memory. Reads of an entry-less address return zero
-// (D2H) or NoData (compute extract). Writes (H2D / memset / D2D /
+// hold zero shadow memory. Reads of an entry-less address return
+// OutputNotFlushed (D2H) or NoData (compute extract). Writes (H2D / memset / D2D /
 // update_shadow) create or overwrite the entry; consumption by
 // compute (extract_polynomial_components) evicts it. Byte-granular
 // reads/writes from the C ABI go through `reinterpret_cast<uint8_t*>`

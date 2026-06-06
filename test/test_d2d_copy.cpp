@@ -1,7 +1,7 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
 // hazeMemcpy(D2D) on a compute-produced source: src has a poly_map_
-// binding but no shadow_data_ entry until D2H. The shadow-only copy
+// binding but no shadow_data_ entry until flush. The shadow-only copy
 // path would silently produce zeros; the contract is to emit a
 // pass-through fhetch IR node so replay materializes dst correctly.
 
@@ -213,7 +213,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) copies a compute-produced MRP via per-residue IR",
     auto computed = haze::test::allocate_dst_residues(3, kBytes);
     auto copied = haze::test::allocate_dst_residues(3, kBytes);
 
-    // computed = srcs + srcs: bound in poly_map_ but no shadow until D2H, so a
+    // computed = srcs + srcs: bound in poly_map_ but no shadow until flush, so a
     // shadow-only copy would zero-fill. The per-residue IR copy must capture it.
     REQUIRE(hazeAddMrp(computed.data(), haze::test::to_const(srcs).data(),
                        haze::test::to_const(srcs).data(), base.data(), base.size(),

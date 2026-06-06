@@ -35,11 +35,10 @@ constexpr size_t kBytes = kN * sizeof(uint64_t);
 // reset is deliberate — without it Config / poly_map_ state from a
 // prior test could leak through.
 //
-// Routes through haze_replay_bridge so the test runs end-to-end via
-// the FHETCH transport: bridge picks the actual tower modulus near
-// 2^bits(kQ), aligns haze's ciphertext modulus, sets target=FUNC_SIM
-// so the flush-triggered replay dispatches to nbcc_fhetch_replay rather
-// than no-op'ing.
+// Routes through haze_replay_bridge so the test runs end-to-end: the bridge
+// picks the actual tower modulus near 2^bits(kQ) and aligns haze's ciphertext
+// modulus. The replay target follows HAZE_TARGET (default "local", the
+// in-process FHETCH simulator) and runs at hazeFlush().
 void setup_4096() {
     haze::test::setup_integration_compute_config(kN, kQ, 0);
 }
@@ -135,7 +134,7 @@ TEST_CASE("ring_dim consistency: chained ops within one epoch reuse poly_map_ en
 
 // (3) Stress: repeated reset → configure → compute cycles at the
 // same ring_dim. Exercises the hazeDeviceReset → reconfigure →
-// compute → D2H → stop_epoch loop heavily within one process.
+// compute → flush → D2H loop heavily within one process.
 // Each cycle goes through clear_state_locked at end-of-epoch and
 // a fresh ensure_recording_locked at the start of the next, so any
 // state leak across epoch boundaries that depends on accumulated

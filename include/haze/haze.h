@@ -53,8 +53,8 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // hazeMemsetAsync, hazeMemcpyPeerAsync). The `stream` parameter is
 // accepted for CUDA-shape parity but is intentionally not honoured for
 // ordering: HAZE is a recording layer that emits FHETCH IR, not an
-// execution engine. Stream-relative ordering is meaningless until a
-// hazeMemcpy(D2H) materializes the recorded program. The async entries
+// execution engine. Stream-relative ordering is meaningless until
+// hazeFlush() materializes the recorded program. The async entries
 // behave identically to their sync counterparts.
 //
 // hazePointerGetAttributes returns HAZE_SUCCESS for any non-null
@@ -128,7 +128,8 @@ HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
 
 /* Set program metadata recorded in the FHETCH trace produced by HAZE.
  * Defaults: name="haze", version="0.1", description="HAZE runtime".
- * Must be called before the first compute call to take effect. */
+ * Must be called before the first H2D or compute call to take effect (the
+ * first of either brings up the compiler backend). */
 HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
                                         const char *description) HAZE_NOEXCEPT;
 
@@ -140,7 +141,8 @@ HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
  * `dir` verbatim instead — convenient for producing one self-contained
  * directory to ship elsewhere (e.g. to replay on the FPGA host).
  *
- * Must be called before the first compute call to take effect. */
+ * Must be called before the first H2D or compute call to take effect (the
+ * first of either brings up the compiler backend). */
 HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
 
 /* Select the niobium-compiler target for replay.
@@ -170,13 +172,12 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  *
  * Resolution order:
  *   1. hazeSetTarget(target)  - explicit programmatic call.
- *   2. HAZE_TARGET env var    - read on the first replay-triggering D2H
- *                                if (1) is unset.
+ *   2. HAZE_TARGET env var    - read at the first hazeFlush() if (1) is unset.
  *   3. "local"                - default if both above are unset.
  *
- * Behaviour-by-target dispatch happens inside the next hazeMemcpy(D2H),
- * which finalises the recording, runs the replay, and populates the
- * shadow buffer before returning bytes to the host. */
+ * Behaviour-by-target dispatch happens inside hazeFlush(), which finalises the
+ * recording, runs the replay, and populates the tagged outputs' shadow buffers;
+ * a subsequent hazeMemcpy(D2H) then reads them. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 
 /* Finalize the current recording and write the project directory WITHOUT
@@ -194,12 +195,13 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
  * host and run `nbcc_fhetch_replay --project=<dir> --target=<device>`.
  *
  * No-op (returns HAZE_SUCCESS) when no recording is in flight. After it
- * returns the epoch is reset, so a subsequent hazeMemcpy(D2H) would start a
- * fresh recording rather than replay the one just written. */
+ * returns the epoch is reset and the program was not replayed in-process, so
+ * its outputs are not materialized — replay the emitted directory elsewhere to
+ * get results; a later in-process D2H of them returns HAZE_ERROR_NOT_FLUSHED. */
 HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
 
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer
-// that emits FHETCH IR; nothing executes until hazeMemcpy(D2H) flushes
+// that emits FHETCH IR; nothing executes until hazeFlush() dispatches
 // the recording. Stream-relative ordering is therefore not modelled,
 // and hazeStreamSynchronize / hazeStreamWaitEvent are no-ops returning
 // HAZE_SUCCESS. The handle and signature surface is preserved for

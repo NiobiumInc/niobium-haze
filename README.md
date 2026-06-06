@@ -40,8 +40,8 @@ simulator internals, see the companion repository:
  |   compiler() singleton + fhetch::* recording API |
  +--------------------------------------------------+
          |
-         | hazeMemcpy(D2H) finalises the .fhetch trace +
-         | manifest, then dispatches replay before reading
+         | hazeFlush() finalises the .fhetch trace + manifest
+         | and dispatches replay; D2H then reads the result
          v
          +-------------------+--------------------+
          |                                        |
@@ -75,10 +75,12 @@ simulator internals, see the companion repository:
    parity but are intentionally no-ops — recording has no notion of
    stream-relative ordering until the trace is flushed.
 
-4. **Replay & Read** — `hazeMemcpy(host_buf, dev_ptr, n, HAZE_MEMCPY_DEVICE_TO_HOST)`
-   finalises the current epoch's `.fhetch` trace, dispatches it to the
-   configured target, and copies the simulator-computed values into the host
-   buffer. D2H is the sole flush trigger; replay happens implicitly inside it.
+4. **Declare, Flush & Read** — `hazeTagOutput(dev_ptr)` declares each result you
+   want back, then `hazeFlush()` finalises the current epoch's `.fhetch` trace,
+   dispatches it to the configured target, and populates the tagged outputs'
+   shadow buffers. `hazeMemcpy(host_buf, dev_ptr, n, HAZE_MEMCPY_DEVICE_TO_HOST)`
+   then reads them. `hazeFlush` is the sole flush trigger (`hazeDeviceSynchronize`
+   is a no-op); a D2H of an untagged/unflushed address returns `HAZE_ERROR_NOT_FLUSHED`.
 
 5. **Submit (production)** — Choose a compiler-side target such as `FPGA_TRI`
    (or `FUNC_SIM` / `FHE_SIM` / `fhetch_sim`) before replay. Haze's transport
@@ -121,7 +123,9 @@ int main(void) {
 
     hazeAdd(d_dst, d_a, d_b, mod_idx, /*stream=*/NULL);
 
-    /* ---- D2H flushes the recording and reads the result back. ---- */
+    /* ---- Declare the output, run the recorded program, then read it back. ---- */
+    hazeTagOutput(d_dst);
+    hazeFlush();
     hazeMemcpy(result, d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
 
     printf("result[0] = %llu\n", (unsigned long long)result[0]);  /* 3 */
@@ -234,7 +238,7 @@ Runtime selector (consumed by `libhaze` itself, not the Makefile):
 
 | Variable      | Purpose                                                                                                                                                                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read on the first replay-triggering D2H. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
+| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read at the first `hazeFlush()`. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
 
 CMake-level toggles (`-D...`):
 
@@ -430,9 +434,10 @@ niobium-haze/
   every reference to `cudaStream_t`.
 
 - **Recording, not execution** — Every haze call appends to an in-memory
-  FHETCH trace. Nothing executes until `hazeMemcpy(D2H)` flushes the
-  recording: D2H finalises the trace, dispatches replay, then reads the
-  shadow buffer. Stream-relative ordering is therefore not modelled; the
+  FHETCH trace. Nothing executes until `hazeFlush()` dispatches the
+  recording: it finalises the trace, runs replay, and populates the tagged
+  outputs' shadow buffers, which a subsequent D2H reads. Stream-relative
+  ordering is therefore not modelled; the
   recording is single-threaded by construction and the .fhetch trace
   itself defines the schedule the compiler optimises against.
 
