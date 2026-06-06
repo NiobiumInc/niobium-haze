@@ -1,9 +1,9 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
 // Helpers for [integration]-tagged Catch2 cases: record through haze, the
-// bridge auto-synthesizes CC + .bin + templates, and D2H drives replay
-// back into the shadow buffers (see scripts/test_haze_integration.sh for
-// transport orchestration).
+// bridge auto-synthesizes CC + .bin + templates, and hazeFlush drives replay
+// back into the tagged outputs' shadow buffers (see scripts/test_haze_integration.sh
+// for transport orchestration).
 
 #pragma once
 

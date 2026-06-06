@@ -18,7 +18,7 @@ This guide defines how automated and manual PR reviews should be conducted for t
   - `src/common/` — `HazeMutex`, `HazeLockGuard`, error/log utilities.
   - `replay_bridge/` — OpenFHE integration, `cryptocontext.dat`, ciphertext template generation.
   - `include/haze/` — public C ABI (no C++ in interface).
-- **Execution model**: Every compute call appends a node to the FHETCH trace. `hazeMemcpy(D2H)` is the **sole flush trigger** — it calls `replay_and_populate()`, dispatches the trace, and writes simulator results into shadow buffers. `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops.
+- **Execution model**: Every compute call appends a node to the FHETCH trace. Outputs are **explicit**: `hazeTagOutput(ptr)` declares a result an output, then `hazeFlush()` is the **flush trigger** — it calls `replay_and_populate()`, dispatches the trace, and writes simulator results into the tagged outputs' shadow buffers. `hazeMemcpy(D2H)` is then a **pure shadow read**; a D2H of an address that was not tagged-and-flushed returns `HAZE_ERROR_NOT_FLUSHED`. `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops (nothing runs asynchronously, so there is nothing to wait for — they do not flush).
 
 ---
 
@@ -40,7 +40,7 @@ Label every issue: **Blocker / High / Medium / Low**.
 
 ### Blocker — must not merge
 - **Lock order violation**: any path where `DeviceAllocator` calls back into `EpochState` while holding `EpochState::mutex_`. The permitted direction is epoch → allocator only; the reverse deadlocks.
-- **Flush-trigger bypass**: any materialization (reading simulator results, writing to shadow storage) that happens outside of `hazeMemcpy(D2H)` → `replay_and_populate()`. This breaks the lazy execution contract.
+- **Flush-trigger bypass**: materialization (reading simulator results, writing to shadow storage) must go through `hazeFlush()` → `replay_and_populate()` (or the write-only `hazeWriteProgram()` finalize path). A new `replay_and_populate()` call site — or making `hazeMemcpy(D2H)` flush again instead of being a pure shadow read — breaks the explicit-flush contract.
 - **Exception crossing the C ABI boundary**: any `extern "C"` function that can throw. Every public entry point must be `HAZE_NOEXCEPT`.
 - **ABI break in `include/haze/`**: removing or reordering public API symbols, changing `hazeError_t` enumerator values, changing struct layouts in `haze_types.h`.
 - **`DevAddr` arithmetic outside the C ABI edge**: `DevAddr` is an `enum class : uintptr_t`; it must only be cast to/from `void*` at `src/api/` entry points, never inside core or common.
@@ -95,16 +95,17 @@ This is the most subtle correctness area in libhaze.
 
 ### 3.3 Shadow Storage Contract
 - **`alloc_set_` vs `shadow_data_`**: `alloc_set_` tracks lifetime (`hazeMalloc`/`hazeFree`); `shadow_data_` tracks payload (exists only after H2D/memset/D2D/`update_shadow`). Code that reads `shadow_data_` without first checking `alloc_set_` membership is a correctness bug.
-- **Missing entry reads**: D2H from an address with no `shadow_data_` entry must return zeros (not crash). Compute / D2D extract from a missing entry must return `SourceUnavailable` — using an uninitialized device address is a contract violation, not a defensive case.
+- **Missing entry reads**: D2H from an address with no `shadow_data_` entry must return `OutputNotFlushed` (`HAZE_ERROR_NOT_FLUSHED`) — nothing was tagged-and-flushed there, so there is nothing to read (a plain H2D'd input still has a `shadow_data_` entry and reads back fine). Compute / D2D extract from a missing entry must return `SourceUnavailable` — using an uninitialized device address is a contract violation, not a defensive case.
 - **`extract_polynomial_components`**: this evicts the shadow entry. Any code that reads the shadow after calling this is a use-after-evict bug.
 - **`hazeFree` eviction**: shadow entries at freed addresses must be cleared; leaking them past `hazeFree` causes ghost data in a subsequent `hazeMalloc` at the same address.
 
 ### 3.4 Record-and-Replay State Machine
-- **D2H as the sole flush trigger**: `replay_and_populate()` must only be called from `hazeMemcpy(D2H)`. Any new call site is a design violation.
-- **`EpochSession` RAII guard**: every compute call must go through an `EpochSession`. Missing it skips `ensure_initialized` and the recording start/stop lifecycle.
+- **Explicit output contract**: the flow is compute → `hazeTagOutput(ptr)` → `hazeFlush()` → `hazeMemcpy(D2H)`. `hazeTagOutput` declares an output (tagging any MRP residue promotes its whole group); `hazeFlush` executes the recording and materializes **only** the tagged outputs; D2H is a pure shadow read. Output-hood is the caller's declared intent — `store_compute_result_locked` must not auto-tag every computed value.
+- **Flush is the sole trigger**: `replay_and_populate()` may only be reached via `hazeFlush()` (and the write-only `hazeWriteProgram()` finalize path). `hazeMemcpy(D2H)` must NOT flush, and no other site may call it. Any new call site is a design violation.
+- **`EpochSession` RAII guard**: every compute call must go through an `EpochSession`. Missing it skips `ensure_initialized` and the recording start/stop lifecycle. `hazeTagOutput` deliberately does NOT use it — tagging is a declaration, not a compute op, and must not start a phantom recording.
 - **`tag_input` promotion**: `epoch().lookup_or_create_locked(addr)` creates a fresh `fhetch::Polynomial` from shadow bytes. Calling this on an address whose shadow was already evicted via `extract_polynomial_components` is a silent data hazard.
-- **`tag_output` registration**: outputs must be tagged before `stop_epoch()`. Missing `tag_output` means `result()` will not find the output polynomial and the D2H read returns stale zeros.
-- **No-op when not recording**: `replay_and_populate()` must be a no-op when no FHETCH epoch is in flight (e.g., plain H2D-then-D2H round-trips). Confirm the guard condition is preserved.
+- **`tag_output` registration**: only explicitly-tagged outputs (`pending_outputs_` and `pending_mrp_groups_`) are tagged for `fhetch::tag_output` before `stop_epoch()`. An untagged computed value is never materialized; a later D2H of it returns `HAZE_ERROR_NOT_FLUSHED`, not stale zeros.
+- **No-op when idle**: `replay_and_populate()` / `hazeFlush()` must be a no-op when no FHETCH epoch is in flight or no outputs were tagged (plain H2D-then-D2H round-trips, double-flush). Confirm the guard condition is preserved.
 
 ### 3.5 C ABI Boundary
 - **`HAZE_NOEXCEPT`**: all `extern "C"` entry points must be `HAZE_NOEXCEPT`. Check every new or modified function in `src/api/`.

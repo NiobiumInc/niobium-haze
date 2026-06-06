@@ -30,7 +30,7 @@
 namespace haze {
 
 // Singleton tracking the polymap, pending outputs, and recording flag for
-// the active epoch; replay_and_populate() drains it at D2H time. Public
+// the active epoch; replay_and_populate() drains it at flush time. Public
 // methods take mutex_; _locked variants require it held via EpochSession
 // (enforced by clang -Wthread-safety).
 class EpochState {
@@ -193,9 +193,9 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     HazeLockGuard guard_;
 };
 
-// D2H trigger: finalize any active recording (no-op otherwise), then
-// copy from the device shadow buffer to host. The api/ shim translates
-// the internal error at the C ABI edge.
+// Pure shadow read (backs hazeMemcpy D2H): the recording must already have run
+// via flush(); an address with no materialized bytes reads as OutputNotFlushed.
+// Does not finalize anything. The api/ shim translates the error at the C ABI edge.
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
 // Finalize an active recording by writing the project directory only — no
@@ -204,8 +204,8 @@ std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size
 std::expected<void, HazeInternalError> write_program() noexcept;
 
 // Declare a device address an output of the current recording (backs
-// hazeTagOutput). Starts an epoch if none is active. The api/ shim
-// translates the error at the C ABI edge.
+// hazeTagOutput). Does NOT start a recording — tagging with nothing recorded
+// returns SourceUnavailable. The api/ shim translates the error at the C ABI edge.
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
 
 // Execute the recorded program: finalize, dispatch replay, and populate the

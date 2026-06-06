@@ -97,7 +97,7 @@ TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
 TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]") {
     // rescale_base contains a prime not present in src_base. The HAZE
     // layer must reject this BEFORE opening an EpochSession — otherwise
-    // the next D2H would replay a dirty recording and crash.
+    // the next flush would replay a dirty recording and crash.
     configure_three_moduli();
     void *d = nullptr;
     REQUIRE(hazeMalloc(&d, kBytes) == HAZE_SUCCESS);
@@ -361,10 +361,9 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     // every residue, every output is also zero — we can assert exact
     // values without doing any FBC arithmetic.
     //
-    // Multi-output verification: replay_and_populate writes every bound
-    // compute result back to its shadow buffer in one pass, so reading
-    // both d0 and d1 back via D2H returns the materialized result, not
-    // stale post-allocator-reset memory.
+    // Multi-output verification: hazeFlush materializes every tagged output to
+    // its shadow buffer in one pass, so reading both d0 and d1 back via D2H
+    // returns the materialized result, not stale post-allocator-reset memory.
     configure_three_moduli();
 
     void *s0 = nullptr;
@@ -422,9 +421,8 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
     // p_base. For x identically zero, every digit's every output is
     // zero, so we can assert exact values across all 6 dst slots.
     // This exercises the digit-major flatten arithmetic at d=0 and d=1
-    // (catching off-by-one on the per_digit stride) and the multi-D2H
-    // materialization fix (every poly_map_ entry persisted on the first
-    // flush).
+    // (catching off-by-one on the per_digit stride) and the multi-output
+    // materialization path (every tagged output persisted on a single flush).
     configure_three_moduli();
 
     void *s0 = nullptr;

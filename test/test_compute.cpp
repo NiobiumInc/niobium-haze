@@ -1480,13 +1480,13 @@ TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[
     auto d_a = haze::test::allocate_and_h2d_residues(a);
     auto d_b = haze::test::allocate_and_h2d_residues(b);
     // dst is pre-allocated so the post-free hazeAddMrp does not recycle
-    // [intt_dst...] from pool_free_ before D2H triggers replay; otherwise
+    // [intt_dst...] from pool_free_ before the flush triggers replay; otherwise
     // lookup_or_create_locked rebinds them via shadow and hides the bug.
     auto dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto intt_dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     d.intt(intt_dst, haze::test::to_const(d_a));
 
-    // Pre-fix: leaks a stale pending_mrp_groups_ entry. At the D2H below,
+    // Pre-fix: leaks a stale pending_mrp_groups_ entry. At the flush below,
     // replay_and_populate's group walk hits MissingPolyMapBinding ->
     // HAZE_ERROR_INTERNAL because poly_map_[intt_dst...] are gone.
     haze::test::free_all_residues(intt_dst);

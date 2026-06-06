@@ -48,7 +48,7 @@ flowchart TB
   app -->|"2. hazeMalloc, hazeMemcpy(H2D),<br/>hazeAdd, hazeMul, ..."| haze
   haze -->|"sr_*, tag_input, tag_output"| fhetch
 
-  app -->|"3. hazeMemcpy(D2H)"| haze
+  app -->|"3. hazeTagOutput + hazeFlush"| haze
   haze -->|"stop_epoch"| fhetch
   fhetch ==>|"3. writes .fhetch trace"| trace
   fhetch -->|"4. fires on_post_recording"| bridge
