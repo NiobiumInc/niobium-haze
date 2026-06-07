@@ -194,8 +194,6 @@ void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
                                const std::vector<std::vector<uint64_t>> &expected) {
     REQUIRE(dst.size() == Driver::kNumResidues);
     REQUIRE(expected.size() == Driver::kNumResidues);
-    // Declare the results and run the program before reading them back. For an
-    // MRP driver, tagging the residues also promotes the group for the cross-check.
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i)
         REQUIRE(hazeTagOutput(dst[i]) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
@@ -1190,8 +1188,7 @@ TEST_CASE("hazeDeviceSynchronize does not flush; hazeFlush does", "[integration]
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
             HAZE_ERROR_NOT_FLUSHED);
 
-    // Synchronize is a no-op: it does not execute the recording, so even after
-    // tagging the read still finds no materialized bytes.
+    // Synchronize is a no-op (does not flush), so the tagged read still errors.
     REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
