@@ -143,9 +143,8 @@ class EpochState {
         std::vector<DevAddr> addrs;   // residue addrs in encounter order
         std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
     };
-    // Every MRP group seen this epoch (auto-registered by the MRP ops). Holds
-    // the group structure so tag_output_locked can expand a tagged residue to
-    // the whole ciphertext; membership alone does not materialize anything.
+    // Every MRP group seen this epoch; lets tag_output_locked expand a tagged
+    // residue to its whole ciphertext. Membership alone materializes nothing.
     std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // The explicitly-tagged subset of known_mrp_groups_ that gets emitted as a
     // fhetch MRP output at materialize time.

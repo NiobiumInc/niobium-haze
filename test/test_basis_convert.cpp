@@ -921,7 +921,6 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
     per_digit_dst_base.insert(per_digit_dst_base.end(), p_base.begin(), p_base.end());
     REQUIRE(per_digit_dst_base.size() == per_digit);
 
-    // One ModUp, all digits in one epoch: tag every output before the flush.
     for (void *p : dst_ptrs)
         REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);

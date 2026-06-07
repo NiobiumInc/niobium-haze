@@ -125,14 +125,12 @@ void EpochState::store_compute_result_locked(DevAddr addr,
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr addr) {
-    // Nothing to read back unless `addr` names a value produced this epoch.
     if (!poly_map_.contains(addr)) {
         record_internal_error(HazeInternalError::SourceUnavailable,
                               "tag_output_locked: addr not bound in poly_map_");
         return std::unexpected(HazeInternalError::SourceUnavailable);
     }
-    // MRP residue: tag every residue (each needs a shadow on flush) and
-    // promote the group so the multi-residue view is emitted too.
+    // An MRP residue tags every residue of its group and promotes the group.
     if (auto rev = addr_to_mrp_groups_.find(addr); rev != addr_to_mrp_groups_.end()) {
         for (const auto &group_name : rev->second) {
             auto g = known_mrp_groups_.find(group_name);
@@ -179,11 +177,8 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
         fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
-    // Overwrite any prior binding — the new H2D bytes are the truth at addr.
-    // This also silently drops any hazeTagOutput tag on addr: a re-uploaded
-    // input is no longer a computed output. Prior MRP-group entries naming addr
-    // stay valid (the group's claim is addr-bound; the new poly is the residue's
-    // new value).
+    // New H2D bytes are the truth at addr: overwrite the binding and drop any
+    // output tag (a re-uploaded input is not an output). MRP-group claims stay.
     poly_map_.insert_or_assign(addr, std::move(poly));
     pending_outputs_.erase(addr);
     return {};
@@ -209,9 +204,7 @@ EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
         return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
     }
     // try_emplace dedups re-registrations for the same op (e.g. in-place
-    // hazeMulMrp called twice) since the leading-addr name is stable. The
-    // group is only captured here (known set); tag_output_locked promotes it
-    // into pending_mrp_groups_ when the caller declares it an output.
+    // hazeMulMrp called twice) since the leading-addr name is stable.
     auto [it, inserted] = known_mrp_groups_.try_emplace(std::move(name));
     if (!inserted)
         return {};
@@ -397,29 +390,18 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
 }
 
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    // Pure shadow read; the program must already have run via hazeFlush().
-    // An address with no materialized bytes (untagged output or missing flush)
-    // returns OutputNotFlushed; a plain H2D-then-D2H round-trip still reads back
-    // the uploaded bytes.
     return allocator().copy_to_host(dst, src, count);
 }
 
 std::expected<void, HazeInternalError> write_program() noexcept {
-    // Write the project directory for the active recording without replaying.
-    // Unlike copy_to_host, there is no shadow read afterward — the caller
-    // ships the directory and replays it out of process (e.g. on the FPGA).
     return epoch().materialize_only();
 }
 
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
-    // Not a compute op: lock without starting a recording, so tagging with
-    // nothing recorded fails cleanly instead of opening a phantom epoch.
     return epoch().tag_output(addr);
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {
-    // Run the recorded program and populate shadows for the tagged outputs.
-    // No-op when not recording; safe to call repeatedly.
     return epoch().replay_and_populate();
 }
 

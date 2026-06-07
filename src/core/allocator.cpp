@@ -241,10 +241,8 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
         return std::unexpected(HazeInternalError::AllocTooSmall);
     auto data_it = shadow_data_.find(src);
     if (data_it == shadow_data_.end()) {
-        // Address allocated but no materialized bytes: never written, or a
-        // compute result that was never tagged as an output and flushed.
-        // Under the explicit-output model this is a caller error rather than
-        // a silent zero read.
+        // No materialized bytes (never written, or a computed result not tagged
+        // + flushed): an error rather than the old silent zero read.
         record_internal_error(
             HazeInternalError::OutputNotFlushed,
             "DeviceAllocator::copy_to_host: no shadow bytes (tag output + flush?)");

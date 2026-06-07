@@ -86,7 +86,6 @@ TEMPLATE_TEST_CASE("e2e simple.cpp program through the public C ABI (stock OpenF
     auto haze_cRot1 = ops::rotate(ctx, a, 1);
     auto haze_cRot2 = ops::rotate(ctx, a, -2);
 
-    // All six results come from one epoch: tag them and flush once, then read.
     ops::flush_cts({&haze_cAdd, &haze_cSub, &haze_cScalar, &haze_cMul, &haze_cRot1, &haze_cRot2});
     const auto bytes_cAdd = ops::d2h_ct(ctx, haze_cAdd);
     const auto bytes_cSub = ops::d2h_ct(ctx, haze_cSub);

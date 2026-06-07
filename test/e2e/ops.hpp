@@ -150,8 +150,7 @@ CtBytes d2h_ct(const OpCtx &ctx, const Ct &src);
 // Tag every residue of `ct`'s c0/c1 chains as an output of the recording.
 void tag_ct(const Ct &ct);
 
-// Tag the given ciphertexts and flush once — the "outputs ready" step run
-// after all compute and before d2h_ct reads.
+// Tag the given ciphertexts and flush once.
 void flush_cts(std::initializer_list<const Ct *> cts);
 
 void inject_ct(const OpCtx &ctx, const CtBytes &src,
