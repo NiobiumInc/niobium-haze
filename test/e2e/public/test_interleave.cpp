@@ -86,10 +86,11 @@ void stock_interlude(const ops::OpCtx &ctx) {
     decrypt_check(ctx.cc, ctx.keys.secretKey, s_mul, e_mul);
 }
 
-// Two haze epochs (add, then sub) through the public C ABI, each decrypt-checked
-// against the consumer's stock OpenFHE. When `interleave`, a stock-OpenFHE
-// interlude runs before and between the haze epochs. Returns the set of output
-// probe files the haze epochs produced.
+// Haze work through the public C ABI, decrypt-checked against the consumer's
+// stock OpenFHE. When `interleave`, stock-OpenFHE interludes run at three
+// positions: before any recording, INSIDE an open recording (between two
+// recorded ops, before the flush), and between two recordings. Returns the set
+// of output probe files the haze epochs produced.
 std::set<std::string> run_epochs(bool interleave) {
     // hazeDeviceReset fires hazeReplayBridgeReset, which wipes
     // serialized_probes/ on disk AND rewinds device-address allocation. Both are
@@ -116,24 +117,33 @@ std::set<std::string> run_epochs(bool interleave) {
     auto add_ref = ctx.cc->EvalAdd(ct1, ct2);
     auto sub_ref = ctx.cc->EvalSub(ct1, ct2);
 
+    // Stock interlude before any haze recording is open.
     if (interleave)
         stock_interlude(ctx);
 
     auto a = ops::h2d_ct(ctx, ct1);
     auto b = ops::h2d_ct(ctx, ct2);
 
-    // Haze epoch 1: add.
+    // Recording 1: add and sub recorded into ONE open epoch. When interleaving,
+    // a stock-OpenFHE interlude runs BETWEEN the two recorded ops while the
+    // recording is still open. Both results are tagged and flushed together.
     auto haze_add = ops::add(ctx, a, b);
-    ops::flush_cts({&haze_add});
+    if (interleave)
+        stock_interlude(ctx);
+    auto haze_sub = ops::sub(ctx, a, b);
+    ops::flush_cts({&haze_add, &haze_sub});
     const auto bytes_add = ops::d2h_ct(ctx, haze_add);
+    const auto bytes_sub = ops::d2h_ct(ctx, haze_sub);
 
+    // Stock interlude after the flush, before the next recording opens.
     if (interleave)
         stock_interlude(ctx);
 
-    // Haze epoch 2: sub.
-    auto haze_sub = ops::sub(ctx, a, b);
-    ops::flush_cts({&haze_sub});
-    const auto bytes_sub = ops::d2h_ct(ctx, haze_sub);
+    // Recording 2: an independent epoch, confirming the post-flush stock call
+    // did not bleed into the next trace.
+    auto haze_add2 = ops::add(ctx, a, b);
+    ops::flush_cts({&haze_add2});
+    const auto bytes_add2 = ops::d2h_ct(ctx, haze_add2);
 
     std::vector<double> e_add(kX1.size());
     std::vector<double> e_sub(kX1.size());
@@ -149,6 +159,10 @@ std::set<std::string> run_epochs(bool interleave) {
     auto ct_sub = sub_ref->Clone();
     ops::inject_ct(ctx, bytes_sub, ct_sub);
     decrypt_check(ctx.cc, ctx.keys.secretKey, ct_sub, e_sub);
+
+    auto ct_add2 = add_ref->Clone();
+    ops::inject_ct(ctx, bytes_add2, ct_add2);
+    decrypt_check(ctx.cc, ctx.keys.secretKey, ct_add2, e_add);
 
     return collect_probe_names();
 }

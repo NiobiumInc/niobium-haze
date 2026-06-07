@@ -40,8 +40,7 @@ extern "C" hazeError_t hazeGetDeviceProperties(hazeDeviceProp *prop, int device)
 }
 
 extern "C" hazeError_t hazeDeviceSynchronize() noexcept {
-    // No-op: nothing runs asynchronously here, so there is no device work to
-    // wait for. Executing the recording is hazeFlush()'s job, not sync's.
+    // No-op by design; see hazeDeviceSynchronize in haze.h.
     return HAZE_SUCCESS;
 }
 

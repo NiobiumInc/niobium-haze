@@ -192,37 +192,30 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     HazeLockGuard guard_;
 };
 
-// Pure shadow read (backs hazeMemcpy D2H): the recording must already have run
-// via flush(); an address with no materialized bytes reads as OutputNotFlushed.
-// Does not finalize anything. The api/ shim translates the error at the C ABI edge.
+// haze:: entry points for the api/ shims, which translate the returned
+// HazeInternalError at the C ABI edge. These forward to the EpochState members
+// above (or the allocator), which carry the detailed contract.
+
+// Pure shadow read backing hazeMemcpy D2H; unmaterialized bytes read as
+// OutputNotFlushed.
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
-// Finalize an active recording by writing the project directory only — no
-// replay, no shadow population. Peer of copy_to_host for the hazeWriteProgram
-// path; no-op when not recording. The api/ shim translates the error.
+// Backs hazeWriteProgram (EpochState::materialize_only).
 std::expected<void, HazeInternalError> write_program() noexcept;
 
-// Declare a device address an output of the current recording (backs
-// hazeTagOutput). Does NOT start a recording — tagging with nothing recorded
-// returns SourceUnavailable. The api/ shim translates the error at the C ABI edge.
+// Backs hazeTagOutput (EpochState::tag_output).
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
 
-// Execute the recorded program: finalize, dispatch replay, and populate the
-// shadow buffers for the tagged outputs (backs hazeFlush). No-op when not
-// recording. The api/ shim translates the error.
+// Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;
 
-// D2D as a recorded copy: promotes `src` if needed (via
-// `lookup_or_create_locked`), emits a pass-through fhetch IR node, and
-// binds `dst` to the result. Always starts an epoch — there is no
-// pre-recording byte-copy escape hatch. Returns the internal error type
-// so the api/ shim does the public-code translation at the C ABI edge.
+// D2D as a recorded pass-through copy: promotes `src` if needed and binds `dst`
+// to the result. Always starts an epoch (no pre-recording byte-copy escape hatch).
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t count) noexcept;
 
-// H2D-time eager-tag: register the H2D'd buffer at `addr` as a fhetch
-// input so subsequent compute / D2D ops see a tagged polynomial instead
-// of a never-touched shadow buffer.
+// H2D-time eager-tag: register the H2D'd buffer at `addr` as a fhetch input
+// (EpochState::tag_h2d_input_locked).
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept;
 
 } // namespace haze
