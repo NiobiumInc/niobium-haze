@@ -101,21 +101,13 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
-// Explicit outputs and execution.
-//
-// hazeTagOutput declares `ptr` an output of the in-flight recording, so the
-// next hazeFlush() materializes it and a later hazeMemcpy(D2H) can read it
-// back. For an MRP ciphertext, tagging any one residue pointer tags the whole
-// multi-residue value. Tagging an address that names no recorded value (no
-// compute / D2D / H2D result bound to it) returns HAZE_ERROR_SOURCE_UNAVAILABLE.
-// A later H2D to a tagged address drops the tag — the new uploaded bytes are
-// the truth at that address, not a computed output.
-//
-// hazeFlush executes the recorded program for the configured target (finalize
-// -> replay -> populate the tagged outputs' shadow buffers) and resets the
-// recording. No-op returning HAZE_SUCCESS when no recording is in flight or no
-// outputs were tagged. (hazeDeviceSynchronize does NOT flush — see above.)
+// Declare `ptr` an output of the in-flight recording (tagging any one residue
+// of an MRP value tags the whole value). HAZE_ERROR_SOURCE_UNAVAILABLE if `ptr`
+// names no recorded value; a later H2D to a tagged address drops the tag.
 HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
+
+// Run the recorded program and populate the tagged outputs' shadow buffers;
+// no-op when nothing is recorded or tagged.
 HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,
