@@ -397,10 +397,10 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
 }
 
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    // Pure shadow read; the program must already have run via hazeFlush() /
-    // hazeDeviceSynchronize(). An address with no materialized bytes (untagged
-    // output or missing flush) returns OutputNotFlushed; a plain H2D-then-D2H
-    // round-trip still reads back the uploaded bytes.
+    // Pure shadow read; the program must already have run via hazeFlush().
+    // An address with no materialized bytes (untagged output or missing flush)
+    // returns OutputNotFlushed; a plain H2D-then-D2H round-trip still reads back
+    // the uploaded bytes.
     return allocator().copy_to_host(dst, src, count);
 }
 
