@@ -1239,6 +1239,56 @@ TEST_CASE("D2H of an untagged result is pruned and returns NOT_FLUSHED", "[integ
     REQUIRE(hazeFree(d_drop) == HAZE_SUCCESS);
 }
 
+TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integration]") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "haze_write_program_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    // Program dir must be set before the first compute (forwarded at init).
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramDirectory(dir.string().c_str()) == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    void *d_a = nullptr;
+    void *d_b = nullptr;
+    void *d_dst = nullptr;
+    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> a(kRingDim, 3);
+    std::vector<uint64_t> b(kRingDim, 4);
+    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
+
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    // The .fhetch trace landed in the project dir, and nothing was replayed.
+    REQUIRE(fs::exists(dir));
+    bool wrote_trace = false;
+    for (const auto &entry : fs::directory_iterator(dir))
+        if (entry.path().extension() == ".fhetch")
+            wrote_trace = true;
+    REQUIRE(wrote_trace);
+    REQUIRE_FALSE(fs::exists(dir / "serialized_probes"));
+
+    // Write-without-replay leaves the output unmaterialized; a D2H errors.
+    std::vector<uint64_t> got(kRingDim, 0);
+    REQUIRE(hazeMemcpy(got.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+
+    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
