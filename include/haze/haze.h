@@ -125,16 +125,9 @@ HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
                                         const char *description) HAZE_NOEXCEPT;
 
-/* Override the directory where the recorded project is written.
- *
- * By default the project (the .fhetch trace, serialized inputs, ciphertext
- * templates, and cryptocontext.dat) is written under
- * <cwd>/<program_name>/. Setting an explicit path makes the project land at
- * `dir` verbatim instead — convenient for producing one self-contained
- * directory to ship elsewhere (e.g. to replay on the FPGA host).
- *
- * Must be called before the first H2D or compute call to take effect (the
- * first of either brings up the compiler backend). */
+/* Override where the recorded project is written (default <cwd>/<program_name>/);
+ * `dir` is used verbatim. Must be called before the first H2D or compute call
+ * (which brings up the compiler backend). */
 HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
 
 /* Select the niobium-compiler target for replay.
@@ -172,24 +165,13 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  * a subsequent hazeMemcpy(D2H) then reads them. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 
-/* Finalize the current recording and write the project directory WITHOUT
- * running replay.
- *
- * Where hazeFlush() finalizes the recording, dispatches replay, and reads
- * results back into host memory, hazeWriteProgram() stops after the project
- * directory is written: the .fhetch trace, serialized inputs, ciphertext
- * templates, and cryptocontext.dat. Nothing is executed and no results are
- * produced. Only outputs declared with hazeTagOutput() are emitted, so tag
- * them before calling this.
- *
- * Use it to emit a self-contained directory on a machine without the
- * compiler/hardware, then replay it elsewhere — e.g. ship it to the FPGA
- * host and run `nbcc_fhetch_replay --project=<dir> --target=<device>`.
- *
- * No-op (returns HAZE_SUCCESS) when no recording is in flight. After it
- * returns the epoch is reset and the program was not replayed in-process, so
- * its outputs are not materialized — replay the emitted directory elsewhere to
- * get results; a later in-process D2H of them returns HAZE_ERROR_NOT_FLUSHED. */
+/* Finalize the recording and write the project directory (.fhetch trace,
+ * inputs, ciphertext templates, cryptocontext) WITHOUT running replay; only
+ * hazeTagOutput()-declared outputs are emitted, so tag them first. Use it to
+ * record where the compiler/hardware isn't available and replay elsewhere (e.g.
+ * `nbcc_fhetch_replay --project=<dir> --target=<device>` on the FPGA host).
+ * No-op when not recording; nothing is materialized in-process, so a later
+ * in-process D2H of an output returns HAZE_ERROR_NOT_FLUSHED. */
 HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
 
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer

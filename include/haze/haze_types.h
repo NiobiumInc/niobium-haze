@@ -88,9 +88,10 @@ typedef enum {
     HAZE_ERROR_ALLOC_TOO_SMALL,    // allocation size < polynomial size
     HAZE_ERROR_SOURCE_UNAVAILABLE, // compute / D2D source has no shadow + no poly_map_
     HAZE_ERROR_NOT_FLUSHED,        // D2H of an untagged / unflushed address: tag output + hazeFlush
-    // Catch-all sits last at a high value, leaving room to add user-actionable
-    // codes sequentially above without ever colliding with it.
-    HAZE_ERROR_INTERNAL = 1000, // haze invariant broke or backend failed; see HAZE_DEBUG log
+    // Catch-all sits last as a single high bit (2^10). User-actionable codes are
+    // added sequentially above and must stay below it, so `err & HAZE_ERROR_INTERNAL`
+    // detects an internal error without enumerating every code.
+    HAZE_ERROR_INTERNAL = 1024, // haze invariant broke or backend failed; see HAZE_DEBUG log
 } hazeError_t;
 
 // ---------------------------------------------------------------------------
