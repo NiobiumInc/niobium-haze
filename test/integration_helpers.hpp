@@ -33,6 +33,36 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
     return picked;
 }
 
+// Three-prime variant of the setup above for MRP cases: same sequence, all
+// three modulus slots set before the single hazeConfigureDevice. Slots 1 and
+// 2 get the suite's standard NTT-friendly companion primes; slot 0 gets the
+// bridge-picked prime (not the raw request) so callers stay in lockstep with
+// the .ct round-trip even if the bridge ever picks a different prime.
+// Returns the configured base, index-aligned with the modulus slots.
+inline std::vector<uint64_t>
+setup_integration_mrp3_config(uint64_t ring_dim = 4096,
+                              uint64_t desired_modulus = 576460752303415297ULL) {
+    constexpr uint64_t kQ1 = 576460752303439873ULL;
+    constexpr uint64_t kQ2 = 576460752303702017ULL;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus, &picked) == HAZE_SUCCESS);
+    REQUIRE(picked != 0);
+    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    return {picked, kQ1, kQ2};
+}
+
+// a + b mod q for a, b in [0, q): one conditional subtract, no overflow for
+// q < 2^63 (all suite primes qualify).
+inline uint64_t add_mod(uint64_t a, uint64_t b, uint64_t q) {
+    const uint64_t s = a + b;
+    return (s >= q) ? s - q : s;
+}
+
 // Deterministic non-trivial residue. Avoids zeros and all-equal
 // coefficients across primes so per-residue bugs cannot hide behind a
 // trivial input.
