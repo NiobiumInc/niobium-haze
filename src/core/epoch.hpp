@@ -83,10 +83,15 @@ class EpochState {
     // group tags the whole ciphertext and promotes the group for emission.
     std::expected<void, HazeInternalError> tag_output_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
-    // Record a pass-through copy dst <- src under the COPY_MODULUS sentinel.
-    // A copy is modulus-agnostic and H2D eager-tags inputs, so the op needn't
-    // carry a real prime; shared by the SRP and MRP D2D paths.
-    std::expected<void, HazeInternalError> copy_result_locked(DevAddr dst, DevAddr src) noexcept
+    // Record a pass-through copy dst <- src. Pass the residue's real modulus
+    // when the caller knows it (MRP D2D has base[i]): the transport replay's
+    // trace-modulus contract requires output-producing ops to carry a real
+    // prime, and sentinel-modulus outputs cannot be probe-serialized by
+    // nbcc_fhetch_replay. The COPY_MODULUS sentinel default keeps the SRP D2D
+    // path (opaque buffer, no modulus known) working on the in-process
+    // simulator.
+    std::expected<void, HazeInternalError>
+    copy_result_locked(DevAddr dst, DevAddr src, uint64_t modulus = 0xFFFFFFFFFFFFFFFFULL) noexcept
         HAZE_REQUIRES(mutex_);
 
     // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
@@ -112,6 +117,14 @@ class EpochState {
     // input-side dst[0] reuse staleness is a known, separate limitation.
     void tag_mrp_input_if_new_locked(const std::string &name, const niobium::fhetch::MRP &mrp)
         HAZE_REQUIRES(mutex_);
+
+    // Stable counter-based name for the MRP group led by `leading` —
+    // "haze_mrp_in_N" / "haze_mrp_out_N". The same leading addr returns the
+    // same name within an epoch (re-registration dedup); invalidate() drops
+    // the binding so a recycled allocation gets a fresh name. Counter names
+    // keep the input/output namespace uniform with the SRP haze_in_N /
+    // haze_out_N counters (the old scheme embedded the device address).
+    std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
 
     EpochState(const EpochState &) = delete;
     EpochState &operator=(const EpochState &) = delete;
@@ -160,6 +173,11 @@ class EpochState {
     // Every MRP group seen this epoch; lets tag_output_locked expand a tagged
     // residue to its whole ciphertext. Membership alone materializes nothing.
     std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups_ HAZE_GUARDED_BY(mutex_);
+    // Leading-addr → assigned group name backing mrp_group_name_locked.
+    std::unordered_map<DevAddr, std::string> mrp_in_names_ HAZE_GUARDED_BY(mutex_);
+    std::unordered_map<DevAddr, std::string> mrp_out_names_ HAZE_GUARDED_BY(mutex_);
+    uint64_t mrp_in_name_counter_ HAZE_GUARDED_BY(mutex_) = 0;
+    uint64_t mrp_out_name_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     // Names of the explicitly-tagged subset of known_mrp_groups_, emitted as
     // fhetch MRP outputs at materialize time. Stored as names (resolved through
     // known_mrp_groups_ at flush) so a latest-write-wins replacement of a

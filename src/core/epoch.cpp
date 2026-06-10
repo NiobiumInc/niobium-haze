@@ -39,10 +39,9 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE):
-// the simulator reads it as "no reduction", so sr_addps(x, 0, kCopyModulus)
-// is a pure copy of x.
-constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE)
+// lives as copy_result_locked's default argument in epoch.hpp: the simulator
+// reads it as "no reduction", so sr_addps(x, 0, sentinel) is a pure copy.
 
 EpochState &EpochState::instance() noexcept {
     static EpochState inst;
@@ -95,6 +94,10 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     // unconditional double-erase is simpler than tagging addrs by owner.
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
+    // A recycled allocation leading a new group gets a fresh name rather
+    // than colliding with a possibly-pending group from its previous life.
+    mrp_in_names_.erase(addr);
+    mrp_out_names_.erase(addr);
 }
 
 std::expected<niobium::fhetch::Polynomial, HazeInternalError>
@@ -158,13 +161,28 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
     return {};
 }
 
-std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst,
-                                                                      DevAddr src) noexcept {
+std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
+                                                                      uint64_t modulus) noexcept {
+    // The emitted op always carries the COPY sentinel — hardware contract:
+    // the compiler reserves modulus-table index 0 for it and lowers
+    // ADDI imm=0 at m[0] as a register copy, not a modular add. When the
+    // caller knows the residue's real modulus (MRP D2D passes base[i]),
+    // record it as address→modulus METADATA only: captured output shapes
+    // feed the replay-bridge templates, and a sentinel-only output cannot
+    // be probe-serialized by nbcc_fhetch_replay.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
-    store_compute_result_locked(
-        dst, fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kCopyModulus));
+    constexpr uint64_t kSentinel = 0xFFFFFFFFFFFFFFFFULL;
+    auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kSentinel);
+    if (modulus != kSentinel) {
+        // Both ends: a source only ever touched by copies would otherwise
+        // keep the sentinel in its captured input record, and the replay
+        // chain would load it under the bridge's synthetic prime.
+        fhetch::bind_modulus(*src_poly, modulus);
+        fhetch::bind_modulus(copy, modulus);
+    }
+    store_compute_result_locked(dst, std::move(copy));
     return {};
 }
 
@@ -439,12 +457,26 @@ void EpochState::clear_state_locked() noexcept {
     pending_mrp_groups_.clear();
     addr_to_mrp_groups_.clear();
     mrp_input_tagged_names_.clear();
+    mrp_in_names_.clear();
+    mrp_out_names_.clear();
     recording_ = false;
     input_counter_ = 0;
     output_counter_ = 0;
+    mrp_in_name_counter_ = 0;
+    mrp_out_name_counter_ = 0;
     // Mirror clears to libnbfhetch so a failed materialise can't leak
     // captures into the next epoch; pairs with EpochSession's setup.
     niobium::compiler().clear_captured();
+}
+
+std::string EpochState::mrp_group_name_locked(bool output, DevAddr leading) {
+    auto &names = output ? mrp_out_names_ : mrp_in_names_;
+    if (auto it = names.find(leading); it != names.end())
+        return it->second;
+    auto &counter = output ? mrp_out_name_counter_ : mrp_in_name_counter_;
+    std::string name = (output ? "haze_mrp_out_" : "haze_mrp_in_") + std::to_string(counter++);
+    names.emplace(leading, name);
+    return name;
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noexcept {

@@ -23,39 +23,12 @@
 #include <expected>
 #include <niobium/fhetch_api.h>
 #include <span>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace haze {
 
 namespace fhetch = niobium::fhetch;
-
-namespace {
-
-// Derive an MRP group name from dst[0] (16-hex-encoded): same op → same
-// leading addr → same name, so the EpochState dedup collapses redundant
-// tags. Trailing addrs aren't part of the name; a caller MAY legally reuse a
-// live dst[0] for a different-shaped op in the same epoch (e.g. an in-place
-// rescale), in which case registration is latest-write-wins —
-// register_mrp_output_group_locked replaces the stale group. Identical
-// re-registration stays a no-op dedup. Note: MRP input tags
-// (tag_mrp_input_if_new_locked) reach fhetch immediately and keep first-wins
-// dedup — input-side reuse staleness is out of scope here.
-std::string mrp_signature_name(std::string_view prefix, DevAddr leading_addr) {
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(prefix.size() + 1 + 16);
-    out.append(prefix);
-    out.push_back('_');
-    const uint64_t v = to_uintptr(leading_addr);
-    for (int j = 15; j >= 0; --j)
-        out.push_back(hex[(v >> (j * 4)) & 0xFU]);
-    return out;
-}
-
-} // namespace
 
 std::expected<fhetch::MRP, HazeInternalError>
 build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len) {
@@ -75,10 +48,11 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
     auto mrp = fhetch::MRP::from_pairs(pairs);
     // Additive MRP-input tag on top of the per-addr SRP inputs from
     // lookup_or_create_locked; lets the bridge synthesize a multi-tower
-    // input CT and readers pull via fhetch::result(name, MRP&). Address-
-    // keyed name dedups when the same source MRP feeds multiple ops.
+    // input CT and readers pull via fhetch::result(name, MRP&). The name is
+    // stable per leading addr, so the EpochState dedup collapses redundant
+    // tags when the same source MRP feeds multiple ops.
     if (len > 1) {
-        auto group_name = mrp_signature_name("haze_mrp_in", addrs.front());
+        auto group_name = epoch().mrp_group_name_locked(/*output=*/false, addrs.front());
         epoch().tag_mrp_input_if_new_locked(group_name, mrp);
     }
     return mrp;
@@ -95,7 +69,7 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
         addrs.push_back(a);
     }
     if (len > 1) {
-        auto group_name = mrp_signature_name("haze_mrp_out", addrs.front());
+        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
         return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
                                                         std::move(group_name));
     }
@@ -139,12 +113,12 @@ std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *ds
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
         DevAddr d = to_dev_addr(dst[i]);
-        if (auto copied = epoch().copy_result_locked(d, to_dev_addr(src[i])); !copied)
+        if (auto copied = epoch().copy_result_locked(d, to_dev_addr(src[i]), base[i]); !copied)
             return copied;
         addrs.push_back(d);
     }
     if (len > 1) {
-        auto group_name = mrp_signature_name("haze_mrp_out", addrs.front());
+        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
         return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
                                                         std::move(group_name));
     }
