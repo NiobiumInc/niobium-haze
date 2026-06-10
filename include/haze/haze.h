@@ -170,6 +170,39 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  * a subsequent hazeMemcpy(D2H) then reads them. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 
+/* Hardware data-format toggles.
+ *
+ * The Niobium hardware pipeline operates on RNS residues in Montgomery form
+ * (R = 2^64) and on polynomials in bit-reversed coefficient order. These are
+ * independent opt-ins; the hardware convention is both together, and
+ * hazeSetNiobiumHw(enable) is the convenience that sets/clears both.
+ *
+ * When enabled, haze records hardware-format traces: input residues written
+ * for replay are Montgomery-encoded and/or bit-reversed, instruction
+ * immediates are Montgomery-encoded, and basis-convert lowers modulus
+ * switching to the hardware 4-op sequence. The replay engine decodes outputs
+ * back to ordinary form, so D2H results are byte-identical to a non-hardware
+ * run — the format never changes results, only the on-device representation.
+ *
+ * Constraints:
+ *   - The in-process "local" simulator cannot execute hardware-format
+ *     traces; the first compute/flush fails with HAZE_ERROR_NOT_SUPPORTED.
+ *     Use a transport target (e.g. "FUNC_SIM").
+ *   - Transport replay supports ordinary form or the full hardware format
+ *     only; enabling exactly one of the two toggles is recordable (for
+ *     trace inspection via hazeWriteProgram) but rejected at replay.
+ *
+ * Resolution order per flag (mirrors hazeSetTarget):
+ *   1. explicit hazeSetMontgomery / hazeSetBitReversal / hazeSetNiobiumHw call
+ *   2. HAZE_MONTGOMERY / HAZE_BIT_REVERSAL / HAZE_NIOBIUM_HW env var
+ *      (value "1" or "true"); HAZE_NIOBIUM_HW implies both flags
+ *   3. off (ordinary form, natural order)
+ * Must be called before the first H2D or compute call (which brings up the
+ * compiler backend). */
+HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetNiobiumHw(int enable) HAZE_NOEXCEPT;
+
 /* Finalize the recording and write the project directory (.fhetch trace,
  * inputs, ciphertext templates, cryptocontext) WITHOUT running replay; only
  * hazeTagOutput()-declared outputs are emitted, so tag them first. Use it to

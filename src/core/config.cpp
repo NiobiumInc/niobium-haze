@@ -189,6 +189,50 @@ std::string Config::target() const noexcept {
     return std::string{kLocalTarget};
 }
 
+namespace {
+
+// Truthy env-var read for the hardware-format toggles: "1" or "true".
+bool env_flag(const char *name) noexcept {
+    const char *v = std::getenv(name);
+    if (v == nullptr)
+        return false;
+    return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
+}
+
+} // namespace
+
+void Config::set_montgomery(bool enable) noexcept {
+    HazeLockGuard lock(mutex_);
+    montgomery_ = enable;
+    montgomery_set_ = true;
+}
+
+void Config::set_bit_reversal(bool enable) noexcept {
+    HazeLockGuard lock(mutex_);
+    bit_reversal_ = enable;
+    bit_reversal_set_ = true;
+}
+
+bool Config::montgomery() const noexcept {
+    {
+        HazeLockGuard lock(mutex_);
+        if (montgomery_set_)
+            return montgomery_;
+    }
+    // Env fallback mirrors target(): consulted only when no explicit setter
+    // call has been made. HAZE_NIOBIUM_HW is the both-flags convenience.
+    return env_flag("HAZE_MONTGOMERY") || env_flag("HAZE_NIOBIUM_HW");
+}
+
+bool Config::bit_reversal() const noexcept {
+    {
+        HazeLockGuard lock(mutex_);
+        if (bit_reversal_set_)
+            return bit_reversal_;
+    }
+    return env_flag("HAZE_BIT_REVERSAL") || env_flag("HAZE_NIOBIUM_HW");
+}
+
 void Config::reset() noexcept {
     HazeLockGuard lock(mutex_);
     ring_dim_ = 0;
@@ -203,6 +247,10 @@ void Config::reset() noexcept {
     program_info_set_ = false;
     target_set_ = false;
     program_dir_set_ = false;
+    montgomery_ = false;
+    bit_reversal_ = false;
+    montgomery_set_ = false;
+    bit_reversal_set_ = false;
 }
 
 } // namespace haze
