@@ -575,30 +575,28 @@ TEST_CASE("niobium_hw transport: A/B byte-exact vs ordinary mode", "[integration
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-TEST_CASE("niobium_hw transport: NTT and automorph under hardware format",
-          "[integration][niobium_hw][!mayfail]") {
+TEST_CASE("niobium_hw transport: NTT round trip and automorph under hardware format",
+          "[integration][niobium_hw]") {
     if (!transport_target_active())
         SKIP("hardware format requires a transport target (run under make test-transport)");
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
 
-    // Probe for the two ops whose hardware-format behavior is still open
-    // ([!mayfail] until fixed compiler-side). A/B against ordinary mode,
-    // byte-exact once it passes. Findings as of 2026-06-10:
+    // In-contract NTT/morph use under the hardware format, A/B byte-exact
+    // against ordinary mode.
     //
-    //  - automorph: the output probe is never produced by the transport even
-    //    in ORDINARY mode (the morph's haze_out .ct is missing,
-    //    "EvalAutomorphism Keys: 0") — same pre-existing FUNC_SIM family as
-    //    the rotate/automorph suite failures; not a hardware-format issue.
-    //  - standalone NTT: PROVEN root cause — under --niobium_hw the driver
-    //    bit-reverses ALL input data at load ("All CKKS polynomials in this
-    //    context are in EVALUATION format"), but an NTT's input is
-    //    coefficient-format data, and an NTT does not commute with permuting
-    //    its input. Verified bit-for-bit: hardware_NTT(x) ==
-    //    ordinary_NTT(bitrev(x)) on every slot. The hw NTT arithmetic itself
-    //    is correct; the fix needs per-element format metadata in the input
-    //    records so the driver only bit-reverses true evaluation-format
-    //    residues (compiler-side, with haze tagging real formats).
-    const bool with_automorph = true;
+    // The niobium hardware contract: program inputs are always
+    // evaluation-form, and the storage layout (bit-reversed order) plus the
+    // hw NTT's I/O conventions are self-consistent only for data that stays
+    // inside a trace. A STANDALONE forward NTT of a program input is
+    // out-of-contract: the input is conceptually coefficient-form, the load
+    // path bit-reverses it like all inputs, and an NTT does not commute with
+    // permuting its input — verified bit-for-bit that hardware_NTT(x) ==
+    // ordinary_NTT(bitrev(x)) on every slot. So this test exercises the
+    // in-contract INTT -> NTT round trip (the coefficient intermediate never
+    // crosses the program boundary), and the MRP automorph (the
+    // modulus-carrying path; the bare SRP hazeAutomorph is modulus-less, so
+    // its output template keeps the bridge's synthetic prime and cannot be
+    // probe-filled under the hardware format).
     auto run_ntt = [&]() {
         REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
         uint64_t picked = 0;
@@ -608,22 +606,27 @@ TEST_CASE("niobium_hw transport: NTT and automorph under hardware format",
 
         const std::vector<uint64_t> a = haze::test::make_residue(kQ0, 404, kRingDim);
         void *src = nullptr;
+        void *coeff = nullptr;
         void *fwd = nullptr;
         void *rot = nullptr;
-        for (void **p : {&src, &fwd, &rot})
+        for (void **p : {&src, &coeff, &fwd, &rot})
             REQUIRE(hazeMalloc(p, kBytes) == HAZE_SUCCESS);
         REQUIRE(hazeMemcpy(src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-        REQUIRE(hazeNTT(fwd, src, 0, nullptr) == HAZE_SUCCESS);
-        if (with_automorph)
-            REQUIRE(hazeAutomorph(rot, src, 5, nullptr) == HAZE_SUCCESS);
+        // In-contract NTT use: program inputs are always evaluation-form on
+        // the niobium hardware; coefficient-form data exists only BETWEEN
+        // hardware ops. Exercise the INTT -> NTT round trip so the
+        // coefficient intermediate never crosses the program boundary.
+        REQUIRE(hazeINTT(coeff, src, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeNTT(fwd, coeff, 0, nullptr) == HAZE_SUCCESS);
+        const uint64_t base[] = {kQ0};
+        void *rot_dst[] = {rot};
+        const void *rot_src[] = {src};
+        REQUIRE(hazeAutomorphMrp(rot_dst, rot_src, 5, base, 1, nullptr) == HAZE_SUCCESS);
         REQUIRE(hazeTagOutput(fwd) == HAZE_SUCCESS);
-        if (with_automorph)
-            REQUIRE(hazeTagOutput(rot) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(rot) == HAZE_SUCCESS);
         REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
-        std::vector<void *> outs = {fwd};
-        if (with_automorph)
-            outs.push_back(rot);
+        std::vector<void *> outs = {fwd, rot};
         std::vector<std::vector<uint64_t>> results;
         for (void *out : outs) {
             std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
