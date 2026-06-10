@@ -98,13 +98,18 @@ class EpochState {
         HAZE_REQUIRES(mutex_);
 
     // Register an MRP-shaped grouping so replay can emit a single
-    // fhetch::tag_output(name, MRP); deduped by name on re-registration.
+    // fhetch::tag_output(name, MRP). Latest-write-wins on re-registration:
+    // identical membership is a no-op, anything else replaces/evicts (see the
+    // implementation for the full semantics).
     std::expected<void, HazeInternalError>
     register_mrp_output_group_locked(std::span<const DevAddr> addrs,
                                      std::span<const uint64_t> moduli, std::string &&name)
         HAZE_REQUIRES(mutex_);
 
-    // Pass-through to fhetch::tag_input(name, MRP), deduped by name.
+    // Pass-through to fhetch::tag_input(name, MRP), deduped by name. Unlike
+    // output groups (latest-write-wins, see register_mrp_output_group_locked),
+    // input tags reach fhetch immediately and keep first-wins dedup —
+    // input-side dst[0] reuse staleness is a known, separate limitation.
     void tag_mrp_input_if_new_locked(const std::string &name, const niobium::fhetch::MRP &mrp)
         HAZE_REQUIRES(mutex_);
 
@@ -130,6 +135,12 @@ class EpochState {
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
+    // Drop one group wholesale: scrub every member's reverse-map entry, then
+    // erase the group from known_mrp_groups_ and pending_mrp_groups_. Members'
+    // poly_map_ bindings and per-residue output tags are untouched — they stay
+    // valid as standalone SRP values.
+    void evict_mrp_group_locked(const std::string &name) noexcept HAZE_REQUIRES(mutex_);
+
     // Lock order: epoch → allocator only. Allocator-side code must
     // never call back into EpochState while holding its own lock.
     HazeMutex mutex_;
@@ -137,8 +148,11 @@ class EpochState {
     // pending_outputs_ is the addr-keyed subset that names the outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
-    // MRP-shaped output groupings, keyed by name so re-registration of
-    // the same op (same dst[0] → same name) is a free dedup.
+    // MRP-shaped output groupings, keyed by leading-dst-derived name.
+    // Registration is latest-write-wins — identical re-registration is a
+    // no-op, a different-shaped registration replaces the group and evicts
+    // any other group claiming one of the new addrs (see
+    // register_mrp_output_group_locked).
     struct PendingMrpGroup {
         std::vector<DevAddr> addrs;   // residue addrs in encounter order
         std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
@@ -146,11 +160,18 @@ class EpochState {
     // Every MRP group seen this epoch; lets tag_output_locked expand a tagged
     // residue to its whole ciphertext. Membership alone materializes nothing.
     std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups_ HAZE_GUARDED_BY(mutex_);
-    // The explicitly-tagged subset of known_mrp_groups_ that gets emitted as a
-    // fhetch MRP output at materialize time.
-    std::unordered_map<std::string, PendingMrpGroup> pending_mrp_groups_ HAZE_GUARDED_BY(mutex_);
+    // Names of the explicitly-tagged subset of known_mrp_groups_, emitted as
+    // fhetch MRP outputs at materialize time. Stored as names (resolved through
+    // known_mrp_groups_ at flush) so a latest-write-wins replacement of a
+    // group's membership is automatically what gets exported. Invariant: subset
+    // of known_mrp_groups_ keys, maintained by register_mrp_output_group_locked
+    // / evict_mrp_group_locked / clear_state_locked.
+    std::unordered_set<std::string> pending_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // Reverse index addr → group names, kept in lockstep with
     // known_mrp_groups_ so invalidate() drops stale registrations in O(group_size).
+    // After any registration completes, an addr belongs to AT MOST ONE group
+    // (conflicting claims are evicted); tag_output_locked's whole-group
+    // promotion relies on that invariant.
     std::unordered_map<DevAddr, std::unordered_set<std::string>>
         addr_to_mrp_groups_ HAZE_GUARDED_BY(mutex_);
     // Dedup set for MRP input tags; reset by clear_state_locked.

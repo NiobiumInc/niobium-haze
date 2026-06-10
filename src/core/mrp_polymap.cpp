@@ -36,8 +36,13 @@ namespace {
 
 // Derive an MRP group name from dst[0] (16-hex-encoded): same op → same
 // leading addr → same name, so the EpochState dedup collapses redundant
-// tags. Trailing addrs aren't part of the name; haze's allocator doesn't
-// reuse dst[0] within a recording, so distinct ops can't collide.
+// tags. Trailing addrs aren't part of the name; a caller MAY legally reuse a
+// live dst[0] for a different-shaped op in the same epoch (e.g. an in-place
+// rescale), in which case registration is latest-write-wins —
+// register_mrp_output_group_locked replaces the stale group. Identical
+// re-registration stays a no-op dedup. Note: MRP input tags
+// (tag_mrp_input_if_new_locked) reach fhetch immediately and keep first-wins
+// dedup — input-side reuse staleness is out of scope here.
 std::string mrp_signature_name(std::string_view prefix, DevAddr leading_addr) {
     static constexpr char hex[] = "0123456789abcdef";
     std::string out;

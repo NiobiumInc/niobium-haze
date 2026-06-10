@@ -20,6 +20,8 @@
 #include "core/config.hpp"
 #include "core/polynomial_io.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -60,30 +62,34 @@ void EpochState::ensure_recording_locked() {
     }
 }
 
+void EpochState::evict_mrp_group_locked(const std::string &name) noexcept {
+    auto group_it = known_mrp_groups_.find(name);
+    if (group_it == known_mrp_groups_.end())
+        return;
+    for (DevAddr member : group_it->second.addrs) {
+        auto o = addr_to_mrp_groups_.find(member);
+        if (o == addr_to_mrp_groups_.end())
+            continue;
+        o->second.erase(name);
+        if (o->second.empty())
+            addr_to_mrp_groups_.erase(o);
+    }
+    known_mrp_groups_.erase(group_it);
+    pending_mrp_groups_.erase(name);
+}
+
 void EpochState::invalidate(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
     // Drop any MRP group that names addr so a recycled allocation can't
     // bind a stale group entry to a new polynomial at replay time.
     if (auto rev_it = addr_to_mrp_groups_.find(addr); rev_it != addr_to_mrp_groups_.end()) {
+        // Move the names out and erase addr's entry first: evict's per-member
+        // sweep edits the reverse map (would invalidate rev_it) and skips addr
+        // for free (replaces the old `if (other == addr) continue;` guard).
         auto group_names = std::move(rev_it->second);
         addr_to_mrp_groups_.erase(rev_it);
-        for (const auto &name : group_names) {
-            auto group_it = known_mrp_groups_.find(name);
-            if (group_it == known_mrp_groups_.end())
-                continue;
-            for (DevAddr other : group_it->second.addrs) {
-                if (other == addr)
-                    continue;
-                auto o = addr_to_mrp_groups_.find(other);
-                if (o == addr_to_mrp_groups_.end())
-                    continue;
-                o->second.erase(name);
-                if (o->second.empty())
-                    addr_to_mrp_groups_.erase(o);
-            }
-            known_mrp_groups_.erase(group_it);
-            pending_mrp_groups_.erase(name);
-        }
+        for (const auto &name : group_names)
+            evict_mrp_group_locked(name);
     }
     // pending_outputs_ is a subset of poly_map_; erase-on-miss is O(1), so
     // unconditional double-erase is simpler than tagging addrs by owner.
@@ -132,6 +138,10 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
     }
     // An MRP residue tags every residue of its group and promotes the group.
     if (auto rev = addr_to_mrp_groups_.find(addr); rev != addr_to_mrp_groups_.end()) {
+        // Registration keeps an addr in at most one group (and erases empty
+        // reverse entries), so this set holds exactly one name; the loop is
+        // kept as defense in depth should that invariant ever relax.
+        assert(rev->second.size() == 1);
         for (const auto &group_name : rev->second) {
             auto g = known_mrp_groups_.find(group_name);
             if (g == known_mrp_groups_.end())
@@ -139,7 +149,7 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
             for (DevAddr a : g->second.addrs)
                 if (!pending_outputs_.contains(a))
                     pending_outputs_.emplace(a, "haze_out_" + std::to_string(output_counter_++));
-            pending_mrp_groups_.try_emplace(group_name, g->second);
+            pending_mrp_groups_.insert(group_name);
         }
         return {};
     }
@@ -203,11 +213,63 @@ EpochState::register_mrp_output_group_locked(std::span<const DevAddr> addrs,
         record_internal_error(HazeInternalError::MrpGroupAddrModuliMismatch, body.str().c_str());
         return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
     }
-    // try_emplace dedups re-registrations for the same op (e.g. in-place
-    // hazeMulMrp called twice) since the leading-addr name is stable.
-    auto [it, inserted] = known_mrp_groups_.try_emplace(std::move(name));
-    if (!inserted)
+    // Latest-write-wins registration. Identical re-registration (same op
+    // re-run, e.g. an in-place accumulation loop) is a cheap no-op; anything
+    // else replaces stale group state so a tagged readback assembles the
+    // membership of the most recent write, never a stale addr list / moduli.
+    auto existing = known_mrp_groups_.find(name);
+    if (existing != known_mrp_groups_.end() && existing->second.addrs.size() == addrs.size() &&
+        std::equal(addrs.begin(), addrs.end(), existing->second.addrs.begin()) &&
+        std::equal(moduli.begin(), moduli.end(), existing->second.moduli.begin())) {
+        // Safe to skip the conflict sweep below: any competing registration
+        // since this group's last write would have evicted it (existing would
+        // be end()), so no other group can claim these addrs right now.
         return {};
+    }
+
+    // Any other group claiming one of the new addrs is falsified by this
+    // write: its multi-residue claim no longer describes what the addr holds.
+    // Evict it wholesale (mirrors invalidate() on free). Members keep their
+    // poly_map_ bindings and per-residue tags as standalone SRP values.
+    for (DevAddr a : addrs) {
+        auto rev = addr_to_mrp_groups_.find(a);
+        if (rev == addr_to_mrp_groups_.end())
+            continue;
+        // Copy: evict_mrp_group_locked edits the reverse map under us.
+        std::vector<std::string> conflicting(rev->second.begin(), rev->second.end());
+        for (const auto &other : conflicting)
+            if (other != name)
+                evict_mrp_group_locked(other);
+    }
+
+    if (existing != known_mrp_groups_.end()) {
+        // Same name, new shape (e.g. an in-place rescale re-using dst[0] with
+        // fewer residues): replace membership in place. pending_mrp_groups_
+        // stores names, so an already-tagged group exports the replacement.
+        for (DevAddr old_addr : existing->second.addrs) {
+            auto o = addr_to_mrp_groups_.find(old_addr);
+            if (o == addr_to_mrp_groups_.end())
+                continue;
+            o->second.erase(name);
+            if (o->second.empty())
+                addr_to_mrp_groups_.erase(o);
+        }
+        existing->second.addrs.assign(addrs.begin(), addrs.end());
+        existing->second.moduli.assign(moduli.begin(), moduli.end());
+        for (DevAddr a : addrs)
+            addr_to_mrp_groups_[a].insert(name);
+        // A tagged group's members each carry a per-residue output tag so
+        // flush-time shadow population covers them; extend that to members
+        // introduced by the replacement.
+        if (pending_mrp_groups_.contains(name)) {
+            for (DevAddr a : addrs)
+                if (!pending_outputs_.contains(a))
+                    pending_outputs_.emplace(a, "haze_out_" + std::to_string(output_counter_++));
+        }
+        return {};
+    }
+
+    auto [it, inserted] = known_mrp_groups_.try_emplace(std::move(name));
     it->second.addrs.assign(addrs.begin(), addrs.end());
     it->second.moduli.assign(moduli.begin(), moduli.end());
     for (DevAddr a : addrs)
@@ -232,7 +294,20 @@ std::expected<void, HazeInternalError> EpochState::tag_pending_outputs_locked() 
 
     // Also tag each MRP group as a fhetch MRP output so external callers
     // can pull the multi-residue view via fhetch::result(name, MRP&).
-    for (const auto &[name, g] : pending_mrp_groups_) {
+    // pending_mrp_groups_ holds names; resolve through known_mrp_groups_ so
+    // the membership exported is the latest registration for that name.
+    for (const auto &name : pending_mrp_groups_) {
+        auto g_it = known_mrp_groups_.find(name);
+        if (g_it == known_mrp_groups_.end()) {
+            // pending ⊆ known is maintained by registration/eviction; a miss
+            // here is a state-management bug, not recoverable.
+            std::ostringstream body;
+            body << "tag_pending_outputs_locked: pending MRP group '" << name
+                 << "' missing from known_mrp_groups_";
+            record_internal_error(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            return std::unexpected(HazeInternalError::MissingPolyMapBinding);
+        }
+        const auto &g = g_it->second;
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
         pairs.reserve(g.addrs.size());
         for (size_t i = 0; i < g.addrs.size(); ++i) {

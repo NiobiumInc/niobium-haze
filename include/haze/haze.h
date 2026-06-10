@@ -103,7 +103,12 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
 
 // Declare `ptr` an output of the in-flight recording (tagging any one residue
 // of an MRP value tags the whole value). HAZE_ERROR_SOURCE_UNAVAILABLE if `ptr`
-// names no recorded value; a later H2D to a tagged address drops the tag.
+// names no recorded value; a later H2D to a tagged address drops the tag. A
+// tag exports the value's final binding and shape at flush time — if a later op
+// re-registers the tagged addrs as a different-shaped multi-residue value, the
+// readback reflects that latest registration, and if a later op claims a tagged
+// residue into a different value entirely, the original group's multi-residue
+// view is dropped (its residues still materialize individually).
 HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
 
 // Run the recorded program and populate the tagged outputs' shadow buffers;
