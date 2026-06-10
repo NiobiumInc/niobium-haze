@@ -426,6 +426,48 @@ void install_trace_output_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
     }
 }
 
+// Input counterpart of install_trace_output_moduli, with one extra contract:
+// inputs carry real residues (already reduced mod the trace modulus), so the
+// install must be value-preserving. SwitchModulusAtIndex recenters values
+// around the old modulus (right for zeroed templates, wrong for data), so
+// snapshot the raw residues, switch the tower params, and restore them.
+// Without this the input .bin towers keep the synthetic CC's primes, and a
+// hardware-format replay (nbcc_fhetch_replay --niobium_hw) Montgomery-encodes
+// the residues with the WRONG modulus — the tower's, not the trace's.
+void install_trace_input_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
+                                const niobium::CapturedShape &shape, uint64_t ring_dim) {
+    const auto corder = static_cast<uint32_t>(2 * ring_dim);
+    auto &elements = ct->GetElements();
+    if (elements.size() != shape.per_element_moduli.size())
+        throw std::runtime_error("install_trace_input_moduli: element/shape count mismatch");
+    for (size_t e = 0; e < elements.size(); ++e) {
+        const auto &moduli = shape.per_element_moduli[e];
+        auto &towers = elements[e].GetAllElements();
+        if (towers.size() != moduli.size())
+            throw std::runtime_error("install_trace_input_moduli: tower/moduli count mismatch");
+        for (size_t t = 0; t < moduli.size(); ++t) {
+            const uint64_t q = moduli[t];
+            if (q == 0 || q == kCopyModulus)
+                continue;
+            if (towers[t].GetModulus().ConvertToInt() == q)
+                continue;
+            const size_t n = towers[t].GetLength();
+            std::vector<uint64_t> raw(n);
+            const auto &vals = towers[t].GetValues();
+            for (size_t i = 0; i < n; ++i)
+                raw[i] = vals[i].ConvertToInt();
+            const auto root =
+                lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
+            elements[e].SwitchModulusAtIndex(t, DCRTPoly::Integer(q),
+                                             DCRTPoly::Integer(root.ConvertToInt()));
+            // Captured residues are already reduced mod q, so a verbatim
+            // refill restores them under the freshly-installed modulus.
+            fill_native_poly(elements[e].GetAllElements()[t], raw,
+                             "install_trace_input_moduli[tower " + std::to_string(t) + "]");
+        }
+    }
+}
+
 // LOAD-BEARING. Runs between stop_recording and reconstruct to produce the
 // OpenFHE artifacts the replay path needs. local_cache is per-call.
 void on_post_recording(const HookCtx &hctx) {
@@ -443,6 +485,10 @@ void on_post_recording(const HookCtx &hctx) {
                 return;
             }
             auto ct = synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
+            // [[clang::suppress]]: the analyzer reports divide-by-zero /
+            // shift-overflow on paths inside OpenFHE's ubintnat.h reached
+            // via RootOfUnity; q == 0 is guarded before any such call.
+            [[clang::suppress]] install_trace_input_moduli(ct, rec.shape, hctx.ring_dim);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
                 log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }
@@ -460,7 +506,9 @@ void on_post_recording(const HookCtx &hctx) {
                     return;
                 }
                 auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
-                install_trace_output_moduli(ct, shape, hctx.ring_dim);
+                // [[clang::suppress]]: same ubintnat.h analyzer false
+                // positives as the input-moduli install above.
+                [[clang::suppress]] install_trace_output_moduli(ct, shape, hctx.ring_dim);
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
                     log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }

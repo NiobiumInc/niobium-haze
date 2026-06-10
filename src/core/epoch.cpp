@@ -477,6 +477,18 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {
+    // Hardware-format traces can't execute on the in-process simulator.
+    // ensure_initialized() already refuses first-time init for this
+    // combination (so nothing was recorded); checking again here makes the
+    // failure visible at the flush call instead of a silent no-op followed
+    // by OutputNotFlushed on the next D2H, and also covers the
+    // flags-set-after-init ordering the init-time check can't see.
+    if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
+        record_internal_error(HazeInternalError::HardwareFormatUnsupported,
+                              "haze::flush (montgomery/bit_reversal require a transport "
+                              "target such as FUNC_SIM)");
+        return std::unexpected(HazeInternalError::HardwareFormatUnsupported);
+    }
     return epoch().replay_and_populate();
 }
 

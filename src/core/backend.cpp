@@ -46,6 +46,18 @@ bool CompilerBackend::ensure_initialized() noexcept {
     if (initialized_.load(std::memory_order_relaxed))
         return true;
 
+    // The in-process simulator executes ordinary-form traces only; reject
+    // the hardware-format toggles up front so the failure names the real
+    // cause instead of surfacing later as a generic replay/flush error.
+    const bool montgomery = config().montgomery();
+    const bool bit_reversal = config().bit_reversal();
+    if ((montgomery || bit_reversal) && config().target() == kLocalTarget) {
+        record_internal_error(HazeInternalError::HardwareFormatUnsupported,
+                              "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
+                              "require a transport target such as FUNC_SIM)");
+        return false;
+    }
+
     // niobium::compiler() can throw (bad_alloc, config errors); catch here
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
@@ -54,14 +66,19 @@ bool CompilerBackend::ensure_initialized() noexcept {
         const std::string program_description = config().program_description();
         const std::string target = config().target();
 
-        // Synthesize a minimal argv to pass --target= to compiler().init()
-        // (no setter is exposed). init copies argv during the call, so
-        // function-local storage is safe.
+        // Synthesize a minimal argv to pass --target= (and the hardware
+        // data-format flags) to compiler().init() — no setters are exposed.
+        // init copies argv during the call, so function-local storage is safe.
         std::string prog_storage = program_name;
         std::string target_arg_storage = "--target=" + target;
-        char *argv[3] = {prog_storage.data(), target_arg_storage.data(), nullptr};
-        // argc is 2; the trailing nullptr is the standard argv terminator.
+        std::string montgomery_arg_storage = "--montgomery";
+        std::string bitrev_arg_storage = "--bit_reversal";
+        char *argv[5] = {prog_storage.data(), target_arg_storage.data(), nullptr, nullptr, nullptr};
         int argc = 2;
+        if (montgomery)
+            argv[argc++] = montgomery_arg_storage.data();
+        if (bit_reversal)
+            argv[argc++] = bitrev_arg_storage.data();
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
         // Optional explicit output dir: when set via hazeSetProgramDirectory,
