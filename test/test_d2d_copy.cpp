@@ -11,9 +11,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -177,6 +179,17 @@ TEST_CASE("hazeMemcpy(D2D) promotes an H2D'd source through the IR copy", "[inte
     // H2D'd-but-never-compute-touched source: D2D triggers lookup_or_create
     // which promotes the shadow bytes into a tagged fhetch input, then
     // emits the copy IR. Round-trip bytes must match the original H2D.
+    //
+    // Transport limitation: the SRP D2D of an opaque buffer has no modulus to
+    // bind the copy to, so its output carries the COPY sentinel, which the
+    // transport replay's trace-modulus contract rejects at probe
+    // serialization ("SetValues(): Parameter mismatch"). Use hazeMemcpyMrp
+    // with a base (even base_len=1) when the residue's modulus is known —
+    // that path replays on FUNC_SIM.
+    if (const char *target = std::getenv("HAZE_TARGET");
+        target != nullptr && target[0] != '\0' && std::string_view{target} != "local")
+        SKIP("sentinel-modulus SRP D2D copy is not replayable on transport targets; "
+             "use hazeMemcpyMrp with a base when the modulus is known");
     const uint64_t q = haze::test::setup_integration_compute_config();
     (void)q;
 
