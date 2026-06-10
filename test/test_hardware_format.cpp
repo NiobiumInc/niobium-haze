@@ -352,10 +352,12 @@ TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers
     REQUIRE(trace.find(", 7,") != std::string::npos);
     REQUIRE(trace.find(", " + std::to_string(mont_imm) + ",") == std::string::npos);
 
-    // The mod-down's centered rebase emits the thin-client switchmodulus
-    // convention the replay driver recognizes and substitutes: a marker
-    // comment plus the canonical 4-op block with ordinary immediates.
-    REQUIRE(trace.find("# switchmodulus") != std::string::npos);
+    // The mod-down's centered rebase emits the bare canonical 4-op block
+    // with ordinary immediates — no marker comment. The replay driver
+    // recognizes the quadruple structurally (the immediates are fully
+    // determined by (q, p)) and substitutes the SwitchModulus pseudo-op
+    // with format-correct immediates at replay.
+    REQUIRE(trace.find("# switchmodulus") == std::string::npos);
     const auto sw = niobium::mod_arith::compute_switchmodulus_immediates(kQ1, kQ0,
                                                                          /*montgomery=*/false);
     REQUIRE(trace.find(", " + std::to_string(sw.imm[1]) + ",") != std::string::npos);
