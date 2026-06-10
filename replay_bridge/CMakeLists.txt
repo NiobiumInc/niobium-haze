@@ -33,8 +33,22 @@ target_include_directories(haze_replay_bridge
 target_link_libraries(haze_replay_bridge PUBLIC Niobium::fhetch)
 
 # OBJECT library: no linkable artifact, so OUTPUT_NAME would be a no-op.
+#
+# Deliberately NOT CXX_VISIBILITY_PRESET=hidden. On arm64 macOS clang encodes
+# RTTI uniqueness in bit 63 of type_info::__type_name: a default-visibility class
+# gets "non-unique" typeinfo (libc++ compares by strcmp), while -fvisibility=hidden
+# gives "unique" typeinfo (pointer comparison, treated as a distinct type across
+# image boundaries). This is the only TU in the libhaze/haze_tests image that
+# instantiates cereal save<> over OpenFHE types; if it were hidden, ld64 would let
+# its unique-flavored weak typeinfo win the coalesce, and cereal's shared_ptr fast
+# path (typeid(*ptr) == typeid(T)) would compare a folded bit-clear name against
+# the in-memory bit-set name and miss -- throwing "unregistered polymorphic type"
+# for CryptoContextImpl / NativeVector during every hazeFlush (macOS-only; Linux
+# libstdc++ has no uniqueness bit). The OpenFHE stack and libnbfhetch are all
+# default-visibility, so this keeps the flavor uniform. Symbol isolation does not
+# rely on this preset -- libhaze.so's haze*-only export surface is enforced by the
+# -exported_symbols_list / version-script at link time (see CMakeLists.txt).
 set_target_properties(haze_replay_bridge PROPERTIES
-  CXX_VISIBILITY_PRESET     hidden
   VISIBILITY_INLINES_HIDDEN ON
   POSITION_INDEPENDENT_CODE  ON
 )
