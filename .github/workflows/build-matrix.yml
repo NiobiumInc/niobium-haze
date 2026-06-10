@@ -1,8 +1,13 @@
 name: build-matrix
 
-# Build-only portability matrix for the static, symbol-isolated libhaze: arm
-# macOS + linux x86_64/aarch64. Tests and lint stay on the nix build-test.yml /
-# flake-check.yml gates, so this builds with -DHAZE_BUILD_TESTS=OFF (no Catch2).
+# Portability matrix for the static, symbol-isolated libhaze: arm macOS + linux
+# x86_64/aarch64. Linux + lint coverage stays on the nix build-test.yml /
+# flake-check.yml gates, so the Linux legs build only (-DHAZE_BUILD_TESTS=OFF, no
+# Catch2). The macOS leg additionally builds the suite and runs the unit + sim
+# tests: build-test.yml runs those gates only on Linux, and some failures are
+# macOS-toolchain-specific (e.g. RTTI/visibility interactions in the cereal-based
+# replay_bridge serialization that ELF/libstdc++ never surfaces). Running them
+# here keeps macOS from silently drifting.
 
 on:
   pull_request:
@@ -35,6 +40,8 @@ jobs:
             runner: ubuntu-24.04-arm
           - name: macos-arm64
             runner: macos-14
+            # macOS-only: build the Catch2 suite and run unit + sim tests here.
+            run_tests: true
     steps:
       - name: Generate token
         id: app-token
@@ -65,8 +72,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           # Pin a versioned LLVM (matches the linux clang-19 floor) so a Homebrew
-          # `llvm` bump can't cause macOS-only drift.
-          brew install llvm@19 cmake ninja
+          # `llvm` bump can't cause macOS-only drift. catch2 (v3) is needed for
+          # the test suite this leg builds (HAZE_BUILD_TESTS=ON below).
+          brew install llvm@19 cmake ninja catch2
           llvm="$(brew --prefix llvm@19)"
           echo "CC=$llvm/bin/clang"   >> "$GITHUB_ENV"
           echo "CXX=$llvm/bin/clang++" >> "$GITHUB_ENV"
@@ -105,18 +113,36 @@ jobs:
         run: |
           # EXTRA_LDFLAGS carries the macOS libc++ path (empty elsewhere),
           # applied to both links so the absorbed objects bind the right libc++.
+          # Tests build only where this leg runs them (macOS); Linux stays
+          # build-only and Catch2-free (covered by build-test.yml's nix gate).
           rm -rf build
           cmake -S . -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DOPENFHE_INSTALL_DIR="$PWD/openfhe-install" \
-            -DHAZE_BUILD_TESTS=OFF \
+            -DHAZE_BUILD_TESTS=${{ matrix.run_tests && 'ON' || 'OFF' }} \
             -DCMAKE_SHARED_LINKER_FLAGS="${EXTRA_LDFLAGS:-}" \
             -DCMAKE_EXE_LINKER_FLAGS="${EXTRA_LDFLAGS:-}"
           cmake --build build --target haze
+          if [ "${{ matrix.run_tests }}" = "true" ]; then
+            cmake --build build --target haze_tests
+          fi
 
-      # Tests are OFF here, so the symbol-leak ctest does not run; invoke the
-      # checker directly to validate isolation on each native target.
       - name: Check symbol isolation
         shell: bash
         run: scripts/check_symbol_leak.sh build
+
+      # macOS-only: exercise the in-process FHETCH simulator (HAZE_TARGET=local),
+      # which drives hazeFlush -> replay_bridge serialization. This is the path
+      # that surfaces macOS-specific RTTI/visibility regressions; Linux runs the
+      # same suite via the nix devshell in build-test.yml. cd into runs/ so the
+      # recorder's program_dir resolves under the build tree (mirrors the Makefile
+      # and the haze_{unit,sim}_tests ctest contract).
+      - name: Run unit + sim tests (macOS)
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          mkdir -p build/runs
+          cd build/runs
+          HAZE_TARGET=local ../haze_tests "~[integration]"
+          HAZE_TARGET=local ../haze_tests "[integration]"
