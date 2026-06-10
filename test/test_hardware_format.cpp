@@ -589,11 +589,15 @@ TEST_CASE("niobium_hw transport: NTT and automorph under hardware format",
     //    in ORDINARY mode (the morph's haze_out .ct is missing,
     //    "EvalAutomorphism Keys: 0") — same pre-existing FUNC_SIM family as
     //    the rotate/automorph suite failures; not a hardware-format issue.
-    //  - standalone NTT: both modes produce outputs, but the hardware-mode
-    //    result is a genuinely different transform (not a bit-reversal
-    //    permutation or Montgomery re-encoding of the ordinary one — the
-    //    multisets differ). The hw NTT's convention for a bare thin-client
-    //    sr_ntt needs compiler-side resolution.
+    //  - standalone NTT: PROVEN root cause — under --niobium_hw the driver
+    //    bit-reverses ALL input data at load ("All CKKS polynomials in this
+    //    context are in EVALUATION format"), but an NTT's input is
+    //    coefficient-format data, and an NTT does not commute with permuting
+    //    its input. Verified bit-for-bit: hardware_NTT(x) ==
+    //    ordinary_NTT(bitrev(x)) on every slot. The hw NTT arithmetic itself
+    //    is correct; the fix needs per-element format metadata in the input
+    //    records so the driver only bit-reverses true evaluation-format
+    //    residues (compiler-side, with haze tagging real formats).
     const bool with_automorph = true;
     auto run_ntt = [&]() {
         REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
