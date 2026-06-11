@@ -288,21 +288,21 @@ haze::Node invalidate_node(haze::DevAddr addr) {
     return n;
 }
 
-haze::Node mrp_register_node(std::string name, std::vector<haze::DevAddr> addrs,
-                             std::vector<uint64_t> moduli) {
+// Group names are counter-derived from the leading addr at derive time
+// ("haze_mrp_out_N"); the node carries only membership.
+haze::Node mrp_register_node(std::vector<haze::DevAddr> addrs, std::vector<uint64_t> moduli) {
     haze::Node n{};
     n.kind = haze::Node::Kind::MrpRegister;
     n.addr = addrs.front();
-    n.name = std::move(name);
     n.group_addrs = std::move(addrs);
     n.group_moduli = std::move(moduli);
     return n;
 }
 
-haze::Node mrp_input_tag_node(std::string name, std::vector<haze::ValueId> vids) {
+haze::Node mrp_input_tag_node(haze::DevAddr leading, std::vector<haze::ValueId> vids) {
     haze::Node n{};
     n.kind = haze::Node::Kind::MrpInputTag;
-    n.name = std::move(name);
+    n.addr = leading;
     n.group_vids = std::move(vids);
     return n;
 }
@@ -371,7 +371,7 @@ TEST_CASE("derive: tagging one MRP residue expands to the whole registered group
     std::vector<haze::Node> tape;
     tape.push_back(compute_node(r0, 51));
     tape.push_back(compute_node(r1, 52));
-    tape.push_back(mrp_register_node("haze_mrp_out_x", {r0, r1}, {97, 193}));
+    tape.push_back(mrp_register_node({r0, r1}, {97, 193}));
     tape.push_back(compute_node(lone, 53));
     tape.push_back(tag_node(r1)); // any residue tags the group
     const haze::DerivedState d = haze::derive(tape);
@@ -379,8 +379,8 @@ TEST_CASE("derive: tagging one MRP residue expands to the whole registered group
     REQUIRE(d.pending_outputs.contains(r0));
     REQUIRE(d.pending_outputs.contains(r1));
     REQUIRE_FALSE(d.pending_outputs.contains(lone));
-    REQUIRE(d.pending_mrp_groups.contains("haze_mrp_out_x"));
-    const haze::PendingMrpGroup &g = d.pending_mrp_groups.at("haze_mrp_out_x");
+    REQUIRE(d.pending_mrp_groups.contains("haze_mrp_out_0")); // first out group this epoch
+    const haze::PendingMrpGroup &g = d.known_mrp_groups.at("haze_mrp_out_0");
     REQUIRE(g.addrs == std::vector<haze::DevAddr>{r0, r1});
     REQUIRE(g.moduli == std::vector<uint64_t>{97, 193});
 }
@@ -392,7 +392,7 @@ TEST_CASE("derive: invalidate drops the binding, the tag, and every group naming
     std::vector<haze::Node> tape;
     tape.push_back(compute_node(r0, 61));
     tape.push_back(compute_node(r1, 62));
-    tape.push_back(mrp_register_node("haze_mrp_out_y", {r0, r1}, {97, 193}));
+    tape.push_back(mrp_register_node({r0, r1}, {97, 193}));
     tape.push_back(tag_node(r0));        // group goes pending
     tape.push_back(invalidate_node(r1)); // hazeFree of one residue
     const haze::DerivedState d = haze::derive(tape);
@@ -400,7 +400,7 @@ TEST_CASE("derive: invalidate drops the binding, the tag, and every group naming
     // The group is gone; r1's binding and tag are gone. r0's standalone
     // tag survives (invalidate only erased r1's entries), exactly as
     // EpochState::invalidate behaved.
-    REQUIRE_FALSE(d.pending_mrp_groups.contains("haze_mrp_out_y"));
+    REQUIRE_FALSE(d.pending_mrp_groups.contains("haze_mrp_out_0"));
     REQUIRE_FALSE(d.final_bindings.contains(r1));
     REQUIRE_FALSE(d.pending_outputs.contains(r1));
     REQUIRE(d.pending_outputs.contains(r0));
@@ -412,26 +412,29 @@ TEST_CASE("derive: a recycled addr re-registers a fresh group after invalidate",
     std::vector<haze::Node> tape;
     tape.push_back(compute_node(r0, 71));
     tape.push_back(compute_node(r1, 72));
-    tape.push_back(mrp_register_node("haze_mrp_out_z", {r0, r1}, {97, 193}));
-    tape.push_back(invalidate_node(r0));  // free; group dropped
+    tape.push_back(mrp_register_node({r0, r1}, {97, 193}));
+    tape.push_back(invalidate_node(r0));  // free; group dropped + name claim released
     tape.push_back(compute_node(r0, 73)); // recycled allocation
     tape.push_back(compute_node(r1, 74));
-    tape.push_back(mrp_register_node("haze_mrp_out_z", {r0, r1}, {97, 193}));
+    tape.push_back(mrp_register_node({r0, r1}, {97, 193}));
     tape.push_back(tag_node(r0));
     const haze::DerivedState d = haze::derive(tape);
 
-    // The re-registration after the drop must win (the eager engine's
-    // try_emplace would have found the name erased by invalidate).
-    REQUIRE(d.pending_mrp_groups.contains("haze_mrp_out_z"));
+    // The recycled leading addr gets a FRESH counter name; the old
+    // group ("haze_mrp_out_0") died with the invalidate.
+    REQUIRE(d.pending_mrp_groups.contains("haze_mrp_out_1"));
+    REQUIRE_FALSE(d.known_mrp_groups.contains("haze_mrp_out_0"));
     REQUIRE(d.final_bindings.at(r0) == 73);
     REQUIRE(d.final_bindings.at(r1) == 74);
 }
 
 TEST_CASE("derive: MrpInputTag dedups by group name", "[unit][tape]") {
     std::vector<haze::Node> tape;
-    tape.push_back(mrp_input_tag_node("haze_mrp_in_a", {81, 82}));
-    tape.push_back(mrp_input_tag_node("haze_mrp_in_a", {81, 82})); // same source MRP reused
-    tape.push_back(mrp_input_tag_node("haze_mrp_in_b", {83, 84}));
+    const auto lead_a = nth_slot_addr(0);
+    const auto lead_b = nth_slot_addr(1);
+    tape.push_back(mrp_input_tag_node(lead_a, {81, 82}));
+    tape.push_back(mrp_input_tag_node(lead_a, {81, 82})); // same source MRP reused
+    tape.push_back(mrp_input_tag_node(lead_b, {83, 84}));
     const haze::DerivedState d = haze::derive(tape);
 
     REQUIRE(d.emit_mrp_input[0]);

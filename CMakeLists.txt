@@ -187,10 +187,10 @@ add_library(haze_objs OBJECT
   src/core/basis_convert.cpp
   src/core/config.cpp
   src/core/device.cpp
-  src/core/epoch.cpp
   src/core/graph.cpp
   src/core/lower.cpp
   src/core/mrp_polymap.cpp
+  src/core/record.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
   # Shared leaf utilities.

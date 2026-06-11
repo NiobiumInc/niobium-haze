@@ -45,13 +45,49 @@ DerivedState derive(std::span<const Node> tape) {
     d.emit_mrp_input.assign(tape.size(), false);
 
     // Epoch-local bookkeeping the eager engine kept as EpochState
-    // members; consumed by the scan and dropped (only the DerivedState
-    // view outlives it).
-    std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups;
+    // members; consumed by the scan (known groups + pending names
+    // survive into DerivedState for the tag/populate loops).
     std::unordered_map<DevAddr, std::unordered_set<std::string>> addr_to_mrp_groups;
     std::unordered_set<std::string> mrp_input_tagged_names;
+    std::unordered_map<DevAddr, std::string> mrp_in_names;
+    std::unordered_map<DevAddr, std::string> mrp_out_names;
+    uint64_t mrp_in_name_counter = 0;
+    uint64_t mrp_out_name_counter = 0;
     uint64_t input_counter = 0;
     uint64_t output_counter = 0;
+
+    // Stable counter name for the group led by `leading` ("haze_mrp_in_N"
+    // / "haze_mrp_out_N"): same leading addr -> same name within an
+    // epoch; Invalidate drops it so a recycled allocation gets a fresh
+    // name. Mirror of the eager engine's mrp_group_name_locked.
+    const auto group_name = [&](bool output, DevAddr leading) {
+        auto &names = output ? mrp_out_names : mrp_in_names;
+        if (auto it = names.find(leading); it != names.end())
+            return it->second;
+        auto &counter = output ? mrp_out_name_counter : mrp_in_name_counter;
+        std::string name =
+            (output ? "haze_mrp_out_" : "haze_mrp_in_") + std::to_string(counter++);
+        names.emplace(leading, name);
+        return name;
+    };
+
+    // Drop one group wholesale (eager engine's evict_mrp_group_locked):
+    // scrub every member's reverse-map entry, erase from known + pending.
+    const auto evict_group = [&](const std::string &name) {
+        auto group_it = d.known_mrp_groups.find(name);
+        if (group_it == d.known_mrp_groups.end())
+            return;
+        for (DevAddr member : group_it->second.addrs) {
+            auto o = addr_to_mrp_groups.find(member);
+            if (o == addr_to_mrp_groups.end())
+                continue;
+            o->second.erase(name);
+            if (o->second.empty())
+                addr_to_mrp_groups.erase(o);
+        }
+        d.known_mrp_groups.erase(group_it);
+        d.pending_mrp_groups.erase(name);
+    };
 
     for (size_t i = 0; i < tape.size(); ++i) {
         const Node &node = tape[i];
@@ -82,15 +118,15 @@ DerivedState derive(std::span<const Node> tape) {
             // An MRP residue tags every residue of its group and
             // promotes the group (port of tag_output_locked).
             if (auto rev = addr_to_mrp_groups.find(node.addr); rev != addr_to_mrp_groups.end()) {
-                for (const auto &group_name : rev->second) {
-                    auto g = known_mrp_groups.find(group_name);
-                    if (g == known_mrp_groups.end())
+                for (const auto &name : rev->second) {
+                    auto g = d.known_mrp_groups.find(name);
+                    if (g == d.known_mrp_groups.end())
                         continue;
                     for (DevAddr a : g->second.addrs)
                         if (!d.pending_outputs.contains(a))
                             d.pending_outputs.emplace(a, "haze_out_" +
                                                              std::to_string(output_counter++));
-                    d.pending_mrp_groups.try_emplace(group_name, g->second);
+                    d.pending_mrp_groups.insert(name);
                 }
             } else if (!d.pending_outputs.contains(node.addr)) {
                 d.pending_outputs.emplace(node.addr,
@@ -99,52 +135,85 @@ DerivedState derive(std::span<const Node> tape) {
             break;
 
         case Node::Kind::MrpInputTag:
-            // Dedup so each group name reaches fhetch exactly once.
-            d.emit_mrp_input[i] = mrp_input_tagged_names.insert(node.name).second;
+            // Counter-based name from the leading addr; dedup so each
+            // name reaches fhetch exactly once (the thunk reads it back
+            // via ctx.node_name()).
+            d.node_names[i] = group_name(/*output=*/false, node.addr);
+            d.emit_mrp_input[i] = mrp_input_tagged_names.insert(d.node_names[i]).second;
             break;
 
         case Node::Kind::MrpRegister: {
-            // try_emplace dedups re-registrations for the same op (the
-            // leading-addr name is stable). Addr/moduli length mismatch
-            // was rejected at record time.
-            auto [it, inserted] = known_mrp_groups.try_emplace(node.name);
-            if (inserted) {
-                it->second.addrs = node.group_addrs;
-                it->second.moduli = node.group_moduli;
-                for (DevAddr a : node.group_addrs)
-                    addr_to_mrp_groups[a].insert(it->first);
+            // Latest-write-wins registration (port of the eager
+            // register_mrp_output_group_locked): identical re-registration
+            // is a no-op; anything else evicts conflicting claims and
+            // replaces stale membership so a tagged readback assembles
+            // the most recent write.
+            const std::string name = group_name(/*output=*/true, node.addr);
+            auto existing = d.known_mrp_groups.find(name);
+            if (existing != d.known_mrp_groups.end() &&
+                existing->second.addrs == node.group_addrs &&
+                existing->second.moduli == node.group_moduli)
+                break; // identical: competing claims were already evicted
+
+            for (DevAddr a : node.group_addrs) {
+                auto rev = addr_to_mrp_groups.find(a);
+                if (rev == addr_to_mrp_groups.end())
+                    continue;
+                // Copy: evict_group edits the reverse map under us.
+                const std::vector<std::string> conflicting(rev->second.begin(),
+                                                           rev->second.end());
+                for (const auto &other : conflicting)
+                    if (other != name)
+                        evict_group(other);
             }
+
+            if (existing != d.known_mrp_groups.end()) {
+                // Same name, new shape: replace membership in place; an
+                // already-tagged group exports the replacement, and newly
+                // introduced members get their per-residue output tags.
+                for (DevAddr old_addr : existing->second.addrs) {
+                    auto o = addr_to_mrp_groups.find(old_addr);
+                    if (o == addr_to_mrp_groups.end())
+                        continue;
+                    o->second.erase(name);
+                    if (o->second.empty())
+                        addr_to_mrp_groups.erase(o);
+                }
+                existing->second.addrs = node.group_addrs;
+                existing->second.moduli = node.group_moduli;
+                for (DevAddr a : node.group_addrs)
+                    addr_to_mrp_groups[a].insert(name);
+                if (d.pending_mrp_groups.contains(name)) {
+                    for (DevAddr a : node.group_addrs)
+                        if (!d.pending_outputs.contains(a))
+                            d.pending_outputs.emplace(
+                                a, "haze_out_" + std::to_string(output_counter++));
+                }
+                break;
+            }
+            auto [it, inserted] = d.known_mrp_groups.try_emplace(name);
+            it->second.addrs = node.group_addrs;
+            it->second.moduli = node.group_moduli;
+            for (DevAddr a : node.group_addrs)
+                addr_to_mrp_groups[a].insert(it->first);
             break;
         }
 
         case Node::Kind::Invalidate:
             // Port of EpochState::invalidate: drop any MRP group naming
-            // the addr so a recycled allocation can't bind a stale group
-            // entry at materialize time, then drop the binding + tag.
+            // the addr, the binding, the tag, and the leading-addr name
+            // claims (a recycled allocation gets a fresh counter name).
             if (auto rev_it = addr_to_mrp_groups.find(node.addr);
                 rev_it != addr_to_mrp_groups.end()) {
                 auto group_names = std::move(rev_it->second);
                 addr_to_mrp_groups.erase(rev_it);
-                for (const auto &name : group_names) {
-                    auto group_it = known_mrp_groups.find(name);
-                    if (group_it == known_mrp_groups.end())
-                        continue;
-                    for (DevAddr other : group_it->second.addrs) {
-                        if (other == node.addr)
-                            continue;
-                        auto o = addr_to_mrp_groups.find(other);
-                        if (o == addr_to_mrp_groups.end())
-                            continue;
-                        o->second.erase(name);
-                        if (o->second.empty())
-                            addr_to_mrp_groups.erase(o);
-                    }
-                    known_mrp_groups.erase(group_it);
-                    d.pending_mrp_groups.erase(name);
-                }
+                for (const auto &name : group_names)
+                    evict_group(name);
             }
             d.final_bindings.erase(node.addr);
             d.pending_outputs.erase(node.addr);
+            mrp_in_names.erase(node.addr);
+            mrp_out_names.erase(node.addr);
             break;
         }
 
@@ -192,10 +261,14 @@ std::unordered_set<ValueId> values_needed_at_end(const DerivedState &d) {
     for (const auto &[addr, name] : d.pending_outputs)
         if (auto it = d.final_bindings.find(addr); it != d.final_bindings.end())
             keep.insert(it->second);
-    for (const auto &[name, g] : d.pending_mrp_groups)
-        for (DevAddr a : g.addrs)
+    for (const auto &name : d.pending_mrp_groups) {
+        const auto g = d.known_mrp_groups.find(name);
+        if (g == d.known_mrp_groups.end())
+            continue;
+        for (DevAddr a : g->second.addrs)
             if (auto it = d.final_bindings.find(a); it != d.final_bindings.end())
                 keep.insert(it->second);
+    }
     return keep;
 }
 
@@ -279,7 +352,16 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
 
     // Also tag each MRP group as a fhetch MRP output so external
     // callers can pull the multi-residue view via result(name, MRP&).
-    for (const auto &[name, g] : d.pending_mrp_groups) {
+    // Pending holds names; resolve through known_mrp_groups so the
+    // membership exported is the latest registration for that name.
+    for (const auto &name : d.pending_mrp_groups) {
+        const auto g_it = d.known_mrp_groups.find(name);
+        if (g_it == d.known_mrp_groups.end()) {
+            std::ostringstream body;
+            body << "finalize: pending MRP group '" << name << "' missing from known groups";
+            return fail(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+        }
+        const PendingMrpGroup &g = g_it->second;
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
         pairs.reserve(g.addrs.size());
         for (size_t i = 0; i < g.addrs.size(); ++i) {

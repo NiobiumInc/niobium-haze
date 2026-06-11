@@ -12,9 +12,9 @@
 // from the Product.
 //
 // Process-wide reset orchestration. Each subsystem owns its own reset();
-// reset_all() invokes them in dependency order (epoch first so any
-// pending compute is dropped before the backend / allocator state is
-// torn down).
+// reset_all() invokes them in dependency order (the tape first so any
+// pending compute is dropped — thunks never run, nothing reaches fhetch
+// — before the backend / allocator state is torn down).
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
@@ -22,7 +22,8 @@
 #include "core/backend.hpp"
 #include "core/config.hpp"
 #include "core/device.hpp"
-#include "core/epoch.hpp"
+#include "core/graph.hpp"
+#include "core/record.hpp"
 #include "core/stream.hpp"
 
 #include <haze/haze.h>
@@ -35,7 +36,7 @@ namespace haze {
 void reset_all() noexcept {
     // Clear all internal state first, since we may depend on external object state when clearing
     // otherwise.
-    epoch().reset();
+    graph().reset();
     backend().reset();
     allocator().reset();
     config().reset();

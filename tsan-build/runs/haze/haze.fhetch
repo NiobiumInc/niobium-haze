@@ -1,0 +1,21 @@
+# =========================================
+# Niobium FHETCH Trace
+# =========================================
+# Program: haze v0.1
+# Description: HAZE runtime
+# Instruction Count: 5
+# Modulus Count: 2
+# Generated: 1781192093570
+# =========================================
+
+# Modulus Table
+modulus_count 2
+m[0] 0xFFFFFFFFFFFFFFFF
+m[1] 0x7FFFFFFFFCC0001
+
+# Instructions
+sr_addp %3, %1, %2, m=1
+sr_addp %5, %0, %4, m=1
+# output haze_out_1 %5
+# output haze_out_0 %3
+halt

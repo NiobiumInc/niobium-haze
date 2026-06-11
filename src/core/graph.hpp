@@ -97,6 +97,12 @@ class BindingTable {
     BindingTable(const BindingTable &) = delete;
     BindingTable &operator=(const BindingTable &) = delete;
 
+    // Second instance: addr -> last recorded REAL modulus (the eager
+    // engine's addr_modulus_). kUnbound (0) = unknown; 0 is never a
+    // valid prime so the sentinel can share the slot encoding. Same
+    // epoch lifetime as the value bindings (seal/reset clear both).
+    static BindingTable &moduli_instance() noexcept;
+
   private:
     BindingTable() = default;
 
@@ -117,6 +123,11 @@ class BindingTable {
 
 inline BindingTable &bindings() noexcept {
     return BindingTable::instance();
+}
+
+// addr -> recorded modulus (0 = unknown / sentinel-only address).
+inline BindingTable &recorded_moduli() noexcept {
+    return BindingTable::moduli_instance();
 }
 
 // Lowering context handed to thunks at flush time; defined in
@@ -156,9 +167,6 @@ struct Node {
     std::vector<DevAddr> group_addrs;
     std::vector<uint64_t> group_moduli;
     std::vector<ValueId> group_vids;
-    // MRP group name (MrpInputTag / MrpRegister); derived at record time
-    // from the leading residue addr (mrp_signature_name).
-    std::string name;
     // Lowering action; empty for metadata-only kinds.
     Thunk thunk;
     // Provenance for flush-time diagnostics: the C-ABI entry point that

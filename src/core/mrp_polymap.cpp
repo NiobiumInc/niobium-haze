@@ -16,13 +16,19 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
-#include "core/epoch.hpp"
+#include "core/config.hpp"
+#include "core/graph.hpp"
+#include "core/lower.hpp"
+#include "core/record.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <niobium/fhetch_api.h>
 #include <span>
+#include <sstream>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -30,62 +36,111 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-std::expected<fhetch::MRP, HazeInternalError>
-build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len) {
+std::expected<fhetch::MRP, HazeInternalError> build_lowered_mrp(const LowerCtx &ctx,
+                                                                const std::vector<ValueId> &vids,
+                                                                const std::vector<uint64_t> &base) {
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-    std::vector<DevAddr> addrs;
-    pairs.reserve(len);
-    addrs.reserve(len);
-    for (std::size_t i = 0; i < len; ++i) {
-        DevAddr a = to_dev_addr(polys[i]);
-        auto poly = epoch().lookup_or_create_locked(a);
-        if (!poly) {
+    pairs.reserve(vids.size());
+    for (std::size_t i = 0; i < vids.size(); ++i) {
+        const auto poly = ctx.poly(vids[i]);
+        if (!poly)
             return std::unexpected(poly.error());
-        }
-        pairs.emplace_back(std::move(*poly), base[i]);
-        addrs.push_back(a);
+        pairs.emplace_back(**poly, base[i]);
     }
-    auto mrp = fhetch::MRP::from_pairs(pairs);
-    // Additive MRP-input tag on top of the per-addr SRP inputs from
-    // lookup_or_create_locked; lets the bridge synthesize a multi-tower
-    // input CT and readers pull via fhetch::result(name, MRP&). The name is
-    // stable per leading addr, so the EpochState dedup collapses redundant
-    // tags when the same source MRP feeds multiple ops.
-    if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/false, addrs.front());
-        epoch().tag_mrp_input_if_new_locked(group_name, mrp);
-    }
-    return mrp;
+    return fhetch::MRP::from_pairs(pairs);
 }
 
-std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
-                                                        const fhetch::MRP &mrp,
-                                                        const uint64_t *base, std::size_t len) {
+std::expected<std::vector<ValueId>, HazeInternalError>
+record_mrp_sources(const void *const *polys, const uint64_t *base, std::size_t len,
+                   uint64_t ring_dim) noexcept {
+    std::vector<ValueId> vids;
     std::vector<DevAddr> addrs;
+    vids.reserve(len);
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
-        DevAddr a = to_dev_addr(dst_polys[i]);
-        epoch().store_compute_result_locked(a, mrp[base[i]], base[i]);
+        const DevAddr a = to_dev_addr(polys[i]);
+        const auto vid = resolve_operand(a, ring_dim);
+        if (!vid)
+            return std::unexpected(vid.error());
+        vids.push_back(*vid);
         addrs.push_back(a);
     }
+    // Additive MRP-input tag on top of the per-addr SRP inputs from the
+    // residues' promotion; lets the bridge synthesize a multi-tower
+    // input CT and readers pull via fhetch::result(name, MRP&).
+    // Address-keyed name dedups (via derive()) when the same source MRP
+    // feeds multiple ops.
     if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
-        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
-                                                        std::move(group_name));
+        Node node{};
+        node.kind = Node::Kind::MrpInputTag;
+        node.addr = addrs.front(); // leading addr names the group at derive time
+        node.group_addrs = addrs;
+        node.group_moduli.assign(base, base + len);
+        node.group_vids = vids;
+        node.entry = "haze mrp input tag";
+        // The counter-based haze_mrp_in_N name comes back through
+        // ctx.node_name(), assigned by derive() from the leading addr
+        // (mirror of the eager engine's mrp_group_name_locked).
+        node.thunk = [vids, base_vec = std::vector<uint64_t>(base, base + len)](
+                         LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+            if (!ctx.emit_mrp_input())
+                return {}; // a same-named tag already reached fhetch
+            auto mrp = build_lowered_mrp(ctx, vids, base_vec);
+            if (!mrp)
+                return std::unexpected(mrp.error());
+            fhetch::tag_input(ctx.node_name(), *mrp);
+            return {};
+        };
+        graph().append(std::move(node));
     }
+    return vids;
+}
+
+MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base,
+                          std::size_t len) noexcept {
+    MrpDests dests;
+    dests.addrs.reserve(len);
+    dests.vids.reserve(len);
+    for (std::size_t i = 0; i < len; ++i) {
+        const DevAddr a = to_dev_addr(dst_polys[i]);
+        dests.addrs.push_back(a);
+        dests.vids.push_back(bind_result(a, base[i])); // residue carries its prime
+    }
+    return dests;
+}
+
+std::expected<void, HazeInternalError> record_mrp_out_group(std::span<const DevAddr> addrs,
+                                                            const uint64_t *base,
+                                                            std::size_t len) noexcept {
+    if (len <= 1)
+        return {};
+    // One device address per modulus; a mismatch is a programming bug in
+    // the fan-out helper, surfaced rather than dropped silently.
+    if (addrs.size() != len) {
+        std::ostringstream body;
+        body << "record_mrp_out_group: addrs.size()=" << addrs.size() << " != base_len=" << len;
+        record_internal_error(HazeInternalError::MrpGroupAddrModuliMismatch, body.str().c_str());
+        return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
+    }
+    Node node{};
+    node.kind = Node::Kind::MrpRegister;
+    node.addr = addrs.front(); // leading addr names the group at derive time
+    node.group_addrs.assign(addrs.begin(), addrs.end());
+    node.group_moduli.assign(base, base + len);
+    node.entry = "haze mrp group register";
+    graph().append(std::move(node));
     return {};
 }
 
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
                                                     std::size_t count, std::size_t len) noexcept {
-    // Write every residue's shadow first, then tag them under one session:
-    // tag promotes the just-written bytes to a fhetch input per residue.
+    // Write every residue's shadow first, then tag them: each tag
+    // snapshots the just-written bytes as a fhetch input per residue.
     for (std::size_t i = 0; i < len; ++i)
         if (auto h2d = allocator().copy_h2d(to_dev_addr(dst[i]), src[i], count); !h2d)
             return h2d;
-    EpochSession session;
     for (std::size_t i = 0; i < len; ++i)
-        if (auto tag = epoch().tag_h2d_input_locked(to_dev_addr(dst[i])); !tag)
+        if (auto tag = tag_h2d_input(to_dev_addr(dst[i])); !tag)
             return tag;
     return {};
 }
@@ -108,21 +163,17 @@ std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *ds
     // Per-residue pass-through copy, then register the dst as an MRP output
     // group under the real base[i] so it reads back as an MRP, matching the
     // arithmetic MRP ops.
-    EpochSession session;
+    const ConfigSnapshot *cfg = record_prelude();
+    const uint64_t ring_dim = cfg != nullptr ? cfg->ring_dim : 0;
     std::vector<DevAddr> addrs;
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
-        DevAddr d = to_dev_addr(dst[i]);
-        if (auto copied = epoch().copy_result_locked(d, to_dev_addr(src[i]), base[i]); !copied)
+        const DevAddr d = to_dev_addr(dst[i]);
+        if (auto copied = record_copy(d, to_dev_addr(src[i]), ring_dim, base[i]); !copied)
             return copied;
         addrs.push_back(d);
     }
-    if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
-        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
-                                                        std::move(group_name));
-    }
-    return {};
+    return record_mrp_out_group(addrs, base, len);
 }
 
 } // namespace haze

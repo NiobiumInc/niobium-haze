@@ -1,0 +1,30 @@
+{
+  "outputs": [
+    {
+      "ciphertext_data": [
+        {
+          "elements": [
+            5
+          ],
+          "poly_index": 0
+        }
+      ],
+      "name": "haze_out_1",
+      "payload_type": "ciphertext"
+    },
+    {
+      "ciphertext_data": [
+        {
+          "elements": [
+            3
+          ],
+          "poly_index": 0
+        }
+      ],
+      "name": "haze_out_0",
+      "payload_type": "ciphertext"
+    }
+  ],
+  "program_name": "haze.fhetch",
+  "timestamp": 1781192093
+}

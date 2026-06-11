@@ -39,6 +39,11 @@ BindingTable &BindingTable::instance() noexcept {
     return inst;
 }
 
+BindingTable &BindingTable::moduli_instance() noexcept {
+    static BindingTable inst;
+    return inst;
+}
+
 void BindingTable::set_slot_bytes(size_t bytes) noexcept {
     // Geometry changes are only reachable pre-freeze (set_ring_dimension
     // before the first compute), i.e. while no binding exists; clearing
@@ -140,6 +145,7 @@ std::vector<Node> Graph::seal() noexcept {
         out.swap(nodes_);
     }
     bindings().clear();
+    recorded_moduli().clear();
     return out;
 }
 
@@ -149,6 +155,7 @@ void Graph::reset() noexcept {
         nodes_.clear();
     }
     bindings().clear();
+    recorded_moduli().clear();
 }
 
 } // namespace haze

@@ -13,8 +13,8 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
-#include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
+#include "core/record.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -35,7 +35,7 @@ extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
 
 extern "C" hazeError_t hazeFree(void *ptr) noexcept {
     if (ptr != nullptr)
-        haze::epoch().invalidate(haze::to_dev_addr(ptr));
+        haze::record_invalidate(haze::to_dev_addr(ptr));
     return set_internal_result(haze::allocator().free(haze::to_dev_addr(ptr)));
 }
 
@@ -132,7 +132,7 @@ extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexce
     const haze::DevAddr dev = haze::to_dev_addr(dev_ptr);
     if (auto result = haze::allocator().memset(dev, value, count); !result)
         return set_internal_result(result);
-    haze::epoch().invalidate(dev);
+    haze::record_invalidate(dev);
     return HAZE_SUCCESS;
 }
 

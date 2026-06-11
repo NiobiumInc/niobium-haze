@@ -15,36 +15,63 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/config.hpp"
-#include "core/epoch.hpp"
+#include "core/graph.hpp"
+#include "core/lower.hpp"
 #include "core/mrp_polymap.hpp"
+#include "core/record.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <niobium/fhetch_api.h>
+#include <utility>
+#include <vector>
 
 namespace haze {
 
-// Each compute prelude opens an EpochSession, resolves the modulus, copies
-// sources from the polymap, dispatches the FHETCH op, and stores the result.
-// Sources are returned by value so in-place ops (dst == src1 [== src2]) stay
-// correct.
+// Each compute prelude freezes the parameters, resolves the operands to
+// tape values, binds the destination, and appends one Node whose thunk
+// dispatches the FHETCH op at flush time. Operands are resolved before
+// the dst bind so in-place ops (dst == src1 [== src2]) read the old
+// value.
+//
+// THUNKS CAPTURE PLAIN VALUES ONLY (ValueId / uint64_t / vectors) — see
+// the discipline note in core/graph.hpp. fhetch objects (Scalar, MRS,
+// ModuliBase, Polynomial) are constructed inside the thunk at lowering.
 
 // Polynomial-polynomial-modulus. Used by hazeAdd, hazeSub, hazeMul.
 template <auto OpFn>
 std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2,
                                                     int mod_idx) noexcept {
-    EpochSession session;
-    const uint64_t q = config().modulus(mod_idx);
+    const ConfigSnapshot *cfg = record_prelude();
+    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
-    auto p1 = epoch().lookup_or_create_locked(src1);
-    if (!p1)
-        return std::unexpected(p1.error());
-    auto p2 = epoch().lookup_or_create_locked(src2);
-    if (!p2)
-        return std::unexpected(p2.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q), q);
+    const auto v1 = resolve_operand(src1, cfg->ring_dim);
+    if (!v1)
+        return std::unexpected(v1.error());
+    const auto v2 = resolve_operand(src2, cfg->ring_dim);
+    if (!v2)
+        return std::unexpected(v2.error());
+    const ValueId d = bind_result(dst, q);
+
+    Node node{};
+    node.kind = Node::Kind::Compute;
+    node.addr = dst;
+    node.dst_vid = d;
+    node.src_vids = {*v1, *v2};
+    node.entry = "haze binary pp op";
+    node.thunk = [a = *v1, b = *v2, d, q](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+        const auto p1 = ctx.poly(a);
+        if (!p1)
+            return std::unexpected(p1.error());
+        const auto p2 = ctx.poly(b);
+        if (!p2)
+            return std::unexpected(p2.error());
+        ctx.bind(d, OpFn(**p1, **p2, q));
+        return {};
+    };
+    graph().append(std::move(node));
     return {};
 }
 
@@ -52,74 +79,161 @@ std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, D
 template <auto OpFn>
 std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar,
                                                     int mod_idx) noexcept {
-    EpochSession session;
-    const uint64_t q = config().modulus(mod_idx);
+    const ConfigSnapshot *cfg = record_prelude();
+    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
-    auto p = epoch().lookup_or_create_locked(src);
-    if (!p)
-        return std::unexpected(p.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q),
-                                        q);
+    const auto v = resolve_operand(src, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+    const ValueId d = bind_result(dst, q);
+
+    Node node{};
+    node.kind = Node::Kind::Compute;
+    node.addr = dst;
+    node.dst_vid = d;
+    node.src_vids = {*v};
+    node.entry = "haze binary ps op";
+    node.thunk = [s = *v, d, scalar, q](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+        const auto p = ctx.poly(s);
+        if (!p)
+            return std::unexpected(p.error());
+        ctx.bind(d, OpFn(**p, niobium::fhetch::Scalar::from_int(scalar), q));
+        return {};
+    };
+    graph().append(std::move(node));
     return {};
 }
 
 // Polynomial-modulus. Used by hazeNTT, hazeINTT.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
-    EpochSession session;
-    const uint64_t q = config().modulus(mod_idx);
+    const ConfigSnapshot *cfg = record_prelude();
+    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
-    auto p = epoch().lookup_or_create_locked(src);
-    if (!p)
-        return std::unexpected(p.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p, q), q);
+    const auto v = resolve_operand(src, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+    const ValueId d = bind_result(dst, q);
+
+    Node node{};
+    node.kind = Node::Kind::Compute;
+    node.addr = dst;
+    node.dst_vid = d;
+    node.src_vids = {*v};
+    node.entry = "haze unary pq op";
+    node.thunk = [s = *v, d, q](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+        const auto p = ctx.poly(s);
+        if (!p)
+            return std::unexpected(p.error());
+        ctx.bind(d, OpFn(**p, q));
+        return {};
+    };
+    graph().append(std::move(node));
     return {};
 }
 
-// Polynomial-index (hazeAutomorph). The eval-form automorph is a pure slot
-// permutation, so the op carries the COPY sentinel; recover the source's
-// recorded modulus and bind it (source + result) so a tagged SRP automorph is
-// probe-serializable on transport.
+// Polynomial-index (hazeAutomorph). The eval-form automorph is a pure
+// slot permutation, so the op carries the COPY sentinel; recover the
+// source's recorded modulus and bind it (source + result) so a tagged
+// SRP automorph is probe-serializable on transport.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
                                                    uint64_t index) noexcept {
-    EpochSession session;
-    auto p = epoch().lookup_or_create_locked(src);
-    if (!p)
-        return std::unexpected(p.error());
-    const uint64_t q = epoch().recorded_modulus_locked(src);
-    auto result = OpFn(*p, index);
-    if (q != kCopyModulus) {
-        niobium::fhetch::bind_modulus(*p, q);
-        niobium::fhetch::bind_modulus(result, q);
-    }
-    epoch().store_compute_result_locked(dst, std::move(result), q);
+    const ConfigSnapshot *cfg = record_prelude();
+    if (cfg == nullptr)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    const auto v = resolve_operand(src, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+    const uint64_t q = recorded_modulus(src);
+    const ValueId d = bind_result(dst, q);
+
+    Node node{};
+    node.kind = Node::Kind::Compute;
+    node.addr = dst;
+    node.dst_vid = d;
+    node.src_vids = {*v};
+    node.entry = "haze unary pi op";
+    node.thunk = [s = *v, d, index, q](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+        const auto p = ctx.poly(s);
+        if (!p)
+            return std::unexpected(p.error());
+        auto result = OpFn(**p, index);
+        if (q != kCopyModulus) {
+            niobium::fhetch::bind_modulus(**p, q);
+            niobium::fhetch::bind_modulus(result, q);
+        }
+        ctx.bind(d, std::move(result));
+        return {};
+    };
+    graph().append(std::move(node));
     return {};
 }
 
-// MRP compute templates: same shape as the SRP templates, fanned out per
-// residue via build_mrp_locked / store_mrp_locked. In-place safety carries
-// over per-residue.
+// MRP compute templates: same shape, fanned out per residue via
+// record_mrp_sources / record_mrp_dests. In-place safety carries over
+// per-residue (all sources resolved before any dst bind).
+
+namespace detail {
+
+// Shared tail for the MRP templates: bind the dst residues, append the
+// compute node, register the output group.
+template <typename ThunkFactory>
+std::expected<void, HazeInternalError>
+append_mrp_compute(void *const *dst, const uint64_t *base, std::size_t base_len,
+                   std::vector<ValueId> &&src_vids, const char *entry, ThunkFactory &&factory) {
+    MrpDests dests = record_mrp_dests(dst, base, base_len);
+    Node node{};
+    node.kind = Node::Kind::Compute;
+    node.addr = dests.addrs.front();
+    node.group_addrs = dests.addrs;
+    node.group_vids = dests.vids;
+    node.src_vids = std::move(src_vids);
+    node.entry = entry;
+    node.thunk = factory(dests.vids);
+    graph().append(std::move(node));
+    return record_mrp_out_group(dests.addrs, base, base_len);
+}
+
+} // namespace detail
 
 // MRP polynomial-polynomial. Used by hazeAddMrp, hazeSubMrp, hazeMulMrp.
 template <auto OpFn>
 std::expected<void, HazeInternalError>
 binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *src2,
                  const uint64_t *base, std::size_t base_len) noexcept {
-    EpochSession session;
-    auto m1 = build_mrp_locked(src1, base, base_len);
-    if (!m1)
-        return std::unexpected(m1.error());
-    auto m2 = build_mrp_locked(src2, base, base_len);
-    if (!m2)
-        return std::unexpected(m2.error());
-    niobium::fhetch::MRP result = OpFn(*m1, *m2);
-    auto stored = store_mrp_locked(dst, result, base, base_len);
-    if (!stored)
-        return std::unexpected(stored.error());
-    return {};
+    const ConfigSnapshot *cfg = record_prelude();
+    if (cfg == nullptr)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    auto v1 = record_mrp_sources(src1, base, base_len, cfg->ring_dim);
+    if (!v1)
+        return std::unexpected(v1.error());
+    auto v2 = record_mrp_sources(src2, base, base_len, cfg->ring_dim);
+    if (!v2)
+        return std::unexpected(v2.error());
+
+    std::vector<ValueId> srcs = *v1;
+    srcs.insert(srcs.end(), v2->begin(), v2->end());
+    const std::vector<uint64_t> base_vec(base, base + base_len);
+    return detail::append_mrp_compute(
+        dst, base, base_len, std::move(srcs), "haze mrp pp op",
+        [&](const std::vector<ValueId> &dv) {
+            return [a = std::move(*v1), b = std::move(*v2), dv,
+                    base_vec](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+                auto m1 = build_lowered_mrp(ctx, a, base_vec);
+                if (!m1)
+                    return std::unexpected(m1.error());
+                auto m2 = build_lowered_mrp(ctx, b, base_vec);
+                if (!m2)
+                    return std::unexpected(m2.error());
+                const niobium::fhetch::MRP result = OpFn(*m1, *m2);
+                for (std::size_t i = 0; i < dv.size(); ++i)
+                    ctx.bind(dv[i], result[base_vec[i]]);
+                return {};
+            };
+        });
 }
 
 // MRP polynomial-scalar (scalars[i] pairs with base[i]); used by
@@ -128,49 +242,93 @@ template <auto OpFn>
 std::expected<void, HazeInternalError>
 binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scalars,
                  const uint64_t *base, std::size_t base_len) noexcept {
-    EpochSession session;
-    auto m = build_mrp_locked(src, base, base_len);
-    if (!m)
-        return std::unexpected(m.error());
-    niobium::fhetch::MRP result = OpFn(*m, build_mrs(scalars, base, base_len));
-    auto stored = store_mrp_locked(dst, result, base, base_len);
-    if (!stored)
-        return std::unexpected(stored.error());
-    return {};
+    const ConfigSnapshot *cfg = record_prelude();
+    if (cfg == nullptr)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    auto v = record_mrp_sources(src, base, base_len, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+
+    std::vector<ValueId> srcs = *v;
+    const std::vector<uint64_t> base_vec(base, base + base_len);
+    std::vector<uint64_t> scalar_vec(scalars, scalars + base_len);
+    return detail::append_mrp_compute(
+        dst, base, base_len, std::move(srcs), "haze mrp ps op",
+        [&](const std::vector<ValueId> &dv) {
+            return [s = std::move(*v), dv, base_vec, scalar_vec = std::move(scalar_vec)](
+                       LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+                auto m = build_lowered_mrp(ctx, s, base_vec);
+                if (!m)
+                    return std::unexpected(m.error());
+                const niobium::fhetch::MRP result =
+                    OpFn(*m, build_mrs(scalar_vec.data(), base_vec.data(), base_vec.size()));
+                for (std::size_t i = 0; i < dv.size(); ++i)
+                    ctx.bind(dv[i], result[base_vec[i]]);
+                return {};
+            };
+        });
 }
 
 // MRP polynomial-only: mr_ntt/mr_intt carry their moduli base inside the
-// MRP, so this can't reuse unary_pq_op. Used by hazeNTTMrp, hazeINTTMrp.
+// MRP. Used by hazeNTTMrp, hazeINTTMrp.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const void *const *src,
                                                       const uint64_t *base,
                                                       std::size_t base_len) noexcept {
-    EpochSession session;
-    auto m = build_mrp_locked(src, base, base_len);
-    if (!m)
-        return std::unexpected(m.error());
-    niobium::fhetch::MRP result = OpFn(*m);
-    auto stored = store_mrp_locked(dst, result, base, base_len);
-    if (!stored)
-        return std::unexpected(stored.error());
-    return {};
+    const ConfigSnapshot *cfg = record_prelude();
+    if (cfg == nullptr)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    auto v = record_mrp_sources(src, base, base_len, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+
+    std::vector<ValueId> srcs = *v;
+    const std::vector<uint64_t> base_vec(base, base + base_len);
+    return detail::append_mrp_compute(
+        dst, base, base_len, std::move(srcs), "haze mrp unary op",
+        [&](const std::vector<ValueId> &dv) {
+            return [s = std::move(*v), dv,
+                    base_vec](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+                auto m = build_lowered_mrp(ctx, s, base_vec);
+                if (!m)
+                    return std::unexpected(m.error());
+                const niobium::fhetch::MRP result = OpFn(*m);
+                for (std::size_t i = 0; i < dv.size(); ++i)
+                    ctx.bind(dv[i], result[base_vec[i]]);
+                return {};
+            };
+        });
 }
 
 // MRP polynomial-with-index. Used by hazeAutomorphMrp (mr_automorph_eval
-// takes an odd integer k in [1, 2N-1] and is otherwise modulus-independent).
+// takes an odd integer k in [1, 2N-1]) and hazeRotAutomorphCoeffMrp.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op_mrp(void *const *dst, const void *const *src,
                                                        uint64_t index, const uint64_t *base,
                                                        std::size_t base_len) noexcept {
-    EpochSession session;
-    auto m = build_mrp_locked(src, base, base_len);
-    if (!m)
-        return std::unexpected(m.error());
-    niobium::fhetch::MRP result = OpFn(*m, index);
-    auto stored = store_mrp_locked(dst, result, base, base_len);
-    if (!stored)
-        return std::unexpected(stored.error());
-    return {};
+    const ConfigSnapshot *cfg = record_prelude();
+    if (cfg == nullptr)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    auto v = record_mrp_sources(src, base, base_len, cfg->ring_dim);
+    if (!v)
+        return std::unexpected(v.error());
+
+    std::vector<ValueId> srcs = *v;
+    const std::vector<uint64_t> base_vec(base, base + base_len);
+    return detail::append_mrp_compute(
+        dst, base, base_len, std::move(srcs), "haze mrp pi op",
+        [&](const std::vector<ValueId> &dv) {
+            return [s = std::move(*v), dv, base_vec,
+                    index](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
+                auto m = build_lowered_mrp(ctx, s, base_vec);
+                if (!m)
+                    return std::unexpected(m.error());
+                const niobium::fhetch::MRP result = OpFn(*m, index);
+                for (std::size_t i = 0; i < dv.size(); ++i)
+                    ctx.bind(dv[i], result[base_vec[i]]);
+                return {};
+            };
+        });
 }
 
 } // namespace haze

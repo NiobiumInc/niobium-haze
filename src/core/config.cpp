@@ -56,6 +56,7 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
     // Keep the record path's slot table on the same geometry as the
     // allocator pool. Reachable only pre-freeze, i.e. with no bindings.
     bindings().set_slot_bytes(n * sizeof(uint64_t));
+    recorded_moduli().set_slot_bytes(n * sizeof(uint64_t));
     return {};
 }
 

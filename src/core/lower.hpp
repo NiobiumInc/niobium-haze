@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace haze {
@@ -47,7 +48,11 @@ struct PendingMrpGroup {
 // not "clean this up" to std::map/vector without re-baselining traces.
 struct DerivedState {
     std::unordered_map<DevAddr, std::string> pending_outputs;
-    std::unordered_map<std::string, PendingMrpGroup> pending_mrp_groups;
+    // Pending groups hold NAMES; membership resolves through
+    // known_mrp_groups at tag time so the exported group is the latest
+    // registration (latest-write-wins, mirroring the eager engine).
+    std::unordered_set<std::string> pending_mrp_groups;
+    std::unordered_map<std::string, PendingMrpGroup> known_mrp_groups;
     // Final addr -> value view at flush; resolves pending outputs and
     // group residues to the polynomial that lowering binds.
     std::unordered_map<DevAddr, ValueId> final_bindings;
