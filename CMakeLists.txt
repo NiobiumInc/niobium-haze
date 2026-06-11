@@ -188,6 +188,7 @@ add_library(haze_objs OBJECT
   src/core/config.cpp
   src/core/device.cpp
   src/core/epoch.cpp
+  src/core/graph.cpp
   src/core/mrp_polymap.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
@@ -424,6 +425,7 @@ set(_openfhe_include "${OPENFHE_INSTALL_DIR}/include/openfhe")
 
 add_executable(haze_tests
   test/test_build.cpp
+  test/test_tape.cpp
   test/test_memory.cpp
   test/test_config.cpp
   test/test_compute.cpp
