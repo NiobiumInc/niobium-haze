@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
@@ -38,6 +39,22 @@ namespace haze {
 // through every comparison site in haze.
 constexpr std::string_view kLocalTarget = "local";
 
+// Immutable snapshot of the FHE parameters the record path reads on
+// every compute call. Published once by Config::freeze() and then read
+// lock-free; valid until Config::reset() (hazeDeviceReset concurrent
+// with compute is documented-undefined, so readers never outlive it).
+struct ConfigSnapshot {
+    uint64_t ring_dim = 0;
+    std::vector<uint64_t> moduli;
+
+    // 0 = unset / out of range, mirroring Config::modulus().
+    uint64_t modulus(int idx) const noexcept {
+        if (idx < 0 || static_cast<size_t>(idx) >= moduli.size())
+            return 0;
+        return moduli[static_cast<size_t>(idx)];
+    }
+};
+
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
 // twiddle generators. Plus the program/target metadata fed to the
 // compiler at recording-init time.
@@ -57,6 +74,16 @@ class Config {
 
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
+
+    // Freeze the FHE parameters and publish the lock-free snapshot. The
+    // record path calls this on every compute entry: the fast path is a
+    // single acquire load. Returns nullptr (and freezes nothing) while
+    // ring_dim is still unset, so a failed early compute does not lock
+    // the user out of configuring afterwards. Once frozen, parameter
+    // mutators behave exactly as after configure_device(): identical
+    // re-sets succeed, changes are rejected. Cleared by reset().
+    const ConfigSnapshot *freeze() noexcept;
+    bool frozen() const noexcept;
 
     // Program / target metadata fed to the compiler during init.
     // Defaults: name="haze", version="0.1", description="HAZE runtime",
@@ -94,6 +121,9 @@ class Config {
 
   private:
     Config() = default;
+
+    // Published-once snapshot; written under mutex_, read lock-free.
+    std::atomic<const ConfigSnapshot *> snapshot_{nullptr};
 
     mutable HazeMutex mutex_;
     uint64_t ring_dim_ = 0;

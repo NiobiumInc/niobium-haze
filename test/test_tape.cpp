@@ -7,6 +7,7 @@
 // they run in the `make test-unit` sweep.
 
 #include "common/handle.hpp"
+#include "core/config.hpp"
 #include "core/graph.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -170,4 +171,69 @@ TEST_CASE("Graph: reset discards the tape without lowering", "[unit][tape]") {
 
     haze::graph().reset();
     REQUIRE(haze::graph().size() == 0);
+}
+
+namespace {
+
+// Config is a process singleton too; bracket every freeze test with a
+// full reset so the C-ABI test cases (which reset via hazeDeviceReset)
+// never observe a frozen leftover.
+struct ConfigResetFixture {
+    ConfigResetFixture() { haze::config().reset(); }
+    ~ConfigResetFixture() { haze::config().reset(); }
+    ConfigResetFixture(const ConfigResetFixture &) = delete;
+    ConfigResetFixture &operator=(const ConfigResetFixture &) = delete;
+};
+
+} // namespace
+
+TEST_CASE("Config::freeze is a no-op before ring_dim is set", "[unit][tape]") {
+    ConfigResetFixture fixture;
+    REQUIRE(haze::config().freeze() == nullptr);
+    REQUIRE_FALSE(haze::config().frozen());
+    // The failed early freeze must not lock the user out of configuring.
+    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::config().set_modulus(0, 576460752303415297ULL).has_value());
+}
+
+TEST_CASE("Config::freeze publishes an immutable snapshot", "[unit][tape]") {
+    ConfigResetFixture fixture;
+    constexpr uint64_t kQ0 = 576460752303415297ULL;
+    constexpr uint64_t kQ1 = 576460752303439873ULL;
+    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
+    REQUIRE(haze::config().set_modulus(1, kQ1).has_value());
+
+    const haze::ConfigSnapshot *snap = haze::config().freeze();
+    REQUIRE(snap != nullptr);
+    REQUIRE(haze::config().frozen());
+    REQUIRE(snap->ring_dim == 4096);
+    REQUIRE(snap->modulus(0) == kQ0);
+    REQUIRE(snap->modulus(1) == kQ1);
+    REQUIRE(snap->modulus(2) == 0);  // out of range reads as unset
+    REQUIRE(snap->modulus(-1) == 0); // negative index reads as unset
+
+    // Idempotent: same snapshot object on re-freeze.
+    REQUIRE(haze::config().freeze() == snap);
+}
+
+TEST_CASE("Config: post-freeze mutation gets the configure_device treatment", "[unit][tape]") {
+    ConfigResetFixture fixture;
+    constexpr uint64_t kQ0 = 576460752303415297ULL;
+    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
+    REQUIRE(haze::config().freeze() != nullptr);
+
+    // Identical re-sets keep succeeding (idempotent setters)...
+    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
+    // ...changes are rejected.
+    REQUIRE_FALSE(haze::config().set_ring_dimension(8192).has_value());
+    REQUIRE_FALSE(haze::config().set_modulus(0, kQ0 + 2).has_value());
+    REQUIRE_FALSE(haze::config().set_modulus(1, kQ0).has_value());
+
+    // reset() thaws everything.
+    haze::config().reset();
+    REQUIRE_FALSE(haze::config().frozen());
+    REQUIRE(haze::config().set_ring_dimension(8192).has_value());
 }

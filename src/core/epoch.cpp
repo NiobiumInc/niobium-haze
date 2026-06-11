@@ -500,6 +500,12 @@ HazeMutex &EpochSession::init_then_get_mutex() noexcept {
     // Run ensure_initialized() before grabbing the epoch lock so first-call
     // init doesn't serialize; failure surfaces later via is_initialized().
     [[maybe_unused]] const bool _ = backend().ensure_initialized();
+    // Freeze the FHE parameters on first compute: the deferred-tape record
+    // path reads them lock-free, so post-compute mutation must be rejected
+    // the same way post-configure_device mutation already is. No-op (and
+    // not yet frozen) while ring_dim is unset — the op fails validation on
+    // its own and the user can still configure afterwards.
+    (void)config().freeze();
     return epoch().mutex_;
 }
 

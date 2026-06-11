@@ -15,10 +15,13 @@
 #include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
+#include "core/graph.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,6 +53,9 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
         return std::unexpected(HazeInternalError::NotConfigured);
     ring_dim_ = n;
     DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
+    // Keep the record path's slot table on the same geometry as the
+    // allocator pool. Reachable only pre-freeze, i.e. with no bindings.
+    bindings().set_slot_bytes(n * sizeof(uint64_t));
     return {};
 }
 
@@ -109,6 +115,37 @@ std::expected<void, HazeInternalError> Config::configure_device() noexcept {
 uint64_t Config::ring_dim() const noexcept {
     HazeLockGuard lock(mutex_);
     return ring_dim_;
+}
+
+const ConfigSnapshot *Config::freeze() noexcept {
+    // Fast path: already frozen; one acquire load per compute call.
+    if (const ConfigSnapshot *snap = snapshot_.load(std::memory_order_acquire); snap != nullptr)
+        return snap;
+    HazeLockGuard lock(mutex_);
+    if (const ConfigSnapshot *snap = snapshot_.load(std::memory_order_acquire); snap != nullptr)
+        return snap; // racing freezer won under the lock
+    // Nothing meaningful to freeze yet: a compute attempted before
+    // set_ring_dimension fails on its own validation, and freezing here
+    // would wrongly reject the user's subsequent configuration calls.
+    if (ring_dim_ == 0)
+        return nullptr;
+    // Owned by snapshot_; freed by reset(). nothrow keeps the noexcept
+    // contract honest — on allocation failure we simply stay unfrozen
+    // and the caller's own validation reports the op's failure.
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    const auto *snap = new (std::nothrow) ConfigSnapshot{.ring_dim = ring_dim_, .moduli = moduli_};
+    if (snap == nullptr)
+        return nullptr;
+    snapshot_.store(snap, std::memory_order_release);
+    // Reuse the configure_device() immutability gate: once recorded
+    // against, the parameters get the same accept-identical /
+    // reject-change treatment an explicit hazeConfigureDevice grants.
+    configured_ = true;
+    return snap;
+}
+
+bool Config::frozen() const noexcept {
+    return snapshot_.load(std::memory_order_acquire) != nullptr;
 }
 
 uint64_t Config::modulus(int idx) const noexcept {
@@ -235,6 +272,10 @@ bool Config::bit_reversal() const noexcept {
 
 void Config::reset() noexcept {
     HazeLockGuard lock(mutex_);
+    // Safe to free: reset concurrent with recording is documented-
+    // undefined, so no lock-free reader holds the snapshot here.
+    delete snapshot_.exchange(nullptr, std::memory_order_acq_rel);
+    bindings().set_slot_bytes(0);
     ring_dim_ = 0;
     moduli_.clear();
     twiddle_generators_.clear();
