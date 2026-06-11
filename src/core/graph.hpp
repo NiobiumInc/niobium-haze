@@ -22,7 +22,9 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -167,6 +169,13 @@ struct Node {
     std::vector<DevAddr> group_addrs;
     std::vector<uint64_t> group_moduli;
     std::vector<ValueId> group_vids;
+    // Value-translation map for memoized-kernel instances: the thunk
+    // captured the RECORDING call's ValueIds; LowerCtx resolves them
+    // through this map (nullptr = identity, the common case). Shared by
+    // every node cloned from one sub-tape instantiation. Node metadata
+    // (dst_vid/src_vids/group_vids) is translated EAGERLY at clone time
+    // so derive() never consults this.
+    std::shared_ptr<const std::unordered_map<ValueId, ValueId>> vid_remap;
     // Lowering action; empty for metadata-only kinds.
     Thunk thunk;
     // Provenance for flush-time diagnostics: the C-ABI entry point that
@@ -183,6 +192,14 @@ class Graph {
     static Graph &instance() noexcept;
 
     void append(Node &&node) noexcept HAZE_EXCLUDES(mutex_);
+
+    // Kernel-recording redirection: while a sink is installed (between
+    // hazeKernelBegin and hazeKernelEnd on a RECORD disposition),
+    // append() routes nodes into it instead of the tape. Single open
+    // bracket at a time; Begin/End must not interleave across threads
+    // (documented in haze.h).
+    void install_frame_sink(std::vector<Node> *sink) noexcept HAZE_EXCLUDES(mutex_);
+    bool frame_sink_installed() const noexcept HAZE_EXCLUDES(mutex_);
 
     // Number of nodes currently recorded (diagnostics/tests).
     size_t size() const noexcept HAZE_EXCLUDES(mutex_);
@@ -204,6 +221,7 @@ class Graph {
 
     mutable HazeMutex mutex_;
     std::vector<Node> nodes_ HAZE_GUARDED_BY(mutex_);
+    std::vector<Node> *frame_sink_ HAZE_GUARDED_BY(mutex_) = nullptr;
 };
 
 inline Graph &graph() noexcept {

@@ -56,6 +56,11 @@ std::expected<void, HazeInternalError> record_mrp_out_group(std::span<const DevA
                                                             const uint64_t *base,
                                                             std::size_t len) noexcept;
 
+// Derive an MRP group name from the leading residue addr
+// (16-hex-encoded). Exposed for the kernel cache, which re-derives
+// names when instantiating a memoized sub-tape against new addresses.
+std::string mrp_group_name(std::string_view prefix, DevAddr leading_addr);
+
 // Lowering-side helper for thunks: assemble the residues' materialized
 // polynomials into an fhetch MRP (the from_pairs the eager build_mrp
 // did at record time).

@@ -178,6 +178,7 @@ add_library(haze_objs OBJECT
   src/api/device.cpp
   src/api/error.cpp
   src/api/graph.cpp
+  src/api/kernel.cpp
   src/api/lifecycle.cpp
   src/api/memory.cpp
   src/api/stream.cpp
@@ -188,6 +189,7 @@ add_library(haze_objs OBJECT
   src/core/config.cpp
   src/core/device.cpp
   src/core/graph.cpp
+  src/core/kernel_cache.cpp
   src/core/lower.cpp
   src/core/mrp_polymap.cpp
   src/core/record.cpp
@@ -464,6 +466,7 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_hardware_format.cpp
   test/test_threaded_record.cpp
+  test/test_kernel_memo.cpp
   test/cxx/test_kernel_guards.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.

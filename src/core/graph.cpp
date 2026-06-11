@@ -130,7 +130,21 @@ Graph &Graph::instance() noexcept {
 
 void Graph::append(Node &&node) noexcept {
     HazeLockGuard lock(mutex_);
+    if (frame_sink_ != nullptr) {
+        frame_sink_->push_back(std::move(node));
+        return;
+    }
     nodes_.push_back(std::move(node));
+}
+
+void Graph::install_frame_sink(std::vector<Node> *sink) noexcept {
+    HazeLockGuard lock(mutex_);
+    frame_sink_ = sink;
+}
+
+bool Graph::frame_sink_installed() const noexcept {
+    HazeLockGuard lock(mutex_);
+    return frame_sink_ != nullptr;
 }
 
 size_t Graph::size() const noexcept {
@@ -153,6 +167,7 @@ void Graph::reset() noexcept {
     {
         HazeLockGuard lock(mutex_);
         nodes_.clear();
+        frame_sink_ = nullptr; // an open kernel bracket dies with the reset
     }
     bindings().clear();
     recorded_moduli().clear();

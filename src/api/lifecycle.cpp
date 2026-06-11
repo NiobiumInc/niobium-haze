@@ -23,6 +23,7 @@
 #include "core/config.hpp"
 #include "core/device.hpp"
 #include "core/graph.hpp"
+#include "core/kernel_cache.hpp"
 #include "core/record.hpp"
 #include "core/stream.hpp"
 
@@ -36,6 +37,7 @@ namespace haze {
 void reset_all() noexcept {
     // Clear all internal state first, since we may depend on external object state when clearing
     // otherwise.
+    kernel_cache().reset(); // open bracket + memo entries die first
     graph().reset();
     backend().reset();
     allocator().reset();

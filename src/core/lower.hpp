@@ -99,8 +99,13 @@ struct LowerCtx {
   private:
     friend std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept;
 
+    // Memoized-instance translation for the node currently lowering:
+    // thunks captured the recording call's vids; identity when null.
+    ValueId translate(ValueId id) const noexcept;
+
     std::unordered_map<ValueId, niobium::fhetch::Polynomial> values_;
     const DerivedState *derived_ = nullptr;
+    const std::unordered_map<ValueId, ValueId> *remap_ = nullptr;
     size_t node_idx_ = 0;
 };
 

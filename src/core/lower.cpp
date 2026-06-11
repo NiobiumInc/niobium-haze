@@ -137,7 +137,8 @@ DerivedState derive(std::span<const Node> tape) {
         case Node::Kind::MrpInputTag:
             // Counter-based name from the leading addr; dedup so each
             // name reaches fhetch exactly once (the thunk reads it back
-            // via ctx.node_name()).
+            // via ctx.node_name(); memoized clones carry a TRANSLATED
+            // leading addr, so instances name like cold recordings).
             d.node_names[i] = group_name(/*output=*/false, node.addr);
             d.emit_mrp_input[i] = mrp_input_tagged_names.insert(d.node_names[i]).second;
             break;
@@ -227,9 +228,17 @@ DerivedState derive(std::span<const Node> tape) {
     return d;
 }
 
+ValueId LowerCtx::translate(ValueId id) const noexcept {
+    if (remap_ == nullptr)
+        return id;
+    if (const auto it = remap_->find(id); it != remap_->end())
+        return it->second;
+    return id;
+}
+
 std::expected<const fhetch::Polynomial *, HazeInternalError>
 LowerCtx::poly(ValueId id) const noexcept {
-    if (auto it = values_.find(id); it != values_.end())
+    if (auto it = values_.find(translate(id)); it != values_.end())
         return &it->second;
     record_internal_error(HazeInternalError::MissingPolyMapBinding,
                           "LowerCtx::poly: value not materialized");
@@ -237,7 +246,7 @@ LowerCtx::poly(ValueId id) const noexcept {
 }
 
 void LowerCtx::bind(ValueId id, fhetch::Polynomial poly) {
-    values_.insert_or_assign(id, std::move(poly));
+    values_.insert_or_assign(translate(id), std::move(poly));
 }
 
 const std::string &LowerCtx::node_name() const noexcept {
@@ -320,6 +329,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     for (size_t i = 0; i < tape.size(); ++i) {
         const Node &node = tape[i];
         ctx.node_idx_ = i;
+        ctx.remap_ = node.vid_remap.get();
         if (node.thunk) {
             if (auto lowered = node.thunk(ctx); !lowered)
                 return fail(lowered.error(), node.entry);

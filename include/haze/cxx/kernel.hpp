@@ -33,24 +33,30 @@
 // Violations fail concept resolution; the deleted kernel() catch-all
 // carries the rules in its diagnostic.
 //
-// In M2 a kernel executes its body on every call (no memoization);
-// after the body succeeds, every Out/InOut buffer is tagged as a
-// recording output through one funnel (tag_outputs). hazeFlush stays an
-// explicit caller decision.
+// Calls run the hazeKernelBegin/End protocol: the first call with a
+// given key records the body as a cached sub-tape; later calls with the
+// same key skip the body entirely (HAZE_KERNEL_REPLAY) and instantiate
+// the cached recording against the new buffers — O(1) user code per
+// repeat call, byte-identical trace. Out/InOut buffers are bound and
+// tagged by hazeKernelEnd on both dispositions. hazeFlush stays an
+// explicit caller decision. HAZE_KERNEL_MEMO=0 forces cold recording;
+// HAZE_KERNEL_VALIDATE=1 re-traces cache hits and rejects divergence.
 #pragma once
 
 #include "haze/cxx/error.hpp"
 #include "haze/cxx/handles.hpp"
 #include "haze/cxx/hash.hpp"
-#include "haze/cxx/ops.hpp"
 #include "haze/cxx/roles.hpp"
 
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <haze/haze.h>
+#include <haze/haze_types.h>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace haze::cxx::inline v1 {
 
@@ -183,6 +189,88 @@ template <class Formal, class Actual> decltype(auto) bind_arg(Actual &&actual) {
 
 } // namespace detail
 
+namespace detail {
+
+// Canonical memo-key serialization: kernel name, then per parameter a
+// role/key tag plus the parameter's shape contribution. Buffer contents
+// and addresses are never keyed — only what the body's recording
+// depends on (scalars, moduli, residue counts).
+class KeyBuilder {
+  public:
+    explicit KeyBuilder(const char *name) {
+        for (const char *c = name; *c != '\0'; ++c)
+            bytes_.push_back(static_cast<uint8_t>(*c));
+        bytes_.push_back(0xFF); // name / parameter-list separator
+    }
+
+    void tag(uint8_t value) { bytes_.push_back(value); }
+    void word(uint64_t value) {
+        for (int i = 0; i < 8; ++i)
+            bytes_.push_back(static_cast<uint8_t>(value >> (8 * i)));
+    }
+
+    uint64_t hash() const noexcept {
+        uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a basis
+        for (const uint8_t b : bytes_)
+            h = mix_word(b, h);
+        return h;
+    }
+    const uint8_t *data() const noexcept { return bytes_.data(); }
+    std::size_t size() const noexcept { return bytes_.size(); }
+
+  private:
+    std::vector<uint8_t> bytes_;
+};
+
+// Per-call descriptor arrays for hazeKernelBegin/End. Srp descriptors
+// need stable one-element residue/base arrays; reserve() up front keeps
+// every pointer valid (each parameter contributes at most one entry).
+struct CallBuffers {
+    std::vector<hazeKernelInput> inputs;
+    std::vector<hazeKernelOutput> outputs;
+    std::vector<const void *> srp_in_ptrs;
+    std::vector<void *> srp_out_ptrs;
+    std::vector<uint64_t> srp_mods;
+
+    explicit CallBuffers(std::size_t arity) {
+        inputs.reserve(arity);
+        outputs.reserve(arity);
+        srp_in_ptrs.reserve(arity);
+        srp_out_ptrs.reserve(arity);
+        srp_mods.reserve(arity);
+    }
+};
+
+inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Srp &srp) {
+    bufs.srp_in_ptrs.push_back(srp.addr());
+    bufs.srp_mods.push_back(srp.mod().value);
+    bufs.inputs.push_back({&bufs.srp_in_ptrs.back(), &bufs.srp_mods.back(), 1});
+    key.word(srp.mod().value);
+}
+
+inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Mrp &mrp) {
+    bufs.inputs.push_back({mrp.data(), mrp.base(), mrp.base_len()});
+    key.word(mrp.base_len());
+    for (std::size_t i = 0; i < mrp.base_len(); ++i)
+        key.word(mrp.base()[i]);
+}
+
+inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Srp &srp) {
+    bufs.srp_out_ptrs.push_back(srp.addr());
+    bufs.srp_mods.push_back(srp.mod().value);
+    bufs.outputs.push_back({&bufs.srp_out_ptrs.back(), &bufs.srp_mods.back(), 1});
+    key.word(srp.mod().value);
+}
+
+inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Mrp &mrp) {
+    bufs.outputs.push_back({mrp.data(), mrp.base(), mrp.base_len()});
+    key.word(mrp.base_len());
+    for (std::size_t i = 0; i < mrp.base_len(); ++i)
+        key.word(mrp.base()[i]);
+}
+
+} // namespace detail
+
 template <class F> class Kernel {
     using traits = detail::function_traits<decltype(&F::operator())>;
     using Formals = typename traits::args;
@@ -195,20 +283,56 @@ template <class F> class Kernel {
     template <class... Actuals>
         requires detail::bindable<Formals, Actuals &&...>
     Status operator()(Actuals &&...actuals) const {
-        // M2: trace the body on every call. (M3 swaps this block for the
-        // hazeKernelBegin/End record-or-replay protocol; the call shape
-        // users see is final.)
-        Status body_status =
-            invoke(std::index_sequence_for<Actuals...>{}, std::forward<Actuals>(actuals)...);
-        if (!body_status.ok())
-            return body_status; // body failed: nothing gets tagged
-        // Safe after the forward above: role actuals are lvalues bound by
-        // reference (never moved), and tag_outputs reads roles only.
-        // NOLINTNEXTLINE(bugprone-use-after-move)
-        return tag_outputs(std::index_sequence_for<Actuals...>{}, actuals...);
+        // Serialize the memo key + collect the traced formals, in
+        // parameter order, then run the Begin / record-or-replay / End
+        // protocol. Out/InOut buffers are bound and tagged by End on
+        // both dispositions — kernels never call hazeTagOutput.
+        detail::KeyBuilder key(name_);
+        detail::CallBuffers bufs(traits::arity);
+        describe(std::index_sequence_for<Actuals...>{}, key, bufs, actuals...);
+
+        hazeKernelDisposition disposition{};
+        if (const hazeError_t err =
+                hazeKernelBegin(name_, key.hash(), key.data(), key.size(), bufs.inputs.data(),
+                                bufs.inputs.size(), &disposition);
+            err != HAZE_SUCCESS)
+            return Status{err};
+
+        if (disposition == HAZE_KERNEL_RECORD) {
+            Status body_status =
+                invoke(std::index_sequence_for<Actuals...>{}, std::forward<Actuals>(actuals)...);
+            if (!body_status.ok()) {
+                (void)hazeKernelAbort(); // nothing reaches the tape
+                return body_status;
+            }
+        }
+        return Status{hazeKernelEnd(bufs.outputs.data(), bufs.outputs.size())};
     }
 
   private:
+    template <std::size_t... I, class... Actuals>
+    void describe(std::index_sequence<I...> /*seq*/, detail::KeyBuilder &key,
+                  detail::CallBuffers &bufs, Actuals &...actuals) const {
+        const auto one = [&]<class Formal>(auto &actual) {
+            using D = std::remove_cvref_t<Formal>;
+            if constexpr (detail::is_role<D>) {
+                // In and InOut feed Begin; Out and InOut feed End.
+                if constexpr (!std::same_as<D, Out<typename detail::role_of<D>::buffer>>) {
+                    key.tag(0x01);
+                    detail::describe_in(bufs, key, actual);
+                }
+                if constexpr (detail::role_of<D>::is_out) {
+                    key.tag(0x02);
+                    detail::describe_out(bufs, key, actual);
+                }
+            } else {
+                key.tag(0x03);
+                key.word(param_hash<D>::mix(actual, 0xcbf29ce484222325ULL));
+            }
+        };
+        (one.template operator()<std::tuple_element_t<I, Formals>>(actuals), ...);
+    }
+
     template <std::size_t... I, class... Actuals>
     Status invoke(std::index_sequence<I...> /*seq*/, Actuals &&...actuals) const {
         if constexpr (std::is_void_v<typename traits::result>) {
@@ -219,26 +343,6 @@ template <class F> class Kernel {
             return body_(detail::bind_arg<std::tuple_element_t<I, Formals>>(
                 std::forward<Actuals>(actuals))...);
         }
-    }
-
-    // THE tag funnel: every Out/InOut buffer becomes a recording output
-    // here, post-body, in parameter order. Keep this the single place
-    // outputs are declared — M3 replaces exactly this body with
-    // hazeKernelEnd.
-    template <std::size_t... I, class... Actuals>
-    Status tag_outputs(std::index_sequence<I...> /*seq*/, Actuals &...actuals) const {
-        Status status{};
-        const auto tag_one = [&status]<class Formal>(auto &actual) {
-            using D = std::remove_cvref_t<Formal>;
-            if constexpr (detail::is_role<D>) {
-                if constexpr (detail::role_of<D>::is_out) {
-                    if (status.ok())
-                        status = tag_output(actual);
-                }
-            }
-        };
-        (tag_one.template operator()<std::tuple_element_t<I, Formals>>(actuals), ...);
-        return status;
     }
 
     const char *name_;

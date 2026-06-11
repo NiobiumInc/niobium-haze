@@ -48,22 +48,22 @@ constexpr auto ct_double =
         return haze::cxx::add(*y1, *x1, *x1);
     });
 
-// Extract per-tower limb vectors from one ciphertext element (same
-// idiom as ops.cpp's h2d_ct, public OpenFHE API only).
-std::vector<std::vector<uint64_t>> limbs_of(const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct,
-                                            std::size_t elem_idx, std::size_t ring_dim) {
-    const auto &elem = ct->GetElements()[elem_idx];
-    const std::size_t towers = elem.GetNumOfElements();
-    std::vector<std::vector<uint64_t>> chain(towers);
-    for (std::size_t t = 0; t < towers; ++t) {
-        const auto &vals = elem.GetElementAtIndex(static_cast<usint>(t)).GetValues();
-        REQUIRE(vals.GetLength() == ring_dim);
-        chain[t].resize(ring_dim);
-        for (std::size_t i = 0; i < ring_dim; ++i)
-            chain[t][i] = vals[i].template ConvertToInt<uint64_t>();
-    }
-    return chain;
-}
+// Non-owning Mrp view over an ops::Allocs chain: adopt() shares the
+// raw allocations with the Ct, release() hands them back before the Ct
+// frees them. Declare AFTER the owning Ct so destruction order holds.
+class BorrowedMrp {
+  public:
+    BorrowedMrp(const haze::test::ops::Allocs &chain, std::span<const uint64_t> base)
+        : mrp_(Mrp::adopt({chain.data(), chain.size()}, base)) {}
+    ~BorrowedMrp() { (void)mrp_.release(); }
+    BorrowedMrp(const BorrowedMrp &) = delete;
+    BorrowedMrp &operator=(const BorrowedMrp &) = delete;
+
+    const Mrp &operator*() const noexcept { return mrp_; }
+
+  private:
+    Mrp mrp_;
+};
 
 ops::CtBytes download_ct(const Mrp &c0, const Mrp &c1, std::size_t ring_dim) {
     ops::CtBytes bytes;
@@ -96,19 +96,16 @@ TEST_CASE("typed kernels: encrypt -> kernel add/double -> decrypt round-trip", "
     auto ct1 = cc->Encrypt(ctx.keys.publicKey, pt1);
     auto ct2 = cc->Encrypt(ctx.keys.publicKey, pt2);
 
-    // Host -> device through the typed handles (one MRP upload per chain).
+    // Host -> device through the shared ops harness, then borrow the
+    // chains as typed handles (the Ct keeps ownership).
     const std::span<const uint64_t> base{ctx.q_base};
-    auto upload_chain = [&](const auto &ct, std::size_t elem) {
-        auto limbs = limbs_of(ct, elem, ctx.ring_dim);
-        REQUIRE(limbs.size() == base.size());
-        auto mrp = Mrp::upload(limbs, base);
-        REQUIRE(mrp.ok());
-        return std::move(mrp).value();
-    };
-    const Mrp a0 = upload_chain(ct1, 0);
-    const Mrp a1 = upload_chain(ct1, 1);
-    const Mrp b0 = upload_chain(ct2, 0);
-    const Mrp b1 = upload_chain(ct2, 1);
+    const ops::Ct hct1 = ops::h2d_ct(ctx, ct1);
+    const ops::Ct hct2 = ops::h2d_ct(ctx, ct2);
+    REQUIRE(hct1.towers() == base.size());
+    const BorrowedMrp a0(hct1.c0(), base);
+    const BorrowedMrp a1(hct1.c1(), base);
+    const BorrowedMrp b0(hct2.c0(), base);
+    const BorrowedMrp b1(hct2.c1(), base);
 
     const std::size_t poly_bytes = ctx.ring_dim * sizeof(uint64_t);
     auto fresh = [&] {
@@ -122,7 +119,7 @@ TEST_CASE("typed kernels: encrypt -> kernel add/double -> decrypt round-trip", "
     Mrp dbl1 = fresh();
 
     // Kernels record; Out<> buffers are tagged automatically.
-    REQUIRE(ct_add(a0, a1, b0, b1, sum0, sum1).ok());
+    REQUIRE(ct_add(*a0, *a1, *b0, *b1, sum0, sum1).ok());
     REQUIRE(ct_double(sum0, sum1, dbl0, dbl1).ok());
     REQUIRE(haze::cxx::flush().ok());
 

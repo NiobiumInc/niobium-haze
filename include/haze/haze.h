@@ -344,6 +344,43 @@ HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const
 HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                hazeStream_t stream) HAZE_NOEXCEPT;
 
+// Kernel memoization. A kernel is a record-time template: bracket a
+// deterministic sequence of compute calls with hazeKernelBegin /
+// hazeKernelEnd and the bracketed sub-tape is cached under
+// (name, key). A later Begin with the same key returns
+// HAZE_KERNEL_REPLAY and instantiates the cached sub-tape against the
+// new inputs/outputs WITHOUT running the body — O(1) user code per
+// repeat call. Rules:
+//   - key_hash/key_bytes cover everything the body's recording depends
+//     on besides buffer identities (scalars, moduli, shapes). Full key
+//     bytes are stored and compared — a hash collision can never alias
+//     two kernels.
+//   - Closed body: between Begin and End the body may touch ONLY the
+//     residues passed as inputs (all of which must already be recorded
+//     values) and the declared outputs. Allocation, H2D/D2H, free, and
+//     foreign buffers inside a body are rejected.
+//   - Outputs are caller-pre-allocated and passed to End on BOTH
+//     dispositions; End binds + tags them as recording outputs.
+//   - Nesting a Begin inside an open kernel returns
+//     HAZE_ERROR_NOT_SUPPORTED. Begin/End pairs must not interleave
+//     across threads.
+//   - hazeSetKernelMemo(0) (or env HAZE_KERNEL_MEMO=0) disables the
+//     cache: Begin always records, End only tags — the cold-recording
+//     control. hazeSetKernelValidate(1) (or HAZE_KERNEL_VALIDATE=1)
+//     re-runs cache-hit bodies and structurally compares against the
+//     cached sub-tape, failing End with HAZE_ERROR_KERNEL_VALIDATION on
+//     divergence (catches stateful / nondeterministic bodies).
+//   - hazeDeviceReset clears the cache and any open bracket.
+
+HAZE_API hazeError_t hazeKernelBegin(const char *name, uint64_t key_hash, const uint8_t *key_bytes,
+                                     size_t key_bytes_len, const hazeKernelInput *inputs,
+                                     size_t n_inputs,
+                                     hazeKernelDisposition *disposition) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeKernelEnd(const hazeKernelOutput *outputs, size_t n_outputs) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeKernelAbort(void) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetKernelMemo(int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetKernelValidate(int enable) HAZE_NOEXCEPT;
+
 // Graph recording and execution. Names mirror CUDA's graph API. All
 // entries currently return HAZE_ERROR_NOT_SUPPORTED — graph capture is
 // a future task.

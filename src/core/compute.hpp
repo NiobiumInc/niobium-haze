@@ -192,7 +192,7 @@ append_mrp_compute(void *const *dst, const uint64_t *base, std::size_t base_len,
     node.group_vids = dests.vids;
     node.src_vids = std::move(src_vids);
     node.entry = entry;
-    node.thunk = factory(dests.vids);
+    node.thunk = std::forward<ThunkFactory>(factory)(dests.vids);
     graph().append(std::move(node));
     return record_mrp_out_group(dests.addrs, base, base_len);
 }
