@@ -17,9 +17,30 @@
 
 namespace haze::test {
 
-// Combined integration setup: reset, ring dim, bridge CC init, align haze's
-// ciphertext modulus with OpenFHE's picked prime, configure device. Returns
-// the picked modulus so callers stay in lockstep with the .ct round-trip.
+// MODULUS CONTRACT:
+// For ops that carry a real modulus, the .fhetch trace's modulus table is
+// authoritative: both replay paths reconstruct under it — the in-process
+// simulator rebuilds each NativePoly's params from the trace modulus
+// (libnbfhetch auto_facade), and the transport bridge re-installs the trace
+// moduli onto input .bin towers and output templates (install_trace_*_moduli).
+// Verified by "trace modulus is authoritative ..." in test_hardware_format.cpp,
+// which sets the trace modulus to a prime distinct from the one the bridge's
+// scaffold cryptocontext.dat is built around and confirms the result tracks the
+// trace.
+//
+// EXCEPTION — modulus-less SRP ops: an opaque SRP hazeMemcpy(D2D) and a bare
+// SRP hazeAutomorph emit the COPY_MODULUS sentinel with no real modulus to
+// bind, so their OUTPUT template falls back to the bridge's scaffold prime
+// (the one hazeReplayBridgeInitCryptoContext "picks"). For those the trace is
+// NOT authoritative, so this setup aligns slot 0 to the scaffold prime and
+// returns it: tests then generate inputs and oracles against the same value
+// and the modulus-less outputs stay consistent. (Tests that only use
+// modulus-carrying ops would work with any prime; the MRP variants of copy /
+// automorph bind base[i] and are trace-authoritative.)
+
+// Combined integration setup: reset, ring dim, bridge CC init, align slot to
+// the bridge's scaffold prime (see contract above), configure device. Returns
+// that prime so callers stay in lockstep with the .ct round-trip.
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t desired_modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
@@ -33,12 +54,11 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
     return picked;
 }
 
-// Three-prime variant of the setup above for MRP cases: same sequence, all
-// three modulus slots set before the single hazeConfigureDevice. Slots 1 and
-// 2 get the suite's standard NTT-friendly companion primes; slot 0 gets the
-// bridge-picked prime (not the raw request) so callers stay in lockstep with
-// the .ct round-trip even if the bridge ever picks a different prime.
-// Returns the configured base, index-aligned with the modulus slots.
+// Three-prime variant for MRP cases: all three slots set before the single
+// hazeConfigureDevice. Slot 0 is the bridge's scaffold prime (see the
+// modulus-less exception in the contract above); slots 1 and 2 are the suite's
+// NTT-friendly companion primes. Returns the configured base, index-aligned
+// with the modulus slots.
 inline std::vector<uint64_t>
 setup_integration_mrp3_config(uint64_t ring_dim = 4096,
                               uint64_t desired_modulus = 576460752303415297ULL) {

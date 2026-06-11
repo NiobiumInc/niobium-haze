@@ -696,3 +696,57 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
     }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
+
+// The trace's modulus table — not the bridge's scaffold cryptocontext.dat
+// prime — is authoritative for replay. Three distinct valid primes are in
+// play: kQ0 (the desired modulus requested of the bridge), `picked` (what
+// OpenFHE's GenCryptoContext actually built cryptocontext.dat around), and the
+// trace modulus we set (kQ1). The add is crafted to WRAP — a+b lands in
+// [picked, kQ1) — so reducing mod kQ1 (no wrap) and mod picked (wrap) give
+// different results. The result must equal the kQ1 oracle, proving the
+// install-trace machinery makes the trace authoritative on this target.
+TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
+          "[integration][modulus]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(picked != kQ0);
+    REQUIRE(picked != kQ1);
+    // picked < kQ1 holds for these constants; the wrap window [picked, kQ1)
+    // below relies on it.
+    REQUIRE(picked < kQ1);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ1) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    // a = kQ1 - 7, b = 11  =>  a + b = kQ1 + 4.
+    //   mod kQ1    = 4              (trace authoritative)
+    //   mod picked = (kQ1-picked)+4 (scaffold prime authoritative)
+    // a is a valid residue mod kQ1 but exceeds picked, so the two paths can't
+    // coincide.
+    std::vector<uint64_t> va(kRingDim, kQ1 - 7);
+    std::vector<uint64_t> vb(kRingDim, 11);
+    const uint64_t expect_kq1 = 4;
+    const uint64_t expect_picked = (kQ1 - picked) + 4;
+    REQUIRE(expect_kq1 != expect_picked);
+
+    void *pa = nullptr;
+    void *pb = nullptr;
+    void *sum = nullptr;
+    REQUIRE(hazeMalloc(&pa, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&pb, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&sum, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(pa, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(pb, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(sum, pa, pb, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(sum) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), sum, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    for (uint64_t k = 0; k < kRingDim; ++k) {
+        INFO("slot " << k << " picked=" << picked);
+        REQUIRE(out[k] == expect_kq1);
+    }
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
