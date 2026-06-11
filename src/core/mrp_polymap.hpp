@@ -47,8 +47,7 @@ struct MrpDests {
     std::vector<DevAddr> addrs;
     std::vector<ValueId> vids;
 };
-MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base,
-                          std::size_t len) noexcept;
+MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base, std::size_t len) noexcept;
 
 // Register the dst residues as an MRP output group (no-op for len == 1;
 // the addr-derived name dedups re-registration of the same op).

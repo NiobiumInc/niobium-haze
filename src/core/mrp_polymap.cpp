@@ -27,8 +27,6 @@
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <sstream>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -96,8 +94,7 @@ record_mrp_sources(const void *const *polys, const uint64_t *base, std::size_t l
     return vids;
 }
 
-MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base,
-                          std::size_t len) noexcept {
+MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base, std::size_t len) noexcept {
     MrpDests dests;
     dests.addrs.reserve(len);
     dests.vids.reserve(len);

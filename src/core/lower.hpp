@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/graph.hpp"
+#include "core/lowering_session.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -96,6 +97,12 @@ struct LowerCtx {
     // the fhetch::tag_input(name, MRP).
     bool emit_mrp_input() const noexcept;
 
+    // The flush's control handle — and the hook through which thunks
+    // will reach a per-flush fhetch context once libnbfhetch grows one
+    // (today the session fronts the process-global engine, so thunks
+    // can keep calling the fhetch free functions directly).
+    LoweringSession &session() const noexcept { return *session_; }
+
   private:
     friend std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept;
 
@@ -105,6 +112,7 @@ struct LowerCtx {
 
     std::unordered_map<ValueId, niobium::fhetch::Polynomial> values_;
     const DerivedState *derived_ = nullptr;
+    LoweringSession *session_ = nullptr;
     const std::unordered_map<ValueId, ValueId> *remap_ = nullptr;
     size_t node_idx_ = 0;
 };

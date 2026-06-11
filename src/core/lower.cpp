@@ -16,16 +16,14 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
-#include "core/backend.hpp"
 #include "core/graph.hpp"
+#include "core/lowering_session.hpp"
 #include "core/polynomial_io.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <haze/replay_bridge.h>
 #include <ios>
-#include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <sstream>
@@ -65,8 +63,7 @@ DerivedState derive(std::span<const Node> tape) {
         if (auto it = names.find(leading); it != names.end())
             return it->second;
         auto &counter = output ? mrp_out_name_counter : mrp_in_name_counter;
-        std::string name =
-            (output ? "haze_mrp_out_" : "haze_mrp_in_") + std::to_string(counter++);
+        std::string name = (output ? "haze_mrp_out_" : "haze_mrp_in_") + std::to_string(counter++);
         names.emplace(leading, name);
         return name;
     };
@@ -161,8 +158,7 @@ DerivedState derive(std::span<const Node> tape) {
                 if (rev == addr_to_mrp_groups.end())
                     continue;
                 // Copy: evict_group edits the reverse map under us.
-                const std::vector<std::string> conflicting(rev->second.begin(),
-                                                           rev->second.end());
+                const std::vector<std::string> conflicting(rev->second.begin(), rev->second.end());
                 for (const auto &other : conflicting)
                     if (other != name)
                         evict_group(other);
@@ -187,8 +183,8 @@ DerivedState derive(std::span<const Node> tape) {
                 if (d.pending_mrp_groups.contains(name)) {
                     for (DevAddr a : node.group_addrs)
                         if (!d.pending_outputs.contains(a))
-                            d.pending_outputs.emplace(
-                                a, "haze_out_" + std::to_string(output_counter++));
+                            d.pending_outputs.emplace(a, "haze_out_" +
+                                                             std::to_string(output_counter++));
                 }
                 break;
             }
@@ -281,8 +277,9 @@ std::unordered_set<ValueId> values_needed_at_end(const DerivedState &d) {
     return keep;
 }
 
-std::expected<void, HazeInternalError> fail(HazeInternalError err, const char *context) {
-    niobium::compiler().clear_captured();
+std::expected<void, HazeInternalError> fail(LoweringSession &session, HazeInternalError err,
+                                            const char *context) {
+    session.clear_captured();
     record_internal_error(err, context);
     return std::unexpected(err);
 }
@@ -298,9 +295,13 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     if (graph().size() == 0)
         return {};
 
+    // One control handle per flush — the seam the planned fhetch
+    // context API plugs into (see lowering_session.hpp).
+    LoweringSession session;
+
     // Failed-init parity with the eager engine's recording_=false
     // flush: report success, leave the tape intact for a later retry.
-    if (!backend().ensure_initialized())
+    if (!session.ensure_backend())
         return {};
 
     const std::vector<Node> tape = graph().seal();
@@ -311,7 +312,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
         // declared an output: skip the write/replay entirely so the
         // bridge crypto context isn't a prerequisite for compute-free
         // D2H reads. Mirrors clear_state_locked's captured-state clear.
-        niobium::compiler().clear_captured();
+        session.clear_captured();
         return {};
     }
 
@@ -321,18 +322,18 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     // post-materialize resets snap back to it; both moved here from
     // first-compute time — every fhetch emission still happens after
     // them, in tape order, exactly as the eager engine interleaved.
-    niobium::compiler().start_epoch();
-    CompilerBackend::start_recording();
+    session.begin_epoch();
 
     LowerCtx ctx;
     ctx.derived_ = &d;
+    ctx.session_ = &session;
     for (size_t i = 0; i < tape.size(); ++i) {
         const Node &node = tape[i];
         ctx.node_idx_ = i;
         ctx.remap_ = node.vid_remap.get();
         if (node.thunk) {
             if (auto lowered = node.thunk(ctx); !lowered)
-                return fail(lowered.error(), node.entry);
+                return fail(session, lowered.error(), node.entry);
         }
         // Drop values whose final consumer just ran (keeps the lowering
         // pass's live set at the eager engine's level: roughly one
@@ -352,11 +353,11 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
             std::ostringstream body;
             body << "finalize: pending output '" << name << "' addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec << " has no final binding";
-            return fail(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
         }
         const auto poly = ctx.poly(bound->second);
         if (!poly)
-            return fail(poly.error(), "finalize: pending output value missing");
+            return fail(session, poly.error(), "finalize: pending output value missing");
         fhetch::tag_output(name, **poly);
     }
 
@@ -369,7 +370,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
         if (g_it == d.known_mrp_groups.end()) {
             std::ostringstream body;
             body << "finalize: pending MRP group '" << name << "' missing from known groups";
-            return fail(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
         }
         const PendingMrpGroup &g = g_it->second;
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
@@ -380,11 +381,11 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
                 std::ostringstream body;
                 body << "finalize: MRP group '" << name << "' addr 0x" << std::hex
                      << to_uintptr(g.addrs[i]) << std::dec << " has no final binding";
-                return fail(HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+                return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
             }
             const auto poly = ctx.poly(bound->second);
             if (!poly)
-                return fail(poly.error(), "finalize: MRP group value missing");
+                return fail(session, poly.error(), "finalize: MRP group value missing");
             // Polynomial copy is a shared_ptr refcount bump, not a deep clone.
             pairs.emplace_back(**poly, g.moduli[i]);
         }
@@ -392,11 +393,11 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     }
 
     // Step 1: write the trace. The replay_bridge post-recording hook
-    // runs inside stop_epoch; drain its failure flag right after.
-    if (!CompilerBackend::stop_epoch())
-        return fail(HazeInternalError::BackendReplayFailed, "haze::finalize (stop_epoch)");
-    if (hazeReplayBridgeTakeHookHadError() != 0)
-        return fail(HazeInternalError::BridgeHookFailed,
+    // runs inside the trace write; drain its failure flag right after.
+    if (!session.write_trace())
+        return fail(session, HazeInternalError::BackendReplayFailed, "haze::finalize (stop_epoch)");
+    if (session.bridge_hook_failed())
+        return fail(session, HazeInternalError::BridgeHookFailed,
                     "post_recording_hook reported per-input/output failures (see prior log "
                     "entries)");
 
@@ -404,14 +405,14 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     // ready to ship for out-of-process replay. No in-process result to
     // read back, so skip replay + shadow population.
     if (!run_replay) {
-        niobium::compiler().clear_captured();
+        session.clear_captured();
         return {};
     }
 
     // Step 2: dispatch replay (kLocalTarget = in-process simulator;
     // anything else = nbcc_fhetch_replay over HTTP).
-    if (!CompilerBackend::replay())
-        return fail(HazeInternalError::BackendReplayFailed, "haze::finalize (replay)");
+    if (!session.replay())
+        return fail(session, HazeInternalError::BackendReplayFailed, "haze::finalize (replay)");
 
     // Step 3: per-output shadow population. Any failure aborts the
     // epoch so a stale shadow can't surface as a silent wrong-value D2H.
@@ -421,22 +422,22 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
             std::ostringstream body;
             body << "result('" << name << "') unavailable for addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
-            return fail(HazeInternalError::BackendOutputMissing, body.str().c_str());
+            return fail(session, HazeInternalError::BackendOutputMissing, body.str().c_str());
         }
         std::vector<uint64_t> values;
         if (!extract_polynomial_values(result_poly, name, values)) {
             std::ostringstream body;
             body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
-            return fail(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
+            return fail(session, HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
         }
         if (auto updated = allocator().update_shadow(addr, std::move(values)); !updated) {
-            niobium::compiler().clear_captured();
+            session.clear_captured();
             return std::unexpected(updated.error());
         }
     }
 
-    niobium::compiler().clear_captured();
+    session.clear_captured();
     return {};
 }
 

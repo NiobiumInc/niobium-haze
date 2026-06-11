@@ -16,7 +16,6 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 #include "core/graph.hpp"
-#include "core/mrp_polymap.hpp"
 #include "core/record.hpp"
 
 #include <algorithm>

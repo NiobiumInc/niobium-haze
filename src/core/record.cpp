@@ -31,7 +31,6 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-
 const ConfigSnapshot *record_prelude() noexcept {
     // Init before anything else so first-call side effects (program-dir
     // resolution, probe suppression) keep their eager-engine timing;

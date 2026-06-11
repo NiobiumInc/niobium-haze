@@ -191,6 +191,7 @@ add_library(haze_objs OBJECT
   src/core/graph.cpp
   src/core/kernel_cache.cpp
   src/core/lower.cpp
+  src/core/lowering_session.cpp
   src/core/mrp_polymap.cpp
   src/core/record.cpp
   src/core/polynomial_io.cpp
