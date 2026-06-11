@@ -258,6 +258,29 @@ target_include_directories(haze PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
+# Header-only typed kernel layer (include/haze/cxx/). Consumer floor is
+# C++20 — everything lowers to the C ABI, so libhaze's internal C++23
+# never reaches the consumer's toolchain.
+add_library(haze_cxx INTERFACE)
+add_library(haze::cxx ALIAS haze_cxx)
+target_include_directories(haze_cxx INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(haze_cxx INTERFACE cxx_std_20)
+target_link_libraries(haze_cxx INTERFACE haze)
+
+# Floor check: the global standard is C++23, so this object target pins
+# -std=c++20 and compiles a TU that includes only the public cxx
+# headers. A C++23-ism leaking into include/haze/cxx/ fails the BUILD.
+add_library(haze_cxx_floor20 OBJECT test/cxx/floor20_check.cpp)
+target_link_libraries(haze_cxx_floor20 PRIVATE haze_cxx)
+set_target_properties(haze_cxx_floor20 PROPERTIES
+  CXX_STANDARD 20
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+
 find_package(Threads REQUIRED)
 
 # The niobium FHE stack to absorb: fhetch's archive + OpenFHE's *_static.a.
@@ -441,6 +464,7 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_hardware_format.cpp
   test/test_threaded_record.cpp
+  test/cxx/test_kernel_guards.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.
@@ -536,6 +560,7 @@ add_executable(haze_e2e_tests
   test/e2e/ops.cpp
   test/e2e/public/test_simple_program.cpp
   test/e2e/public/test_interleave.cpp
+  test/e2e/public/test_cxx_simple_program.cpp
 )
 
 # Public headers only: haze C ABI + the bridge's public C ABI + the test
