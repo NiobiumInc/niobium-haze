@@ -72,6 +72,8 @@ bool CompilerBackend::ensure_initialized() noexcept {
         std::string target_arg_storage = "--target=" + target;
         std::string montgomery_arg_storage = "--montgomery";
         std::string bitrev_arg_storage = "--bit_reversal";
+        // 5 = prog + --target + the two optional format flags + NULL terminator
+        // (grow this if another optional flag is added).
         char *argv[5] = {prog_storage.data(), target_arg_storage.data(), nullptr, nullptr, nullptr};
         int argc = 2;
         if (montgomery)
