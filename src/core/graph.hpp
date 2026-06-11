@@ -144,14 +144,21 @@ struct Node {
     // Primary address: dst residue / tagged addr / invalidated addr /
     // leading residue of an MRP group.
     DevAddr addr{};
-    // Binding produced by this node (binding kinds only).
+    // Binding produced by this node (binding kinds only). Multi-residue
+    // nodes bind group_addrs[i] -> group_vids[i] instead.
     ValueId dst_vid{kUnbound};
-    // MRP group membership (MrpInputTag / MrpRegister): residue addrs in
-    // encounter order with base[i] paired per residue, plus the vids the
-    // group's residues were bound to when the node was recorded.
+    // Values this node's thunk reads (operand lifetimes for the
+    // lowering pass's eviction; future DCE rides the same edges).
+    std::vector<ValueId> src_vids;
+    // MRP group membership (MrpInputTag / MrpRegister) or multi-residue
+    // dst binding (Compute): residue addrs in encounter order with
+    // base[i] paired per residue and the vid per residue.
     std::vector<DevAddr> group_addrs;
     std::vector<uint64_t> group_moduli;
     std::vector<ValueId> group_vids;
+    // MRP group name (MrpInputTag / MrpRegister); derived at record time
+    // from the leading residue addr (mrp_signature_name).
+    std::string name;
     // Lowering action; empty for metadata-only kinds.
     Thunk thunk;
     // Provenance for flush-time diagnostics: the C-ABI entry point that

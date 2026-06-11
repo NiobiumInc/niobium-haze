@@ -189,6 +189,7 @@ add_library(haze_objs OBJECT
   src/core/device.cpp
   src/core/epoch.cpp
   src/core/graph.cpp
+  src/core/lower.cpp
   src/core/mrp_polymap.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
