@@ -11,13 +11,13 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// TEST-ONLY reference oracle for the Niobium hardware data format
-// (Montgomery form with R = 2^64, bit-reversed coefficient order, and the
-// switchmodulus immediates). The production client ships NO Montgomery
-// arithmetic — the replay driver owns the hardware transform — so these
-// helpers exist purely to let haze's hardware-format tests verify
-// encodings and predict driver-substituted immediates without a compiler
-// install. Implemented from the standard formulations (Montgomery 1985).
+// TEST-ONLY reference oracle for the Montgomery / bit-reversal data format
+// (Montgomery encoding, bit-reversed coefficient order, and the switchmodulus
+// immediates). The production client ships NO Montgomery arithmetic — the
+// replay driver owns the transform — so these helpers exist purely to let
+// haze's data-format tests verify encodings and predict driver-substituted
+// immediates without a compiler install. R is the Montgomery radix fixed by
+// the executor; implemented from the standard formulations (Montgomery 1985).
 //
 // Keep this out of production code: the niobium::mod_arith namespace
 // deliberately mirrors the compiler's proprietary src/ModArith.h naming for
@@ -37,12 +37,12 @@ inline uint64_t mulmod(uint64_t a, uint64_t b, uint64_t m) {
     return static_cast<uint64_t>((static_cast<__uint128_t>(a) * b) % m);
 }
 
-/// R mod q, with R = 2^64.
+/// R mod q (R the Montgomery radix).
 inline uint64_t montgomery_r(uint64_t q) {
     return static_cast<uint64_t>((static_cast<__uint128_t>(1) << 64) % q);
 }
 
-/// Encode: x -> x * 2^64 mod q. Exact for any x (reduced first).
+/// Encode: x -> x * R mod q. Exact for any x (reduced first).
 inline uint64_t to_montgomery(uint64_t x, uint64_t q) {
     return mulmod(x % q, montgomery_r(q), q);
 }
@@ -65,7 +65,7 @@ inline uint64_t modinv_prime(uint64_t a, uint64_t q) {
     return powmod(a % q, q - 2U, q);
 }
 
-/// Decode: y -> y * (2^64)^{-1} mod q. q must be prime (RNS moduli are).
+/// Decode: y -> y * R^{-1} mod q. q must be prime (RNS moduli are).
 inline uint64_t from_montgomery(uint64_t y, uint64_t q) {
     return mulmod(y % q, modinv_prime(montgomery_r(q), q), q);
 }
@@ -117,11 +117,11 @@ inline void apply_bit_reversal(std::vector<uint64_t> &values) {
 ///   Ordinary form:   [1, halfQ, 1, -halfQ mod p]
 ///   Montgomery form: [1, halfQ, R^2 mod p, -(R * halfQ) mod p]
 ///
-/// with halfQ = (old_q - 1) / 2 and R = 2^64. In Montgomery form the
+/// with halfQ = (old_q - 1) / 2 and R the Montgomery radix. In Montgomery form the
 /// muli-by-ordinary-1 REDCs the value out of Montgomery form, the centered
 /// add happens in ordinary form, and the muli-by-R^2 rebases into new_p and
 /// back into Montgomery form, so imm3 must be the Montgomery encoding of
-/// -halfQ. Matches the hardware/FUNC_SIM lowering convention.
+/// -halfQ. Matches the FUNC_SIM lowering convention.
 struct SwitchModulusImmediates {
     uint64_t imm[4];
 };

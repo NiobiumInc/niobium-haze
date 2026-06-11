@@ -191,7 +191,7 @@ std::string Config::target() const noexcept {
 
 namespace {
 
-// Truthy env-var read for the hardware-format toggles: "1" or "true".
+// Truthy env-var read for the data-format toggles: "1" or "true".
 bool env_flag(const char *name) noexcept {
     const char *v = std::getenv(name);
     if (v == nullptr)
@@ -220,8 +220,8 @@ bool Config::montgomery() const noexcept {
             return montgomery_;
     }
     // Env fallback mirrors target(): consulted only when no explicit setter
-    // call has been made. HAZE_NIOBIUM_HW is the both-flags convenience.
-    return env_flag("HAZE_MONTGOMERY") || env_flag("HAZE_NIOBIUM_HW");
+    // call has been made.
+    return env_flag("HAZE_MONTGOMERY");
 }
 
 bool Config::bit_reversal() const noexcept {
@@ -230,7 +230,7 @@ bool Config::bit_reversal() const noexcept {
         if (bit_reversal_set_)
             return bit_reversal_;
     }
-    return env_flag("HAZE_BIT_REVERSAL") || env_flag("HAZE_NIOBIUM_HW");
+    return env_flag("HAZE_BIT_REVERSAL");
 }
 
 void Config::reset() noexcept {

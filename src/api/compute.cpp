@@ -96,9 +96,8 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
                                      hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Explicit function-pointer type picks the modulus-less overload: the SRP
-    // automorph carries no base, so the residue's modulus is unknown at this
-    // API (the MRP variant routes through the modulus-carrying overload).
+    // Explicit function-pointer type picks the modulus-less overload (the SRP
+    // automorph carries no base; the MRP variant uses the modulus-carrying one).
     // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores) — read as a template argument below.
     constexpr niobium::fhetch::Polynomial (*kAutomorphEval)(const niobium::fhetch::Polynomial &,
                                                             uint64_t) = fhetch::sr_automorph_eval;

@@ -11,10 +11,10 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Hardware data-format (Montgomery form + bit-reversed order) tests.
+// Montgomery + bit-reversal data-format tests.
 //
 // Montgomery form is a temporary internal encoding: a bijection
-// x <-> x * 2^64 mod q computed with exact integer arithmetic, decoded back
+// x <-> x * R mod q (R fixed by the executor) computed with exact integer arithmetic, decoded back
 // by the replay engine before results are read. It must therefore never
 // change results — the transport tests assert byte-exact equality against
 // the same oracles as ordinary mode. The cases in this file run without a
@@ -60,7 +60,7 @@ constexpr uint64_t kQ0 = 576460752303415297ULL;
 constexpr uint64_t kQ1 = 576460752303439873ULL;
 constexpr uint64_t kQ2 = 576460752303702017ULL;
 
-// Independent reference for x * 2^64 mod q, against which mod_arith's
+// Independent reference for x * R mod q (R the executor radix), against which mod_arith's
 // implementation is cross-checked.
 uint64_t ref_to_montgomery(uint64_t x, uint64_t q) {
     __uint128_t wide = x % q;
@@ -69,7 +69,7 @@ uint64_t ref_to_montgomery(uint64_t x, uint64_t q) {
 }
 
 // Montgomery multiplication as the FUNC_SIM executor performs it:
-// (a * b) * 2^-64 mod q. Used to simulate the hardware 4-op switchmodulus
+// (a * b) * R^-1 mod q. Used to simulate the executor's 4-op switchmodulus
 // sequence end-to-end.
 uint64_t ref_montgomery_mul(uint64_t a, uint64_t b, uint64_t q) {
     const uint64_t prod = niobium::mod_arith::mulmod(a, b, q);
@@ -132,11 +132,10 @@ class EnvGuard {
 };
 
 // Record one scalar-multiply (and optionally a mod-down) into a uniquely
-// named program dir with the current hardware-format settings, then write
+// named program dir with the current data-format settings, then write
 // the project without replaying. Returns the program directory.
 std::filesystem::path record_program(const std::string &program_name, bool with_mod_down) {
-    REQUIRE(hazeSetProgramInfo(program_name.c_str(), "0.1", "hardware-format test") ==
-            HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramInfo(program_name.c_str(), "0.1", "data-format test") == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
@@ -253,7 +252,7 @@ TEST_CASE("mod_arith: switchmodulus immediates (ordinary and montgomery)", "[uni
     REQUIRE(mont.imm[2] == mulmod(montgomery_r(p), montgomery_r(p), p)); // R^2 mod p
     REQUIRE(mont.imm[3] == p - mulmod(montgomery_r(p), half_q % p, p));  // -(R*halfQ) mod p
 
-    // Semantic check: running the hardware 4-op sequence (REDC multiply +
+    // Semantic check: running the executor's 4-op sequence (REDC multiply +
     // plain add, immediates as computed) on Montgomery-encoded input must
     // produce the Montgomery encoding of the centered rebase that the
     // ordinary 3-op lowering computes.
@@ -272,8 +271,8 @@ TEST_CASE("mod_arith: switchmodulus immediates (ordinary and montgomery)", "[uni
     }
 }
 
-TEST_CASE("hardware format config: setter beats env var beats default", "[unit][hwfmt]") {
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+TEST_CASE("data format config: setter beats env var beats default", "[unit][hwfmt]") {
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 
     // Default: both off.
@@ -296,55 +295,47 @@ TEST_CASE("hardware format config: setter beats env var beats default", "[unit][
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(haze::config().montgomery());
 
-    // HAZE_NIOBIUM_HW implies both.
-    ::unsetenv("HAZE_MONTGOMERY");   // NOLINT(misc-include-cleaner)
-    ::unsetenv("HAZE_BIT_REVERSAL"); // NOLINT(misc-include-cleaner)
-    REQUIRE_FALSE(haze::config().montgomery());
-    ::setenv("HAZE_NIOBIUM_HW", "1", 1); // NOLINT(misc-include-cleaner)
-    REQUIRE(haze::config().montgomery());
-    REQUIRE(haze::config().bit_reversal());
-
-    // hazeSetNiobiumHw writes both flags explicitly.
-    REQUIRE(hazeSetNiobiumHw(0) == HAZE_SUCCESS);
-    REQUIRE_FALSE(haze::config().montgomery());
-    REQUIRE_FALSE(haze::config().bit_reversal());
+    // Both flags set independently via explicit setters.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
-    ::unsetenv("HAZE_NIOBIUM_HW"); // NOLINT(misc-include-cleaner)
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
     REQUIRE(haze::config().montgomery());
     REQUIRE(haze::config().bit_reversal());
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-TEST_CASE("hardware format on local target is rejected at flush", "[unit][hwfmt]") {
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+TEST_CASE("data format on local target is rejected at flush", "[unit][hwfmt]") {
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // make test-unit exports HAZE_TARGET=local; pin it programmatically so
     // the case also holds when run standalone.
     REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
     REQUIRE(hazeFlush() == HAZE_ERROR_NOT_SUPPORTED);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
 
     // Turning the format off restores normal local operation.
-    REQUIRE(hazeSetNiobiumHw(0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(0) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
 TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers",
           "[unit][hwfmt]") {
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
     const auto dir = record_program("haze_hwfmt_on", /*with_mod_down=*/true);
 
-    // Client traces are ordinary-form even with the hardware format on:
-    // hardware-izing (input data, immediates, switchmodulus substitution)
+    // Client traces are ordinary-form even with the data format on:
+    // encoding (input data, immediates, switchmodulus substitution)
     // happens driver-side, selected by the --niobium_hw flag the dispatch
     // appends. The scalar immediate must appear verbatim, not encoded.
     const std::string trace = slurp(dir / "haze_hwfmt_on.fhetch");
@@ -382,7 +373,7 @@ TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers
 // the project's niobium_hw=false), so a client-side conversion would
 // double-encode. Drive the public Compiler API directly and inspect the
 // record before haze clears it.
-TEST_CASE("store_input_element keeps values ordinary under the hardware format", "[unit][hwfmt]") {
+TEST_CASE("store_input_element keeps values ordinary under the data format", "[unit][hwfmt]") {
     auto &cc = niobium::compiler();
     cc.reset();
     {
@@ -412,7 +403,7 @@ TEST_CASE("store_input_element keeps values ordinary under the hardware format",
 }
 
 TEST_CASE("record-time: modes off leaves trace and JSON in ordinary form", "[unit][hwfmt]") {
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
 
@@ -434,10 +425,10 @@ TEST_CASE("record-time: modes off leaves trace and JSON in ordinary form", "[uni
 // ===========================================================================
 // Transport e2e — these record + replay through nbcc_fhetch_replay, so they
 // runtime-skip under the local in-process simulator (which rejects the
-// hardware format by design). They run under `make test-transport`.
+// data format by design). They run under `make test-transport`.
 //
 // Byte-exactness invariant: Montgomery + bit-reversal are exact bijections
-// the replay engine decodes before writing probes, so hardware-format
+// the replay engine decodes before writing probes, so data-format
 // results must be byte-identical to ordinary-form results. Every assertion
 // below is exact equality — any mismatch is a bug, not tolerance.
 // ===========================================================================
@@ -507,7 +498,7 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
 
     // NOTE: basis-convert with overlapping primes (the copy_residue
     // pass-through) is exercised by the existing ordinary-mode suite and
-    // currently fails on the FUNC_SIM transport even without the hardware
+    // currently fails on the FUNC_SIM transport even without the data
     // format (pre-existing; see "hazeBasisConvert: shared-modulus copies
     // produce input values" under make test-transport), so it is excluded
     // here until that path is fixed compiler-side.
@@ -526,18 +517,19 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
 
 } // namespace
 
-TEST_CASE("niobium_hw transport: elementwise results byte-exact vs plain oracle",
-          "[integration][niobium_hw]") {
+TEST_CASE("data-format transport: elementwise results byte-exact vs plain oracle",
+          "[integration][hwfmt]") {
     if (!transport_target_active())
-        SKIP("hardware format requires a transport target (run under make test-transport)");
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+        SKIP("data format requires a transport target (run under make test-transport)");
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
     const auto results = run_mixed_computation(/*with_mod_down=*/false);
 
     // Plain (ordinary-form) oracles — the replay engine decodes the
-    // Montgomery/bit-reversed outputs back, so the hardware format must be
+    // Montgomery/bit-reversed outputs back, so the data format must be
     // invisible in the results.
     const std::vector<uint64_t> a = haze::test::make_residue(kQ0, 101, kRingDim);
     const std::vector<uint64_t> b = haze::test::make_residue(kQ0, 202, kRingDim);
@@ -552,53 +544,54 @@ TEST_CASE("niobium_hw transport: elementwise results byte-exact vs plain oracle"
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-TEST_CASE("niobium_hw transport: A/B byte-exact vs ordinary mode", "[integration][niobium_hw]") {
+TEST_CASE("data-format transport: A/B byte-exact vs ordinary mode", "[integration][hwfmt]") {
     if (!transport_target_active())
-        SKIP("hardware format requires a transport target (run under make test-transport)");
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+        SKIP("data format requires a transport target (run under make test-transport)");
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
 
     // Same recorded computation, replayed once in ordinary form and once in
-    // hardware format. The Montgomery/bit-reversal encoding is a temporary
+    // data format. The Montgomery/bit-reversal encoding is a temporary
     // internal representation, so the full output vectors (including the
     // FBC/mod-down path) must compare byte-for-byte equal.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const auto ordinary = run_mixed_computation(/*with_mod_down=*/true);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
-    const auto hardware = run_mixed_computation(/*with_mod_down=*/true);
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
+    const auto encoded = run_mixed_computation(/*with_mod_down=*/true);
 
-    REQUIRE(ordinary.size() == hardware.size());
+    REQUIRE(ordinary.size() == encoded.size());
     for (size_t i = 0; i < ordinary.size(); ++i) {
         INFO("output " << i);
-        REQUIRE(ordinary[i] == hardware[i]);
+        REQUIRE(ordinary[i] == encoded[i]);
     }
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-TEST_CASE("niobium_hw transport: NTT round trip and automorph under hardware format",
-          "[integration][niobium_hw]") {
+TEST_CASE("data-format transport: NTT round trip and automorph under data format",
+          "[integration][hwfmt]") {
     if (!transport_target_active())
-        SKIP("hardware format requires a transport target (run under make test-transport)");
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL", "HAZE_NIOBIUM_HW"});
+        SKIP("data format requires a transport target (run under make test-transport)");
+    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
 
-    // In-contract NTT/morph use under the hardware format, A/B byte-exact
+    // In-contract NTT/morph use under the data format, A/B byte-exact
     // against ordinary mode.
     //
-    // The niobium hardware contract: program inputs are always
+    // By contract, program inputs are always
     // evaluation-form, and the storage layout (bit-reversed order) plus the
     // hw NTT's I/O conventions are self-consistent only for data that stays
     // inside a trace. A STANDALONE forward NTT of a program input is
     // out-of-contract: the input is conceptually coefficient-form, the load
     // path bit-reverses it like all inputs, and an NTT does not commute with
-    // permuting its input — verified bit-for-bit that hardware_NTT(x) ==
+    // permuting its input — verified bit-for-bit that encoded_NTT(x) ==
     // ordinary_NTT(bitrev(x)) on every slot. So this test exercises the
     // in-contract INTT -> NTT round trip (the coefficient intermediate never
     // crosses the program boundary), and the MRP automorph (the
     // modulus-carrying path; the bare SRP hazeAutomorph is modulus-less, so
     // its output template keeps the bridge's synthetic prime and cannot be
-    // probe-filled under the hardware format).
+    // probe-filled under the data format).
     auto run_ntt = [&]() {
         REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
         uint64_t picked = 0;
@@ -615,8 +608,8 @@ TEST_CASE("niobium_hw transport: NTT round trip and automorph under hardware for
             REQUIRE(hazeMalloc(p, kBytes) == HAZE_SUCCESS);
         REQUIRE(hazeMemcpy(src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
         // In-contract NTT use: program inputs are always evaluation-form on
-        // the niobium hardware; coefficient-form data exists only BETWEEN
-        // hardware ops. Exercise the INTT -> NTT round trip so the
+        // the executor; coefficient-form data exists only BETWEEN
+        // executor ops. Exercise the INTT -> NTT round trip so the
         // coefficient intermediate never crosses the program boundary.
         REQUIRE(hazeINTT(coeff, src, 0, nullptr) == HAZE_SUCCESS);
         REQUIRE(hazeNTT(fwd, coeff, 0, nullptr) == HAZE_SUCCESS);
@@ -642,11 +635,12 @@ TEST_CASE("niobium_hw transport: NTT round trip and automorph under hardware for
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const auto ordinary = run_ntt();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetNiobiumHw(1) == HAZE_SUCCESS);
-    const auto hardware = run_ntt();
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
+    const auto encoded = run_ntt();
     for (size_t i = 0; i < ordinary.size(); ++i) {
         INFO("output " << i);
-        REQUIRE(ordinary[i] == hardware[i]);
+        REQUIRE(ordinary[i] == encoded[i]);
     }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }

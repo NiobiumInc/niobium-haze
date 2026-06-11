@@ -170,44 +170,33 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  * a subsequent hazeMemcpy(D2H) then reads them. */
 HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 
-/* Hardware data-format toggles.
+/* Data-representation toggles for recorded traces: Montgomery-form RNS
+ * residues and bit-reversed coefficient order. Independent opt-ins.
  *
- * The Niobium hardware pipeline operates on RNS residues in Montgomery form
- * (R = 2^64) and on polynomials in bit-reversed coefficient order. These are
- * independent opt-ins; the hardware convention is both together, and
- * hazeSetNiobiumHw(enable) is the convenience that sets/clears both.
- *
- * When enabled, haze records hardware-format traces: input residues written
- * for replay are Montgomery-encoded and/or bit-reversed, instruction
- * immediates are Montgomery-encoded, and basis-convert lowers modulus
- * switching to the hardware 4-op sequence. The replay engine decodes outputs
- * back to ordinary form, so D2H results are byte-identical to a non-hardware
- * run — the format never changes results, only the on-device representation.
+ * When enabled, traces are recorded in the chosen representation (input
+ * residues Montgomery-encoded and/or bit-reversed, immediates Montgomery-
+ * encoded, basis-convert lowered to its 4-op mod-switch form). Replay decodes
+ * outputs back to the ordinary representation, so D2H results are byte-
+ * identical to a run with the toggles off — only the recorded form changes.
  *
  * Constraints:
- *   - The in-process "local" simulator cannot execute hardware-format
- *     traces; the first compute/flush fails with HAZE_ERROR_NOT_SUPPORTED.
- *     Use a transport target (e.g. "FUNC_SIM").
- *   - Transport replay supports ordinary form or the full hardware format
- *     only; enabling exactly one of the two toggles is recordable (for
- *     trace inspection via hazeWriteProgram) but rejected at replay.
+ *   - The in-process "local" simulator runs ordinary-form traces only; the
+ *     first compute/flush returns HAZE_ERROR_NOT_SUPPORTED. Use a transport
+ *     target.
+ *   - Replay supports the ordinary form or both toggles together; enabling
+ *     exactly one is recordable (for trace inspection via hazeWriteProgram)
+ *     but rejected at replay.
  *
- * Resolution order per flag (mirrors hazeSetTarget):
- *   1. explicit hazeSetMontgomery / hazeSetBitReversal / hazeSetNiobiumHw call
- *   2. HAZE_MONTGOMERY / HAZE_BIT_REVERSAL / HAZE_NIOBIUM_HW env var
- *      (value "1" or "true"); HAZE_NIOBIUM_HW implies both flags
- *   3. off (ordinary form, natural order)
- * Must be called before the first H2D or compute call (which brings up the
- * compiler backend). */
+ * Per flag: explicit setter > HAZE_MONTGOMERY / HAZE_BIT_REVERSAL env
+ * ("1"/"true") > off. Call before the first H2D or compute. */
 HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSetNiobiumHw(int enable) HAZE_NOEXCEPT;
 
 /* Finalize the recording and write the project directory (.fhetch trace,
  * inputs, ciphertext templates, cryptocontext) WITHOUT running replay; only
  * hazeTagOutput()-declared outputs are emitted, so tag them first. Use it to
- * record where the compiler/hardware isn't available and replay elsewhere (e.g.
- * `nbcc_fhetch_replay --project=<dir> --target=<device>` on the FPGA host).
+ * record where replay isn't available locally and replay elsewhere (e.g.
+ * `nbcc_fhetch_replay --project=<dir> --target=<device>` on a remote host).
  * No-op when not recording; nothing is materialized in-process, so a later
  * in-process D2H of an output returns HAZE_ERROR_NOT_FLUSHED. */
 HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;

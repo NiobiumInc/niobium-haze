@@ -46,13 +46,12 @@ bool CompilerBackend::ensure_initialized() noexcept {
     if (initialized_.load(std::memory_order_relaxed))
         return true;
 
-    // The in-process simulator executes ordinary-form traces only; reject
-    // the hardware-format toggles up front so the failure names the real
-    // cause instead of surfacing later as a generic replay/flush error.
+    // The local simulator runs ordinary-form traces only; reject the
+    // Montgomery / bit-reversal toggles here so the error names the real cause.
     const bool montgomery = config().montgomery();
     const bool bit_reversal = config().bit_reversal();
     if ((montgomery || bit_reversal) && config().target() == kLocalTarget) {
-        record_internal_error(HazeInternalError::HardwareFormatUnsupported,
+        record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
                               "require a transport target such as FUNC_SIM)");
         return false;
@@ -66,8 +65,8 @@ bool CompilerBackend::ensure_initialized() noexcept {
         const std::string program_description = config().program_description();
         const std::string target = config().target();
 
-        // Synthesize a minimal argv to pass --target= (and the hardware
-        // data-format flags) to compiler().init() — no setters are exposed.
+        // Synthesize a minimal argv to pass --target= (and the Montgomery /
+        // bit-reversal flags) to compiler().init() — no setters are exposed.
         // init copies argv during the call, so function-local storage is safe.
         std::string prog_storage = program_name;
         std::string target_arg_storage = "--target=" + target;
