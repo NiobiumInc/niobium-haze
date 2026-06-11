@@ -110,16 +110,19 @@ class EnvGuard {
         for (const char *name : names_) {
             const char *old = std::getenv(name);
             saved_.emplace_back(old != nullptr, old != nullptr ? old : "");
-            // setenv/unsetenv are POSIX; <cstdlib> is the closest standard header.
-            ::unsetenv(name); // NOLINT(misc-include-cleaner)
+            // setenv/unsetenv are POSIX; <cstdlib> is the closest standard
+            // header. Return value discarded: only fails on a null/invalid
+            // name, which these literals are not.
+            static_cast<void>(::unsetenv(name)); // NOLINT(misc-include-cleaner)
         }
     }
     ~EnvGuard() {
         for (size_t i = 0; i < names_.size(); ++i) {
             if (saved_[i].first) {
-                ::setenv(names_[i], saved_[i].second.c_str(), 1); // NOLINT(misc-include-cleaner)
+                static_cast<void>(::setenv(names_[i], saved_[i].second.c_str(),
+                                           1)); // NOLINT(misc-include-cleaner)
             } else {
-                ::unsetenv(names_[i]);
+                static_cast<void>(::unsetenv(names_[i]));
             }
         }
     }
@@ -324,6 +327,50 @@ TEST_CASE("data format on local target is rejected at flush", "[unit][hwfmt]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
+TEST_CASE("data format rejected at flush keeps the in-flight recording", "[integration][hwfmt]") {
+    // The flush guard early-returns before replay_and_populate, leaving the
+    // epoch open. After the config is corrected the same recording must still
+    // materialize — the op is not silently dropped. Pinned local so the
+    // rejection fires regardless of the harness target.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
+
+    std::vector<uint64_t> vals(kRingDim);
+    for (uint64_t i = 0; i < kRingDim; ++i)
+        vals[i] = (i * 3 + 1) % picked;
+    void *src = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(dst, src, 3, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+
+    // Enable the data format and flush: rejected on the local target.
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_ERROR_NOT_SUPPORTED);
+
+    // Correct the config; the same recorded op now materializes.
+    REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(0) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    for (uint64_t k = 0; k < kRingDim; ++k) {
+        INFO("slot " << k);
+        REQUIRE(out[k] == niobium::mod_arith::mulmod(vals[k], 3, picked));
+    }
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
 TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers",
           "[unit][hwfmt]") {
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
@@ -399,6 +446,11 @@ TEST_CASE("store_input_element keeps values ordinary under the data format", "[u
     });
     REQUIRE(found_raw_input);
 
+    // This case drove niobium::compiler() directly with --niobium_hw;
+    // hazeDeviceReset only clears CompilerBackend's initialized_ flag, so
+    // reset the compiler too or the next ensure_initialized() re-init's an
+    // already-running, --niobium_hw instance.
+    cc.reset();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
