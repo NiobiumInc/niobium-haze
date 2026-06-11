@@ -426,14 +426,12 @@ void install_trace_output_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
     }
 }
 
-// Input counterpart of install_trace_output_moduli, with one extra contract:
-// inputs carry real residues (already reduced mod the trace modulus), so the
-// install must be value-preserving. SwitchModulusAtIndex recenters values
-// around the old modulus (right for zeroed templates, wrong for data), so
-// snapshot the raw residues, switch the tower params, and restore them.
-// Without this the input .bin towers keep the synthetic CC's primes, and a
-// hardware-format replay (nbcc_fhetch_replay --niobium_hw) Montgomery-encodes
-// the residues with the WRONG modulus — the tower's, not the trace's.
+// Input counterpart of install_trace_output_moduli, but value-preserving:
+// inputs carry real residues. SwitchModulusAtIndex recenters values (right
+// for zeroed templates, wrong for data), so snapshot the raw residues, switch
+// the tower params, then restore them. Otherwise the .bin towers keep the
+// synthetic CC's prime and a --niobium_hw replay Montgomery-encodes with the
+// wrong modulus.
 void install_trace_input_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
                                 const niobium::CapturedShape &shape, uint64_t ring_dim) {
     const auto corder = static_cast<uint32_t>(2 * ring_dim);
@@ -549,7 +547,8 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         *picked_modulus = first_tower_modulus(built->cc);
 
         // Plant program_name so cryptocontext.dat lands under haze/ rather
-        // than the "niobium_trace" default; libhaze's later init is idempotent.
+        // than the compiler's default program name; libhaze's later init is
+        // idempotent.
         niobium::compiler().set_program_info("haze", "", "");
         niobium::compiler().capture_crypto_context(built->cc);
 

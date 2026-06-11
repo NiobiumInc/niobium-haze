@@ -163,22 +163,18 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
 
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
                                                                       uint64_t modulus) noexcept {
-    // The emitted op always carries the COPY sentinel — hardware contract:
-    // the compiler reserves modulus-table index 0 for it and lowers
-    // ADDI imm=0 at m[0] as a register copy, not a modular add. When the
-    // caller knows the residue's real modulus (MRP D2D passes base[i]),
-    // record it as address→modulus METADATA only: captured output shapes
-    // feed the replay-bridge templates, and a sentinel-only output cannot
-    // be probe-serialized by nbcc_fhetch_replay.
+    // The op always carries the COPY sentinel (the executor lowers ADDI imm=0
+    // at modulus-table index 0 as a register copy). When the caller
+    // knows the residue's real modulus (MRP D2D passes base[i]), bind it as
+    // address->modulus metadata so the output can be probe-serialized.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
     constexpr uint64_t kSentinel = 0xFFFFFFFFFFFFFFFFULL;
     auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kSentinel);
     if (modulus != kSentinel) {
-        // Both ends: a source only ever touched by copies would otherwise
-        // keep the sentinel in its captured input record, and the replay
-        // chain would load it under the bridge's synthetic prime.
+        // Bind the source too: one only ever touched by copies would
+        // otherwise stay sentinel-bound and load under the synthetic prime.
         fhetch::bind_modulus(*src_poly, modulus);
         fhetch::bind_modulus(copy, modulus);
     }
@@ -509,17 +505,17 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {
-    // Hardware-format traces can't execute on the in-process simulator.
-    // ensure_initialized() already refuses first-time init for this
+    // Montgomery / bit-reversed traces can't execute on the in-process
+    // simulator. ensure_initialized() already refuses first-time init for this
     // combination (so nothing was recorded); checking again here makes the
     // failure visible at the flush call instead of a silent no-op followed
     // by OutputNotFlushed on the next D2H, and also covers the
     // flags-set-after-init ordering the init-time check can't see.
     if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
-        record_internal_error(HazeInternalError::HardwareFormatUnsupported,
+        record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "haze::flush (montgomery/bit_reversal require a transport "
                               "target such as FUNC_SIM)");
-        return std::unexpected(HazeInternalError::HardwareFormatUnsupported);
+        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
     }
     return epoch().replay_and_populate();
 }

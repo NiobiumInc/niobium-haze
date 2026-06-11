@@ -40,7 +40,7 @@ constexpr std::string_view kLocalTarget = "local";
 
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
 // twiddle generators. Plus the program/target metadata fed to the
-// niobium compiler at recording-init time.
+// compiler at recording-init time.
 //
 // Singleton via instance(). Mutex protects mutating writes; reads are
 // taken under the same lock for consistency with vector resizes.
@@ -70,14 +70,10 @@ class Config {
     std::string program_description() const noexcept;
     std::string target() const noexcept;
 
-    // Hardware data-format toggles. Montgomery form (R = 2^64) and
-    // bit-reversed coefficient order are independent options; the Niobium
-    // hardware convention is both together ("niobium_hw" — set via
-    // hazeSetNiobiumHw, which writes both flags). Resolution order per flag:
-    // explicit setter > env var (HAZE_MONTGOMERY / HAZE_BIT_REVERSAL /
-    // HAZE_NIOBIUM_HW, value "1" or "true") > off. The local in-process
-    // simulator cannot execute hardware-format traces; the backend rejects
-    // the combination at init.
+    // Data-representation toggles: Montgomery form and bit-reversed coefficient
+    // order, independent. Per flag: explicit setter > env (HAZE_MONTGOMERY /
+    // HAZE_BIT_REVERSAL, "1"/"true") > off. The local simulator runs only
+    // ordinary-form traces; the backend rejects these at init.
     void set_montgomery(bool enable) noexcept;
     void set_bit_reversal(bool enable) noexcept;
     bool montgomery() const noexcept;

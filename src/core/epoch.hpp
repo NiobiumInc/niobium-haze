@@ -84,12 +84,9 @@ class EpochState {
     std::expected<void, HazeInternalError> tag_output_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Record a pass-through copy dst <- src. Pass the residue's real modulus
-    // when the caller knows it (MRP D2D has base[i]): the transport replay's
-    // trace-modulus contract requires output-producing ops to carry a real
-    // prime, and sentinel-modulus outputs cannot be probe-serialized by
-    // nbcc_fhetch_replay. The COPY_MODULUS sentinel default keeps the SRP D2D
-    // path (opaque buffer, no modulus known) working on the in-process
-    // simulator.
+    // when known (MRP D2D has base[i]) so the output can be probe-serialized
+    // on transport; the sentinel default covers the SRP D2D path (opaque
+    // buffer, no modulus known) on the local simulator.
     std::expected<void, HazeInternalError>
     copy_result_locked(DevAddr dst, DevAddr src, uint64_t modulus = 0xFFFFFFFFFFFFFFFFULL) noexcept
         HAZE_REQUIRES(mutex_);
@@ -118,12 +115,9 @@ class EpochState {
     void tag_mrp_input_if_new_locked(const std::string &name, const niobium::fhetch::MRP &mrp)
         HAZE_REQUIRES(mutex_);
 
-    // Stable counter-based name for the MRP group led by `leading` —
-    // "haze_mrp_in_N" / "haze_mrp_out_N". The same leading addr returns the
-    // same name within an epoch (re-registration dedup); invalidate() drops
-    // the binding so a recycled allocation gets a fresh name. Counter names
-    // keep the input/output namespace uniform with the SRP haze_in_N /
-    // haze_out_N counters (the old scheme embedded the device address).
+    // Stable counter name for the MRP group led by `leading` ("haze_mrp_in_N"
+    // / "haze_mrp_out_N"): same leading addr -> same name within an epoch;
+    // invalidate() drops it so a recycled allocation gets a fresh name.
     std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
 
     EpochState(const EpochState &) = delete;

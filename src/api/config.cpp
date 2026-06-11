@@ -56,9 +56,3 @@ extern "C" hazeError_t hazeSetBitReversal(int enable) noexcept {
     haze::config().set_bit_reversal(enable != 0);
     return set_error(HAZE_SUCCESS);
 }
-
-extern "C" hazeError_t hazeSetNiobiumHw(int enable) noexcept {
-    haze::config().set_montgomery(enable != 0);
-    haze::config().set_bit_reversal(enable != 0);
-    return set_error(HAZE_SUCCESS);
-}

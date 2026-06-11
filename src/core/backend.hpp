@@ -37,7 +37,7 @@ class CompilerBackend {
     // on success — callers should propagate the error (returns false if
     // the underlying init throws, in which case the backend stays
     // unusable and subsequent compute calls fail at the recording-start
-    // gate rather than crashing inside niobium).
+    // gate rather than crashing inside the compiler).
     [[nodiscard]] bool ensure_initialized() noexcept;
 
     // True iff ensure_initialized() has completed successfully.
