@@ -24,6 +24,7 @@
 
 #include "core/config.hpp"
 #include "integration_helpers.hpp"
+#include "mod_arith_ref.hpp"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -36,7 +37,6 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <niobium/compiler.h>
-#include <niobium/mod_arith.h>
 #include <sstream>
 #include <string>
 #include <string_view>
