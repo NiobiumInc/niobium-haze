@@ -404,7 +404,7 @@ niobium-haze/
     api/                    # extern-C boundary; one TU per public-header
                             # section (compute, memory, config, device,
                             # stream, lifecycle, error, basis_convert)
-    core/                   # internal implementation: epoch, allocator,
+    core/                   # internal implementation: tape (graph/lower/record), allocator,
                             # backend, config, basis convert, polynomial IO
     common/                 # shared leaf utilities (errors, log)
   replay_bridge/            # OpenFHE-using helper linked into libhaze;

@@ -72,9 +72,10 @@ class AllocatorTestAccess;
 //    or materialization update — creates the shadow entry.
 //
 // Thread-safety: all public methods take mutex_ themselves (annotated
-// HAZE_EXCLUDES). DeviceAllocator must NOT call back into EpochState
-// while holding mutex_ — that violates the epoch -> allocator lock
-// order and would deadlock.
+// HAZE_EXCLUDES). mutex_ is a LEAF lock: allocator code never calls
+// into the recording layer, and the record path completes its
+// allocator call before touching the Graph's append mutex, so haze
+// locks never nest.
 class DeviceAllocator {
   public:
     // HAZE_API on this and `extract_polynomial_components` exports the
@@ -100,7 +101,7 @@ class DeviceAllocator {
         HAZE_EXCLUDES(mutex_);
 
     // Snapshot the shadow buffer as a vector of `ring_dim` 64-bit limbs.
-    // Used by EpochState::lookup_or_create_locked when promoting fresh
+    // Used by record.cpp's resolve_operand when promoting fresh
     // shadow data to a FHETCH input polynomial. Returns NoData if the
     // address has no shadow entry; the caller surfaces this as
     // SourceUnavailable. **Evicts the shadow entry on success** — the
@@ -155,10 +156,9 @@ class DeviceAllocator {
     // Helper (caller holds mutex_).
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
 
-    // mutex_ protects all state below. Lock order across HAZE: callers
-    // already holding EpochState::mutex_ may re-enter here (epoch →
-    // allocator). Allocator-side code must NOT call into EpochState
-    // while holding this lock — the reverse direction is forbidden.
+    // mutex_ protects all state below. It is a leaf: no haze lock is
+    // ever held while acquiring it, and no allocator method calls back
+    // into the recording layer while holding it.
     mutable HazeMutex mutex_;
     // Live DevAddrs. Set membership covers the lifetime of the
     // hazeMalloc/hazeFree contract; allocation size is implicit

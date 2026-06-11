@@ -6,6 +6,7 @@
 references/
 
 # Build directories
+/tsan-build/
 build-*/
 cmake-build-*/
 out/

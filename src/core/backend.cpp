@@ -113,7 +113,7 @@ void CompilerBackend::start_recording() noexcept {
 bool CompilerBackend::stop_epoch() noexcept {
     // Use stop() (not stop_epoch()): stop() writes both the .fhetch trace
     // and fhetch_replay.json that nbcc_fhetch_replay needs for HTTP dispatch.
-    // Haze is single-epoch per epoch().reset(), so stop() also matches
+    // Haze is single-epoch per graph().reset(), so stop() also matches
     // semantically.
     return niobium::compiler().stop();
 }

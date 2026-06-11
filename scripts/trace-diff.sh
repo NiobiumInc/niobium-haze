@@ -12,10 +12,10 @@
 # diffs two snapshots and exits non-zero on any divergence.
 #
 # Suites and their comparison policy:
-#   unit    haze_tests "~[integration]"          strict
-#   simdet  haze_tests "[integration]~[e2e]"     strict
-#   sim     haze_tests "[integration]"           structural
-#   e2e     haze_e2e_tests (all)                 structural
+#   unit    haze_tests "~[integration]"                  strict
+#   simdet  haze_tests "[integration]~[e2e]~[threads]"   strict
+#   sim     haze_tests "[integration]~[threads]"         structural
+#   e2e     haze_e2e_tests (all)                         structural
 #
 # strict:     every file byte-compared (after the normalizations below) —
 #             the suite records only synthetic, seeded data.
@@ -52,11 +52,14 @@ usage() {
     sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \?//'
 }
 
+# [threads] is excluded everywhere: cross-thread tape interleaving makes
+# its input numbering (and so its artifact names) run-nondeterministic by
+# design. The make test targets still run it for green-ness.
 suite_filter() {
     case "$1" in
         unit) echo '~[integration]' ;;
-        simdet) echo '[integration]~[e2e]' ;;
-        sim) echo '[integration]' ;;
+        simdet) echo '[integration]~[e2e]~[threads]' ;;
+        sim) echo '[integration]~[threads]' ;;
         e2e) echo '' ;;
         *) return 1 ;;
     esac

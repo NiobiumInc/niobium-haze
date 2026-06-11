@@ -30,9 +30,12 @@
 //   - Mark accessor methods that hand out a reference to the underlying
 //     capability with HAZE_RETURN_CAPABILITY(field).
 //
-// For HAZE's epoch -> allocator lock order, the architectural separation
-// (DeviceAllocator never calls into EpochState) is the primary
-// enforcement, with TSAN as the runtime backstop.
+// HAZE's locks never nest: the record path's Graph::append mutex and
+// the DeviceAllocator mutex are both leaves (record helpers complete
+// their allocator call before appending), and lower.cpp's finalize
+// mutex serializes flushes without any haze lock held during lowering.
+// TSAN is the runtime backstop for the lock-free BindingTable, which
+// carries no TSA annotations by design.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names

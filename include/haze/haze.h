@@ -113,6 +113,16 @@ HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
 
 // Run the recorded program and populate the tagged outputs' shadow buffers;
 // no-op when nothing is recorded or tagged.
+//
+// Concurrency contract (CUDA-like). Recording is thread-safe with
+// per-thread program order: operations issued by one thread are
+// recorded in issue order; operations on DISTINCT buffers may proceed
+// concurrently from multiple threads. Reusing the same device address
+// from two threads without your own synchronization is undefined (the
+// recording stays memory-safe, but which value wins is unspecified —
+// exactly like racing CUDA kernels on one buffer without streams or
+// events). hazeFlush racing compute on the addresses being flushed is
+// likewise undefined; concurrent hazeFlush calls serialize internally.
 HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,

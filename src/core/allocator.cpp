@@ -138,7 +138,7 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
     }
     auto node = shadow_data_.extract(addr);
     if (!node) {
-        // Address allocated but never written. epoch::lookup_or_create_locked
+        // Address allocated but never written. record.cpp's resolve_operand
         // translates this to SourceUnavailable — compute / D2D on an
         // uninitialized buffer is a contract violation.
         record_internal_error(HazeInternalError::NoData,

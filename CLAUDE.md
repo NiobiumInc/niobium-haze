@@ -353,38 +353,56 @@ replay_bridge/                OpenFHE-using helper that synthesizes
                               symbol resolution.
 ```
 
-### The lazy record-and-replay execution model
+### The deferred-tape execution model
 
 This is the central design contribution. Every compute API call
-(`hazeAdd`, `hazeMul`, `hazeNTT`, ...) runs through an `EpochSession` RAII
-guard that:
+(`hazeAdd`, `hazeMul`, `hazeNTT`, ...) records onto an append-only tape
+(`src/core/graph.hpp`) without calling fhetch at all:
 
-1. Calls `backend().ensure_initialized()` to bring up `niobium::compiler()`
-   on first compute (idempotent, lock-free fast path).
-2. Acquires `EpochState::mutex_` and starts FHETCH recording if not active.
-3. Resolves each `void*` operand: `epoch().lookup_or_create_locked(addr)`
-   either returns the polymap binding for a previously-bound DevAddr, or
-   promotes the shadow byte buffer at that address to a fresh
-   `fhetch::Polynomial` tagged as input.
-4. Emits the FHETCH instruction (`fhetch::sr_addp` etc.) and stores the
-   result polynomial into the polymap via
-   `store_compute_result_locked(dst_addr, poly)`. Output-hood is not inferred
-   here — `hazeTagOutput` declares it explicitly.
+1. `record_prelude()` brings up `niobium::compiler()` on first compute
+   (idempotent, lock-free fast path) and freezes the FHE parameters
+   into a lock-free `ConfigSnapshot` (post-compute parameter mutation
+   is rejected like post-`hazeConfigureDevice` mutation).
+2. Each `void*` operand resolves through the lock-free `BindingTable`
+   (addr → `ValueId`, one atomic word per allocation slot). First touch
+   snapshots the shadow bytes NOW (evicting) and appends an
+   `InputSnapshot` node; the value snapshot is eager, only the fhetch
+   emission is deferred.
+3. The destination binds a fresh `ValueId` (SSA-style: in-place ops are
+   safe because operands resolved first) and one `Node` is appended
+   whose THUNK performs the fhetch call (`sr_addp`, `mr_mulp`,
+   `fast_base_convert`, ...) at flush time. Thunks capture plain values
+   only — never fhetch objects (see the discipline note in graph.hpp).
+   Output-hood is not inferred — `hazeTagOutput` appends a metadata
+   node.
 
-No hardware, simulator, or polynomial math runs at this point. The
-recording phase only appends nodes to the FHETCH trace.
+No fhetch call, no hardware, no polynomial math runs at this point.
 
-Materialization is triggered by `hazeFlush`, which calls
-`EpochState::replay_and_populate()`:
+Materialization is triggered by `hazeFlush` → `lower::finalize()`
+(`src/core/lower.cpp`):
 
-1. `tag_pending_outputs_locked()` tags the explicitly-declared outputs (and
-   their MRP groups) for `fhetch::tag_output`. No-op when no recording is in
-   flight, so plain H2D-then-D2H round-trips elide it for free.
-2. `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch` trace.
-3. `CompilerBackend::replay()` dispatches per the configured target.
+1. `graph().seal()` swaps the tape out; `derive()` replays the
+   bookkeeping single-threaded over it in tape order — input/output
+   naming (`haze_in_N`/`haze_out_N`), MRP group registration + tag
+   expansion, the invalidate group-drop walk, H2D rebind-and-untag.
+   Its containers deliberately mirror the old eager engine's
+   `unordered_map`s: their iteration order is part of `.fhetch`
+   byte-identity (see the constraint note in lower.hpp).
+2. `compiler().start_epoch()` + recording start, then thunks run in
+   tape order, emitting exactly the instruction stream the eager
+   engine produced (values evict after their last consumer, so peak
+   memory matches the old keep-latest-per-addr polymap).
+3. Explicit outputs (and their MRP groups) get `fhetch::tag_output`;
+   `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch`
+   trace; `CompilerBackend::replay()` dispatches per the configured
+   target.
 4. `niobium::fhetch::result(...)` is called for each tagged output to read
    the simulator-computed polynomial back, and `update_shadow` writes the
    bytes into the allocator's sparse `shadow_data_` map.
+
+`scripts/trace-diff.sh` is the conformance harness for this layer:
+record-path changes must keep the per-suite trace artifacts
+byte-identical (capture a baseline, capture the candidate, compare).
 
 `hazeMemcpy(D2H)` (`haze::copy_to_host`) is then a pure shadow read.
 `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops — nothing runs
@@ -416,14 +434,20 @@ malloc, not `hazeMalloc`.
 the C ABI boundary. `kHbmBase = 0x4000000000ULL` keeps haze-allocated
 addresses above FHETCH's synthetic address range (< `0x1000000000`).
 
-### Lock order
+### Locking
 
-`EpochState::mutex_` may call into `DeviceAllocator` (epoch → allocator).
-The reverse direction is forbidden — allocator-side code must never call
-back into `EpochState` while holding `mutex_` or it will deadlock. The
-constraint is enforced architecturally (no back-call exists in source);
-clang TSA catches violations of the per-mutex `HAZE_REQUIRES` /
-`HAZE_EXCLUDES` contracts at compile time.
+Haze locks never nest. The record path takes only `Graph::append`'s
+internal mutex (a short push) and the `DeviceAllocator` mutex (leaf;
+the allocator call completes before the append). `lower::finalize`
+serializes flushes against each other with a file-local mutex and holds
+no haze lock while lowering, so fhetch's own internal locks are reached
+only by the single flush thread. The `BindingTable` and `LowerCtx` are
+deliberately annotation-free (single-word atomics / single-threaded at
+flush); everything mutex-guarded carries `HAZE_GUARDED_BY` /
+`HAZE_EXCLUDES`, and clang TSA checks the contracts at compile time.
+Cross-thread reuse of one device address without user synchronization
+is documented-undefined (CUDA-like) — see the contract block above
+`hazeFlush` in `include/haze/haze.h`.
 
 `HazeMutex` (a thin annotated wrapper around `std::mutex`) and
 `HazeLockGuard` exist because libstdc++'s `std::mutex` and
