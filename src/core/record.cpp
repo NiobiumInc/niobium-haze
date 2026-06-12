@@ -52,7 +52,7 @@ const ConfigSnapshot *record_prelude(Context &ctx) noexcept {
     // resolution, probe suppression) keep their eager-engine timing;
     // failure surfaces at flush, not here.
     [[maybe_unused]] const bool initialized = backend().ensure_initialized(ctx.config);
-    return ctx.config.freeze();
+    return ctx.config.params();
 }
 
 std::expected<ValueId, HazeInternalError> resolve_operand(Context &ctx, DevAddr addr,
@@ -153,7 +153,7 @@ std::expected<void, HazeInternalError> record_h2d_input(Context &ctx, DevAddr ad
     // (copy_h2d requires alloc_set_ membership and a configured
     // poly_bytes_); hits are broken-haze internal errors so the input
     // tag is never silently dropped.
-    const ConfigSnapshot *cfg = ctx.config.freeze();
+    const ConfigSnapshot *cfg = ctx.config.params();
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
                               "record_h2d_input: unconfigured after copy_h2d");
@@ -241,7 +241,7 @@ std::expected<void, HazeInternalError> copy_device_to_device(Context &ctx, DevAd
     const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "hazeMemcpy D2D before hazeSetRingDimension");
+                              "hazeMemcpy D2D on a context with no parameters");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
     return record_copy(ctx, dst, src, cfg->ring_dim);

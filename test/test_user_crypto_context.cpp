@@ -35,7 +35,6 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     using namespace lbcrypto;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
 
     // Caller-built CC with a non-default scaling technique (FIXEDAUTO) and a
     // chain deeper than the 3-residue MRP add below, so the primes come from a
@@ -66,9 +65,8 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base.front(), &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);
-    for (std::size_t i = 0; i < 3; ++i)
-        REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {base[0], base[1], base[2]});
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base[0], &picked) == HAZE_SUCCESS);
 
     // Build per-residue inputs + expected output for hazeAddMrp.
     std::vector<std::vector<uint64_t>> a(3);
@@ -88,16 +86,17 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
 
     auto da_const = haze::test::to_const(da);
     auto db_const = haze::test::to_const(db);
-    REQUIRE(hazeAddMrp(dst.data(), da_const.data(), db_const.data(), base.data(), base.size(),
-                       nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst.data(), da_const.data(), db_const.data(), base.data(),
+                       base.size(), nullptr) == HAZE_SUCCESS);
 
     for (std::size_t i = 0; i < 3; ++i)
-        REQUIRE(hazeTagOutput(dst[i]) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), dst[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     for (std::size_t i = 0; i < 3; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (std::size_t k = 0; k < kRingDim; ++k) {
             INFO("residue " << i << " (mod " << base[i] << ") slot " << k);
             REQUIRE(got[k] == expected[i][k]);

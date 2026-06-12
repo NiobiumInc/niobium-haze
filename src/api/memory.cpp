@@ -24,33 +24,37 @@
 #include <haze/haze_types.h>
 #include <unistd.h>
 
-extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
-    if (ptr == nullptr)
+extern "C" hazeError_t hazeMalloc(hazeContext_t ctx, void **ptr, size_t size) noexcept {
+    if (ctx == nullptr || ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    auto result = haze::default_context().allocator.allocate(size);
+    auto result = ctx->allocator.allocate(size);
     if (!result)
         return set_error(haze::to_public_error(result.error()));
     *ptr = haze::to_void_ptr(*result);
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeFree(void *ptr) noexcept {
-    haze::Context &ctx = haze::default_context();
+extern "C" hazeError_t hazeFree(hazeContext_t ctx, void *ptr) noexcept {
+    if (ctx == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
     if (ptr != nullptr)
-        haze::record_invalidate(ctx, haze::to_dev_addr(ptr));
-    return set_internal_result(ctx.allocator.free(haze::to_dev_addr(ptr)));
+        haze::record_invalidate(*ctx, haze::to_dev_addr(ptr));
+    return set_internal_result(ctx->allocator.free(haze::to_dev_addr(ptr)));
 }
 
-extern "C" hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t /*stream*/) noexcept {
-    return hazeMalloc(ptr, size);
+extern "C" hazeError_t hazeMallocAsync(hazeContext_t ctx, void **ptr, size_t size,
+                                       hazeStream_t /*stream*/) noexcept {
+    return hazeMalloc(ctx, ptr, size);
 }
 
-extern "C" hazeError_t hazeFreeAsync(void *ptr, hazeStream_t /*stream*/) noexcept {
-    return hazeFree(ptr);
+extern "C" hazeError_t hazeFreeAsync(hazeContext_t ctx, void *ptr,
+                                     hazeStream_t /*stream*/) noexcept {
+    return hazeFree(ctx, ptr);
 }
 
-extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*flags*/) noexcept {
-    if (ptr == nullptr || size == 0)
+extern "C" hazeError_t hazeHostAlloc(hazeContext_t ctx, void **ptr, size_t size,
+                                     unsigned int /*flags*/) noexcept {
+    if (ctx == nullptr || ptr == nullptr || size == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     // Page-aligned allocation for DMA / O_DIRECT compatibility on
     // pinned-host buffers. Apple Silicon uses 16K pages, Linux x86_64
@@ -63,29 +67,33 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
     // headers in turn rejects. Suppress the cleaner here only.
     if (posix_memalign(&p, kHostAllocAlignment, size) != 0) // NOLINT(misc-include-cleaner)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
-    haze::default_context().allocator.register_host_pointer(p);
+    ctx->allocator.register_host_pointer(p);
     *ptr = p;
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
-    haze::default_context().allocator.unregister_host_pointer(ptr);
+extern "C" hazeError_t hazeFreeHost(hazeContext_t ctx, void *ptr) noexcept {
+    if (ctx == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    ctx->allocator.unregister_host_pointer(ptr);
     // posix_memalign-allocated; libc free is the matched deallocator.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
+extern "C" hazeError_t hazePointerGetAttributes(hazeContext_t ctx, hazePointerAttributes *attrs,
                                                 const void *ptr) noexcept {
-    return set_internal_result(haze::default_context().allocator.pointer_attributes(attrs, ptr));
+    if (ctx == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(ctx->allocator.pointer_attributes(attrs, ptr));
 }
 
-extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
+extern "C" hazeError_t hazeMemcpy(hazeContext_t hctx, void *dst, const void *src, size_t count,
                                   hazeMemcpyKind kind) noexcept {
-    if (dst == nullptr || src == nullptr)
+    if (hctx == nullptr || dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
 
-    haze::Context &ctx = haze::default_context();
+    haze::Context &ctx = *hctx;
     auto &alloc = ctx.allocator;
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
@@ -108,17 +116,17 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
 
-extern "C" hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count,
+extern "C" hazeError_t hazeMemcpyAsync(hazeContext_t ctx, void *dst, const void *src, size_t count,
                                        hazeMemcpyKind kind, hazeStream_t /*stream*/) noexcept {
-    return hazeMemcpy(dst, src, count, kind);
+    return hazeMemcpy(ctx, dst, src, count, kind);
 }
 
-extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
-                                     hazeMemcpyKind kind, const uint64_t *base,
+extern "C" hazeError_t hazeMemcpyMrp(hazeContext_t hctx, void *const *dst, const void *const *src,
+                                     size_t count, hazeMemcpyKind kind, const uint64_t *base,
                                      size_t base_len) noexcept {
-    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+    if (hctx == nullptr || dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    haze::Context &ctx = haze::default_context();
+    haze::Context &ctx = *hctx;
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
         return set_internal_result(haze::copy_h2d_mrp(ctx, dst, src, count, base_len));
@@ -130,10 +138,11 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
 
-extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
-    if (dev_ptr == nullptr)
+extern "C" hazeError_t hazeMemset(hazeContext_t hctx, void *dev_ptr, int value,
+                                  size_t count) noexcept {
+    if (hctx == nullptr || dev_ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    haze::Context &ctx = haze::default_context();
+    haze::Context &ctx = *hctx;
     const haze::DevAddr dev = haze::to_dev_addr(dev_ptr);
     if (auto result = ctx.allocator.memset(dev, value, count); !result)
         return set_internal_result(result);
@@ -141,12 +150,13 @@ extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexce
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
+extern "C" hazeError_t hazeMemsetAsync(hazeContext_t ctx, void *dev_ptr, int value, size_t count,
                                        hazeStream_t /*stream*/) noexcept {
-    return hazeMemset(dev_ptr, value, count);
+    return hazeMemset(ctx, dev_ptr, value, count);
 }
 
-extern "C" hazeError_t hazeMemcpyPeerAsync(void * /*dst*/, int /*dst_device*/, const void * /*src*/,
+extern "C" hazeError_t hazeMemcpyPeerAsync(hazeContext_t /*ctx*/, void * /*dst*/,
+                                           int /*dst_device*/, const void * /*src*/,
                                            int /*src_device*/, size_t /*count*/,
                                            hazeStream_t /*stream*/) noexcept {
     return set_error(HAZE_ERROR_NOT_SUPPORTED);

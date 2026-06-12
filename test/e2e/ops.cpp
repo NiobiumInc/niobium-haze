@@ -115,13 +115,14 @@ Allocs rescale_chain_one_tower(const OpCtx &ctx, const Allocs &src, std::size_t 
         .rescale_base_len = rescale_b.size(),
     };
 
-    Allocs intt(src_towers, ctx.poly_bytes);
-    Allocs md(dst_towers, ctx.poly_bytes);
-    Allocs ntt(dst_towers, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(intt.data(), src.as_const().data(), src_base.data(), src_base.size(),
-                        nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeModDown(md.data(), intt.as_const().data(), &md_params, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTTMrp(ntt.data(), md.as_const().data(), dst_base.data(), dst_base.size(),
+    Allocs intt(ctx.haze, src_towers, ctx.poly_bytes);
+    Allocs md(ctx.haze, dst_towers, ctx.poly_bytes);
+    Allocs ntt(ctx.haze, dst_towers, ctx.poly_bytes);
+    REQUIRE(hazeINTTMrp(ctx.haze, intt.data(), src.as_const().data(), src_base.data(),
+                        src_base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModDown(ctx.haze, md.data(), intt.as_const().data(), &md_params, nullptr) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeNTTMrp(ctx.haze, ntt.data(), md.as_const().data(), dst_base.data(), dst_base.size(),
                        nullptr) == HAZE_SUCCESS);
     return ntt;
 }
@@ -137,16 +138,16 @@ Ct pre_rescale_ct(const OpCtx &ctx, const Ct &a) {
 
 Allocs mul_chain(const OpCtx &ctx, const Allocs &x, const Allocs &y,
                  const std::vector<uint64_t> &base) {
-    Allocs out(base.size(), ctx.poly_bytes);
-    REQUIRE(hazeMulMrp(out.data(), x.as_const().data(), y.as_const().data(), base.data(),
+    Allocs out(ctx.haze, base.size(), ctx.poly_bytes);
+    REQUIRE(hazeMulMrp(ctx.haze, out.data(), x.as_const().data(), y.as_const().data(), base.data(),
                        base.size(), nullptr) == HAZE_SUCCESS);
     return out;
 }
 
 Allocs add_chain(const OpCtx &ctx, const Allocs &x, const Allocs &y,
                  const std::vector<uint64_t> &base) {
-    Allocs out(base.size(), ctx.poly_bytes);
-    REQUIRE(hazeAddMrp(out.data(), x.as_const().data(), y.as_const().data(), base.data(),
+    Allocs out(ctx.haze, base.size(), ctx.poly_bytes);
+    REQUIRE(hazeAddMrp(ctx.haze, out.data(), x.as_const().data(), y.as_const().data(), base.data(),
                        base.size(), nullptr) == HAZE_SUCCESS);
     return out;
 }
@@ -216,15 +217,15 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
     };
     const std::size_t qp_towers = qp_base.size();
 
-    Allocs src_coeff(towers, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(src_coeff.data(), src.as_const().data(), q_subbase.data(), q_subbase.size(),
-                        nullptr) == HAZE_SUCCESS);
+    Allocs src_coeff(ctx.haze, towers, ctx.poly_bytes);
+    REQUIRE(hazeINTTMrp(ctx.haze, src_coeff.data(), src.as_const().data(), q_subbase.data(),
+                        q_subbase.size(), nullptr) == HAZE_SUCCESS);
 
-    Allocs digits_flat(num_digits * qp_towers, ctx.poly_bytes);
-    REQUIRE(hazeModUp(digits_flat.data(), src_coeff.as_const().data(), &modup_params, nullptr) ==
-            HAZE_SUCCESS);
+    Allocs digits_flat(ctx.haze, num_digits * qp_towers, ctx.poly_bytes);
+    REQUIRE(hazeModUp(ctx.haze, digits_flat.data(), src_coeff.as_const().data(), &modup_params,
+                      nullptr) == HAZE_SUCCESS);
 
-    Allocs digits_eval(num_digits * qp_towers, ctx.poly_bytes);
+    Allocs digits_eval(ctx.haze, num_digits * qp_towers, ctx.poly_bytes);
     for (std::size_t d = 0; d < num_digits; ++d) {
         std::vector<const void *> in(qp_towers);
         std::vector<void *> out(qp_towers);
@@ -232,8 +233,8 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
             in[t] = digits_flat.data()[(d * qp_towers) + t];
             out[t] = digits_eval.data()[(d * qp_towers) + t];
         }
-        REQUIRE(hazeNTTMrp(out.data(), in.data(), qp_base.data(), qp_base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeNTTMrp(ctx.haze, out.data(), in.data(), qp_base.data(), qp_base.size(),
+                           nullptr) == HAZE_SUCCESS);
     }
 
     // Trim the full-Q∥P key to (first `towers` Q-rows, all P-rows) — matters
@@ -254,40 +255,46 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
             a_trim[towers + t] = key.a_limbs[d][orig];
             b_trim[towers + t] = key.b_limbs[d][orig];
         }
-        a_dev_per_digit.emplace_back(a_trim);
-        b_dev_per_digit.emplace_back(b_trim);
+        a_dev_per_digit.emplace_back(ctx.haze, a_trim);
+        b_dev_per_digit.emplace_back(ctx.haze, b_trim);
     }
 
-    Allocs accum_a(qp_towers, ctx.poly_bytes);
-    Allocs accum_b(qp_towers, ctx.poly_bytes);
+    Allocs accum_a(ctx.haze, qp_towers, ctx.poly_bytes);
+    Allocs accum_b(ctx.haze, qp_towers, ctx.poly_bytes);
     for (std::size_t d = 0; d < num_digits; ++d) {
         std::vector<const void *> dig(qp_towers);
         for (std::size_t t = 0; t < qp_towers; ++t)
             dig[t] = digits_eval.data()[(d * qp_towers) + t];
         if (d == 0) {
-            REQUIRE(hazeMulMrp(accum_b.data(), dig.data(), b_dev_per_digit[d].as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
-            REQUIRE(hazeMulMrp(accum_a.data(), dig.data(), a_dev_per_digit[d].as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
+            REQUIRE(hazeMulMrp(ctx.haze, accum_b.data(), dig.data(),
+                               b_dev_per_digit[d].as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
+            REQUIRE(hazeMulMrp(ctx.haze, accum_a.data(), dig.data(),
+                               a_dev_per_digit[d].as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
         } else {
-            Allocs prod_b(qp_towers, ctx.poly_bytes);
-            Allocs prod_a(qp_towers, ctx.poly_bytes);
-            REQUIRE(hazeMulMrp(prod_b.data(), dig.data(), b_dev_per_digit[d].as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
-            REQUIRE(hazeMulMrp(prod_a.data(), dig.data(), a_dev_per_digit[d].as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
-            REQUIRE(hazeAddMrp(accum_b.data(), accum_b.as_const().data(), prod_b.as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
-            REQUIRE(hazeAddMrp(accum_a.data(), accum_a.as_const().data(), prod_a.as_const().data(),
-                               qp_base.data(), qp_base.size(), nullptr) == HAZE_SUCCESS);
+            Allocs prod_b(ctx.haze, qp_towers, ctx.poly_bytes);
+            Allocs prod_a(ctx.haze, qp_towers, ctx.poly_bytes);
+            REQUIRE(hazeMulMrp(ctx.haze, prod_b.data(), dig.data(),
+                               b_dev_per_digit[d].as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
+            REQUIRE(hazeMulMrp(ctx.haze, prod_a.data(), dig.data(),
+                               a_dev_per_digit[d].as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
+            REQUIRE(hazeAddMrp(ctx.haze, accum_b.data(), accum_b.as_const().data(),
+                               prod_b.as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
+            REQUIRE(hazeAddMrp(ctx.haze, accum_a.data(), accum_a.as_const().data(),
+                               prod_a.as_const().data(), qp_base.data(), qp_base.size(),
+                               nullptr) == HAZE_SUCCESS);
         }
     }
 
-    Allocs accum_a_coeff(qp_towers, ctx.poly_bytes);
-    Allocs accum_b_coeff(qp_towers, ctx.poly_bytes);
-    REQUIRE(hazeINTTMrp(accum_a_coeff.data(), accum_a.as_const().data(), qp_base.data(),
+    Allocs accum_a_coeff(ctx.haze, qp_towers, ctx.poly_bytes);
+    Allocs accum_b_coeff(ctx.haze, qp_towers, ctx.poly_bytes);
+    REQUIRE(hazeINTTMrp(ctx.haze, accum_a_coeff.data(), accum_a.as_const().data(), qp_base.data(),
                         qp_base.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeINTTMrp(accum_b_coeff.data(), accum_b.as_const().data(), qp_base.data(),
+    REQUIRE(hazeINTTMrp(ctx.haze, accum_b_coeff.data(), accum_b.as_const().data(), qp_base.data(),
                         qp_base.size(), nullptr) == HAZE_SUCCESS);
 
     const hazeModDownParams ks_md_params = {
@@ -296,38 +303,38 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
         .rescale_base = ctx.p_base.data(),
         .rescale_base_len = ctx.p_base.size(),
     };
-    Allocs md_a(towers, ctx.poly_bytes);
-    Allocs md_b(towers, ctx.poly_bytes);
-    REQUIRE(hazeModDown(md_a.data(), accum_a_coeff.as_const().data(), &ks_md_params, nullptr) ==
-            HAZE_SUCCESS);
-    REQUIRE(hazeModDown(md_b.data(), accum_b_coeff.as_const().data(), &ks_md_params, nullptr) ==
-            HAZE_SUCCESS);
+    Allocs md_a(ctx.haze, towers, ctx.poly_bytes);
+    Allocs md_b(ctx.haze, towers, ctx.poly_bytes);
+    REQUIRE(hazeModDown(ctx.haze, md_a.data(), accum_a_coeff.as_const().data(), &ks_md_params,
+                        nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModDown(ctx.haze, md_b.data(), accum_b_coeff.as_const().data(), &ks_md_params,
+                        nullptr) == HAZE_SUCCESS);
 
-    Allocs out_a(towers, ctx.poly_bytes);
-    Allocs out_b(towers, ctx.poly_bytes);
-    REQUIRE(hazeNTTMrp(out_a.data(), md_a.as_const().data(), q_subbase.data(), q_subbase.size(),
-                       nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeNTTMrp(out_b.data(), md_b.as_const().data(), q_subbase.data(), q_subbase.size(),
-                       nullptr) == HAZE_SUCCESS);
+    Allocs out_a(ctx.haze, towers, ctx.poly_bytes);
+    Allocs out_b(ctx.haze, towers, ctx.poly_bytes);
+    REQUIRE(hazeNTTMrp(ctx.haze, out_a.data(), md_a.as_const().data(), q_subbase.data(),
+                       q_subbase.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeNTTMrp(ctx.haze, out_b.data(), md_b.as_const().data(), q_subbase.data(),
+                       q_subbase.size(), nullptr) == HAZE_SUCCESS);
 
     return KsContribution{.b_contrib = std::move(out_b), .a_contrib = std::move(out_a)};
 }
 
 } // namespace
 
-Allocs::Allocs(std::size_t count, std::size_t bytes) {
+Allocs::Allocs(hazeContext_t ctx, std::size_t count, std::size_t bytes) : ctx_(ctx) {
     ptrs_.assign(count, nullptr);
     for (std::size_t i = 0; i < count; ++i) {
-        REQUIRE(hazeMalloc(&ptrs_[i], bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(ctx_, &ptrs_[i], bytes) == HAZE_SUCCESS);
     }
 }
 
-Allocs::Allocs(const std::vector<std::vector<uint64_t>> &residues) {
+Allocs::Allocs(hazeContext_t ctx, const std::vector<std::vector<uint64_t>> &residues) : ctx_(ctx) {
     ptrs_.assign(residues.size(), nullptr);
     for (std::size_t i = 0; i < residues.size(); ++i) {
         const std::size_t bytes = residues[i].size() * sizeof(uint64_t);
-        REQUIRE(hazeMalloc(&ptrs_[i], bytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(ptrs_[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+        REQUIRE(hazeMalloc(ctx_, &ptrs_[i], bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(ctx_, ptrs_[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
                 HAZE_SUCCESS);
     }
 }
@@ -336,13 +343,14 @@ Allocs::~Allocs() {
     free_all();
 }
 
-Allocs::Allocs(Allocs &&o) noexcept : ptrs_(std::move(o.ptrs_)) {
+Allocs::Allocs(Allocs &&o) noexcept : ctx_(o.ctx_), ptrs_(std::move(o.ptrs_)) {
     o.ptrs_.clear();
 }
 
 Allocs &Allocs::operator=(Allocs &&o) noexcept {
     if (this != &o) {
         free_all();
+        ctx_ = o.ctx_;
         ptrs_ = std::move(o.ptrs_);
         o.ptrs_.clear();
     }
@@ -354,11 +362,11 @@ std::vector<const void *> Allocs::as_const() const {
 }
 
 void Allocs::free_all() noexcept {
-    // Swallow INVALID_VALUE so a stale post-reset addr doesn't trip the
-    // destructor; hazeFree(nullptr) is already a no-op.
+    // Swallow INVALID_VALUE so a stale post-destroy addr doesn't trip
+    // the destructor; hazeFree(ctx.haze, nullptr) is already a no-op.
     for (void *p : ptrs_) {
         if (p != nullptr)
-            (void)hazeFree(p);
+            (void)hazeFree(ctx_, p);
     }
     ptrs_.clear();
 }
@@ -412,24 +420,22 @@ OpCtx make_ctx(const CtxParams &params) {
             ctx.p_base.push_back(p->GetModulus().ConvertToInt());
     }
 
-    REQUIRE(hazeSetRingDimension(ctx.ring_dim) == HAZE_SUCCESS);
-    // Pure-C bridge: build haze's CryptoContext from (ring_dim, first Q prime).
-    // The full Q∥P chain is conveyed below via hazeSetCiphertextModulus; per-op
-    // shapes are rebuilt from the trace moduli, so the exact picked prime here
-    // only seeds the fallback primary context.
+    // One haze context per test program: the full Q∥P chain lands at
+    // creation (slot order Q then P, matching the trace moduli); per-op
+    // shapes are rebuilt from the trace moduli at replay.
+    std::vector<uint64_t> all_moduli = ctx.q_base;
+    all_moduli.insert(all_moduli.end(), ctx.p_base.begin(), ctx.p_base.end());
+    hazeContext_t raw = nullptr;
+    REQUIRE(hazeContextCreate(&raw, ctx.ring_dim, all_moduli.data(), all_moduli.size()) ==
+            HAZE_SUCCESS);
+    ctx.haze_owner.reset(raw);
+    ctx.haze = raw;
+    // Pure-C bridge: build haze's CryptoContext from (ring_dim, first Q prime);
+    // the exact picked prime only seeds the fallback primary context.
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ctx.ring_dim, ctx.q_base.front(), &picked) ==
             HAZE_SUCCESS);
     REQUIRE(picked != 0);
-
-    int mod_idx = 0;
-    for (uint64_t q : ctx.q_base) {
-        REQUIRE(hazeSetCiphertextModulus(mod_idx++, q) == HAZE_SUCCESS);
-    }
-    for (uint64_t pmod : ctx.p_base) {
-        REQUIRE(hazeSetCiphertextModulus(mod_idx++, pmod) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     if (ctx.with_relin_key) {
         REQUIRE(extract_evalmult_key_limbs(ctx.cc, ctx.keys.secretKey, ctx.relin_key) ==
@@ -483,23 +489,24 @@ Ct h2d_ct(const OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &src)
     }
     REQUIRE(c0_data.size() == c1_data.size());
     const std::size_t towers = c0_data.size();
-    Allocs c0_alloc(c0_data);
-    Allocs c1_alloc(c1_data);
+    Allocs c0_alloc(ctx.haze, c0_data);
+    Allocs c1_alloc(ctx.haze, c1_data);
     return {std::move(c0_alloc), std::move(c1_alloc), towers,
             static_cast<std::uint32_t>(src->GetNoiseScaleDeg())};
 }
 
 void tag_ct(const Ct &ct) {
     for (std::size_t t = 0; t < ct.towers(); ++t) {
-        REQUIRE(hazeTagOutput(ct.c0()[t]) == HAZE_SUCCESS);
-        REQUIRE(hazeTagOutput(ct.c1()[t]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(ct.c0().context(), ct.c0()[t]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(ct.c1().context(), ct.c1()[t]) == HAZE_SUCCESS);
     }
 }
 
 void flush_cts(std::initializer_list<const Ct *> cts) {
+    REQUIRE(cts.size() > 0);
     for (const Ct *ct : cts)
         tag_ct(*ct);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush((*cts.begin())->c0().context()) == HAZE_SUCCESS);
 }
 
 CtBytes d2h_ct(const OpCtx &ctx, const Ct &src) {
@@ -508,7 +515,7 @@ CtBytes d2h_ct(const OpCtx &ctx, const Ct &src) {
     auto pull_chain = [&](const Allocs &alloc) {
         std::vector<std::vector<uint64_t>> out(src.towers(), std::vector<uint64_t>(ctx.ring_dim));
         for (std::size_t t = 0; t < src.towers(); ++t) {
-            REQUIRE(hazeMemcpy(out[t].data(), alloc[t], ctx.poly_bytes,
+            REQUIRE(hazeMemcpy(ctx.haze, out[t].data(), alloc[t], ctx.poly_bytes,
                                HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         }
         return out;
@@ -560,11 +567,11 @@ Ct sub(const OpCtx &ctx, const Ct &a, const Ct &b) {
     REQUIRE(a.towers() == b.towers());
     std::vector<uint64_t> base(ctx.q_base.begin(),
                                ctx.q_base.begin() + static_cast<std::ptrdiff_t>(a.towers()));
-    Allocs out_c0(base.size(), ctx.poly_bytes);
-    Allocs out_c1(base.size(), ctx.poly_bytes);
-    REQUIRE(hazeSubMrp(out_c0.data(), a.c0().as_const().data(), b.c0().as_const().data(),
+    Allocs out_c0(ctx.haze, base.size(), ctx.poly_bytes);
+    Allocs out_c1(ctx.haze, base.size(), ctx.poly_bytes);
+    REQUIRE(hazeSubMrp(ctx.haze, out_c0.data(), a.c0().as_const().data(), b.c0().as_const().data(),
                        base.data(), base.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeSubMrp(out_c1.data(), a.c1().as_const().data(), b.c1().as_const().data(),
+    REQUIRE(hazeSubMrp(ctx.haze, out_c1.data(), a.c1().as_const().data(), b.c1().as_const().data(),
                        base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
             std::max(a.noise_scale_deg(), b.noise_scale_deg())};
@@ -606,12 +613,12 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
         Allocs rescaled_c0 = rescale_chain_one_tower(ctx, a.c0(), a.towers());
         Allocs rescaled_c1 = rescale_chain_one_tower(ctx, a.c1(), a.towers());
 
-        Allocs out_c0(out_towers, ctx.poly_bytes);
-        Allocs out_c1(out_towers, ctx.poly_bytes);
-        REQUIRE(hazeMulScalarMrp(out_c0.data(), rescaled_c0.as_const().data(),
+        Allocs out_c0(ctx.haze, out_towers, ctx.poly_bytes);
+        Allocs out_c1(ctx.haze, out_towers, ctx.poly_bytes);
+        REQUIRE(hazeMulScalarMrp(ctx.haze, out_c0.data(), rescaled_c0.as_const().data(),
                                  rescaled_scalars.data(), dst_base.data(), dst_base.size(),
                                  nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeMulScalarMrp(out_c1.data(), rescaled_c1.as_const().data(),
+        REQUIRE(hazeMulScalarMrp(ctx.haze, out_c1.data(), rescaled_c1.as_const().data(),
                                  rescaled_scalars.data(), dst_base.data(), dst_base.size(),
                                  nullptr) == HAZE_SUCCESS);
         return {std::move(out_c0), std::move(out_c1), out_towers, 1};
@@ -619,12 +626,12 @@ Ct mult_scalar(const OpCtx &ctx, const Ct &a, const lbcrypto::Plaintext &pt) {
 
     std::vector<uint64_t> base(ctx.q_base.begin(),
                                ctx.q_base.begin() + static_cast<std::ptrdiff_t>(a.towers()));
-    Allocs out_c0(a.towers(), ctx.poly_bytes);
-    Allocs out_c1(a.towers(), ctx.poly_bytes);
-    REQUIRE(hazeMulScalarMrp(out_c0.data(), a.c0().as_const().data(), scalars.data(), base.data(),
-                             base.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalarMrp(out_c1.data(), a.c1().as_const().data(), scalars.data(), base.data(),
-                             base.size(), nullptr) == HAZE_SUCCESS);
+    Allocs out_c0(ctx.haze, a.towers(), ctx.poly_bytes);
+    Allocs out_c1(ctx.haze, a.towers(), ctx.poly_bytes);
+    REQUIRE(hazeMulScalarMrp(ctx.haze, out_c0.data(), a.c0().as_const().data(), scalars.data(),
+                             base.data(), base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMulScalarMrp(ctx.haze, out_c1.data(), a.c1().as_const().data(), scalars.data(),
+                             base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(),
             static_cast<std::uint32_t>(a.noise_scale_deg() + pt->GetNoiseScaleDeg())};
 }
@@ -683,12 +690,12 @@ Ct rotate(const OpCtx &ctx, const Ct &a, std::int32_t slot_index) {
     Allocs ks_c0 = add_chain(ctx, a.c0(), ks.b_contrib, base);
     Allocs ks_c1 = std::move(ks.a_contrib);
 
-    Allocs out_c0(a.towers(), ctx.poly_bytes);
-    Allocs out_c1(a.towers(), ctx.poly_bytes);
-    REQUIRE(hazeAutomorphMrp(out_c0.data(), ks_c0.as_const().data(),
+    Allocs out_c0(ctx.haze, a.towers(), ctx.poly_bytes);
+    Allocs out_c1(ctx.haze, a.towers(), ctx.poly_bytes);
+    REQUIRE(hazeAutomorphMrp(ctx.haze, out_c0.data(), ks_c0.as_const().data(),
                              static_cast<std::uint64_t>(auto_index), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeAutomorphMrp(out_c1.data(), ks_c1.as_const().data(),
+    REQUIRE(hazeAutomorphMrp(ctx.haze, out_c1.data(), ks_c1.as_const().data(),
                              static_cast<std::uint64_t>(auto_index), base.data(), base.size(),
                              nullptr) == HAZE_SUCCESS);
     return {std::move(out_c0), std::move(out_c1), a.towers(), a.noise_scale_deg()};

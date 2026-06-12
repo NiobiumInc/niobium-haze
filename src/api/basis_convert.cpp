@@ -14,7 +14,7 @@
 #include "core/basis_convert.hpp"
 
 #include "common/errors.hpp"
-#include "core/context.hpp"
+#include "core/context.hpp" // IWYU pragma: keep — ctx-> needs the complete type
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
@@ -22,11 +22,12 @@
 namespace {
 
 template <typename ParamsT, auto OpFn>
-hazeError_t dispatch(void *const *dst, const void *const *src, const void *params) noexcept {
-    if (params == nullptr || src == nullptr || dst == nullptr) {
+hazeError_t dispatch(hazeContext_t ctx, void *const *dst, const void *const *src,
+                     const void *params) noexcept {
+    if (ctx == nullptr || params == nullptr || src == nullptr || dst == nullptr) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
-    auto result = OpFn(haze::default_context(), dst, src, *static_cast<const ParamsT *>(params));
+    auto result = OpFn(*ctx, dst, src, *static_cast<const ParamsT *>(params));
     if (!result) {
         return set_error(haze::to_public_error(result.error()));
     }
@@ -35,17 +36,17 @@ hazeError_t dispatch(void *const *dst, const void *const *src, const void *param
 
 } // namespace
 
-extern "C" hazeError_t hazeBasisConvert(void *const *dst, const void *const *src,
+extern "C" hazeError_t hazeBasisConvert(hazeContext_t ctx, void *const *dst, const void *const *src,
                                         const void *params, hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeBasisConvertParams, haze::basis_convert>(dst, src, params);
+    return dispatch<hazeBasisConvertParams, haze::basis_convert>(ctx, dst, src, params);
 }
 
-extern "C" hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
-                                   hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeModDownParams, haze::mod_down>(dst, src, params);
+extern "C" hazeError_t hazeModDown(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                   const void *params, hazeStream_t /*stream*/) noexcept {
+    return dispatch<hazeModDownParams, haze::mod_down>(ctx, dst, src, params);
 }
 
-extern "C" hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
-                                 hazeStream_t /*stream*/) noexcept {
-    return dispatch<hazeModUpParams, haze::mod_up>(dst, src, params);
+extern "C" hazeError_t hazeModUp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                 const void *params, hazeStream_t /*stream*/) noexcept {
+    return dispatch<hazeModUpParams, haze::mod_up>(ctx, dst, src, params);
 }

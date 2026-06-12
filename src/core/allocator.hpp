@@ -172,6 +172,5 @@ class DeviceAllocator {
 
 // TEMPORARY default-context bridge (context.cpp). HAZE_API so the test
 // binary resolves it out of the hidden-visibility .so.
-HAZE_API DeviceAllocator &allocator() noexcept;
 
 } // namespace haze

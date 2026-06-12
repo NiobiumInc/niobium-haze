@@ -125,6 +125,4 @@ class KernelCache {
     int validate_override_ HAZE_GUARDED_BY(mutex_) = -1;
 };
 
-KernelCache &kernel_cache() noexcept; // TEMPORARY default-context bridge
-
 } // namespace haze

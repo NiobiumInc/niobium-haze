@@ -79,17 +79,18 @@ KeysetCall upload_set(const ops::OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto
     REQUIRE(c.dig_host.size() == towers);
     c.key_a_host = key_rows(limbs.a_limbs, towers);
     c.key_b_host = key_rows(limbs.b_limbs, towers);
-    c.dig = ops::Allocs(c.dig_host);
-    c.key_a = ops::Allocs(c.key_a_host);
-    c.key_b = ops::Allocs(c.key_b_host);
-    c.out_a = ops::Allocs(towers, ctx.poly_bytes);
-    c.out_b = ops::Allocs(towers, ctx.poly_bytes);
+    c.dig = ops::Allocs(ctx.haze, c.dig_host);
+    c.key_a = ops::Allocs(ctx.haze, c.key_a_host);
+    c.key_b = ops::Allocs(ctx.haze, c.key_b_host);
+    c.out_a = ops::Allocs(ctx.haze, towers, ctx.poly_bytes);
+    c.out_b = ops::Allocs(ctx.haze, towers, ctx.poly_bytes);
     return c;
 }
 
 // Bracketed "keyswitch digit" kernel call; the body runs only on
 // RECORD. Returns the disposition Begin reported.
-hazeKernelDisposition ks_digit(KeysetCall &c, const std::vector<uint64_t> &base) {
+hazeKernelDisposition ks_digit(hazeContext_t hctx, KeysetCall &c,
+                               const std::vector<uint64_t> &base) {
     const std::vector<const void *> dig_c = c.dig.as_const();
     const std::vector<const void *> key_a_c = c.key_a.as_const();
     const std::vector<const void *> key_b_c = c.key_b.as_const();
@@ -104,19 +105,19 @@ hazeKernelDisposition ks_digit(KeysetCall &c, const std::vector<uint64_t> &base)
     std::memcpy(key_bytes.data(), base.data(), key_bytes.size());
 
     hazeKernelDisposition disposition{};
-    REQUIRE(hazeKernelBegin("ks_digit", 0xD161, key_bytes.data(), key_bytes.size(), inputs, 3,
+    REQUIRE(hazeKernelBegin(hctx, "ks_digit", 0xD161, key_bytes.data(), key_bytes.size(), inputs, 3,
                             &disposition) == HAZE_SUCCESS);
     if (disposition == HAZE_KERNEL_RECORD) {
-        REQUIRE(hazeMulMrp(c.out_a.data(), dig_c.data(), key_a_c.data(), base.data(), base.size(),
-                           nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeMulMrp(c.out_b.data(), dig_c.data(), key_b_c.data(), base.data(), base.size(),
-                           nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(hctx, c.out_a.data(), dig_c.data(), key_a_c.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(hctx, c.out_b.data(), dig_c.data(), key_b_c.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
     }
     const hazeKernelOutput outputs[] = {
         {c.out_a.data(), base.data(), base.size()},
         {c.out_b.data(), base.data(), base.size()},
     };
-    REQUIRE(hazeKernelEnd(outputs, 2) == HAZE_SUCCESS);
+    REQUIRE(hazeKernelEnd(hctx, outputs, 2) == HAZE_SUCCESS);
     return disposition;
 }
 
@@ -124,12 +125,12 @@ hazeKernelDisposition ks_digit(KeysetCall &c, const std::vector<uint64_t> &base)
 // pointwise product of THIS call's digit and key rows.
 void flush_and_verify(const ops::OpCtx &ctx, const KeysetCall &c,
                       const std::vector<uint64_t> &base) {
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(ctx.haze) == HAZE_SUCCESS);
     const auto check = [&](const ops::Allocs &out, const std::vector<std::vector<uint64_t>> &key) {
         for (std::size_t t = 0; t < base.size(); ++t) {
             std::vector<uint64_t> got(ctx.ring_dim);
-            REQUIRE(hazeMemcpy(got.data(), out[t], ctx.poly_bytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                    HAZE_SUCCESS);
+            REQUIRE(hazeMemcpy(ctx.haze, got.data(), out[t], ctx.poly_bytes,
+                               HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
             for (std::size_t i = 0; i < ctx.ring_dim; ++i)
                 REQUIRE(got[i] == mulmod(c.dig_host[t][i], key[t][i], base[t]));
         }
@@ -145,7 +146,6 @@ TEST_CASE("memoized kernel replays a second ciphertext/key set across flushes",
     using namespace lbcrypto;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetKernelMemo(1) == HAZE_SUCCESS);
 
     auto ctx = ops::make_ctx({.mode = FIXEDMANUAL,
                               .mult_depth = 1,
@@ -154,6 +154,7 @@ TEST_CASE("memoized kernel replays a second ciphertext/key set across flushes",
                               .with_relin_key = false,
                               .rotate_indices = {1},
                               .ring_dim = ops::RingDimChoice::OpenFHEDerives()});
+    REQUIRE(hazeSetKernelMemo(ctx.haze, 1) == HAZE_SUCCESS);
 
     // Keyset A: make_ctx's keypair + its extracted automorphism key.
     // Keyset B: a SECOND keypair on the same CryptoContext — same scheme
@@ -179,15 +180,13 @@ TEST_CASE("memoized kernel replays a second ciphertext/key set across flushes",
 
     // Call 1 (set A): cold — records the template, flushes its epoch.
     KeysetCall call_a = upload_set(ctx, ct_a, ctx.rotation_keys.at(1).limbs, towers);
-    REQUIRE(ks_digit(call_a, base) == HAZE_KERNEL_RECORD);
+    REQUIRE(ks_digit(ctx.haze, call_a, base) == HAZE_KERNEL_RECORD);
     flush_and_verify(ctx, call_a, base);
 
     // Call 2 (set B): different ciphertext, different keys — the cache
     // hit is REQUIRED, and the replayed instance must compute on B's
     // inputs in a fresh epoch.
     KeysetCall call_b = upload_set(ctx, ct_b, limbs_b, towers);
-    REQUIRE(ks_digit(call_b, base) == HAZE_KERNEL_REPLAY);
+    REQUIRE(ks_digit(ctx.haze, call_b, base) == HAZE_KERNEL_REPLAY);
     flush_and_verify(ctx, call_b, base);
-
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }

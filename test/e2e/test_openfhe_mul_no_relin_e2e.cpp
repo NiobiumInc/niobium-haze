@@ -124,7 +124,6 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     auto keys = cc->KeyGen();
 
     const uint64_t ring_dim = cc->GetRingDimension();
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
 
     const auto &eparams = cc->GetCryptoParameters()->GetElementParams()->GetParams();
     std::vector<uint64_t> base;
@@ -134,15 +133,12 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     }
     REQUIRE(!base.empty());
 
-    // Pure-C bridge: seed haze's context from the first Q prime, then convey the
-    // full chain via hazeSetCiphertextModulus.
+    // Fresh context carrying the full chain; pure-C bridge seeded from the
+    // first Q prime.
+    haze::test::recreate_ctx(ring_dim, base);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, base.front(), &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);
-    for (std::size_t i = 0; i < base.size(); ++i) {
-        REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     INFO("ring_dim=" << ring_dim << " towers=" << base.size());
     REQUIRE(base.size() >= 2);
@@ -214,13 +210,14 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
         auto md = haze::test::allocate_dst_residues(out_towers, kBytes);
         auto ntt = haze::test::allocate_dst_residues(out_towers, kBytes);
         const auto src_c = haze::test::to_const(src_full);
-        REQUIRE(hazeINTTMrp(intt.data(), src_c.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeINTTMrp(haze::test::ctx(), intt.data(), src_c.data(), base.data(), base.size(),
+                            nullptr) == HAZE_SUCCESS);
         const auto intt_c = haze::test::to_const(intt);
-        REQUIRE(hazeModDown(md.data(), intt_c.data(), &md_params, nullptr) == HAZE_SUCCESS);
-        const auto md_c = haze::test::to_const(md);
-        REQUIRE(hazeNTTMrp(ntt.data(), md_c.data(), out_base.data(), out_base.size(), nullptr) ==
+        REQUIRE(hazeModDown(haze::test::ctx(), md.data(), intt_c.data(), &md_params, nullptr) ==
                 HAZE_SUCCESS);
+        const auto md_c = haze::test::to_const(md);
+        REQUIRE(hazeNTTMrp(haze::test::ctx(), ntt.data(), md_c.data(), out_base.data(),
+                           out_base.size(), nullptr) == HAZE_SUCCESS);
         haze::test::free_all_residues(intt);
         haze::test::free_all_residues(md);
         return ntt;
@@ -229,8 +226,8 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     auto d2h_chain = [&](const std::vector<void *> &dev_chain, std::size_t towers) {
         std::vector<std::vector<uint64_t>> host(towers, std::vector<uint64_t>(ring_dim));
         for (std::size_t t = 0; t < towers; ++t) {
-            REQUIRE(hazeMemcpy(host[t].data(), dev_chain[t], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                    HAZE_SUCCESS);
+            REQUIRE(hazeMemcpy(haze::test::ctx(), host[t].data(), dev_chain[t], kBytes,
+                               HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         }
         return host;
     };
@@ -283,18 +280,18 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
         const auto wb_c0_c = haze::test::to_const(*wb_c0);
         const auto wb_c1_c = haze::test::to_const(*wb_c1);
 
-        REQUIRE(hazeMulMrp(d0.data(), wa_c0_c.data(), wb_c0_c.data(), work_base.data(),
-                           work_base.size(), nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeMulMrp(t_buf.data(), wa_c0_c.data(), wb_c1_c.data(), work_base.data(),
-                           work_base.size(), nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeMulMrp(u_buf.data(), wa_c1_c.data(), wb_c0_c.data(), work_base.data(),
-                           work_base.size(), nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), d0.data(), wa_c0_c.data(), wb_c0_c.data(),
+                           work_base.data(), work_base.size(), nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), t_buf.data(), wa_c0_c.data(), wb_c1_c.data(),
+                           work_base.data(), work_base.size(), nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), u_buf.data(), wa_c1_c.data(), wb_c0_c.data(),
+                           work_base.data(), work_base.size(), nullptr) == HAZE_SUCCESS);
         const auto t_c = haze::test::to_const(t_buf);
         const auto u_c = haze::test::to_const(u_buf);
-        REQUIRE(hazeAddMrp(d1.data(), t_c.data(), u_c.data(), work_base.data(), work_base.size(),
-                           nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeMulMrp(d2.data(), wa_c1_c.data(), wb_c1_c.data(), work_base.data(),
+        REQUIRE(hazeAddMrp(haze::test::ctx(), d1.data(), t_c.data(), u_c.data(), work_base.data(),
                            work_base.size(), nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), d2.data(), wa_c1_c.data(), wb_c1_c.data(),
+                           work_base.data(), work_base.size(), nullptr) == HAZE_SUCCESS);
     }
     // t_buf and u_buf are consumed by the AddMrp above only.
     haze::test::free_all_residues(t_buf);
@@ -317,8 +314,8 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
 
     for (const std::vector<void *> *chain : {final_d0, final_d1, final_d2})
         for (void *p : *chain)
-            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+            REQUIRE(hazeTagOutput(haze::test::ctx(), p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     const auto haze_d0 = d2h_chain(*final_d0, out_towers);
     const auto haze_d1 = d2h_chain(*final_d1, out_towers);

@@ -81,31 +81,16 @@ class Config {
                                                        BindingTable &values,
                                                        BindingTable &recorded_moduli) noexcept;
 
-    // FHE parameters (legacy piecewise API; deleted with the
-    // parameterless C ABI). The ring dimension also fixes the sibling
-    // components' geometry (allocator pool, binding slot tables); they
-    // are passed in so the update is atomic under the Config lock —
-    // Config holds no sibling references itself.
-    std::expected<void, HazeInternalError>
-    set_ring_dimension(uint64_t n, DeviceAllocator &alloc, BindingTable &values,
-                       BindingTable &recorded_moduli) noexcept;
-    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept;
-    std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
-                                                                 uint64_t generator) noexcept;
-    std::expected<void, HazeInternalError> configure_device() noexcept;
-
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
 
-    // Freeze the FHE parameters and publish the lock-free snapshot. The
-    // record path calls this on every compute entry: the fast path is a
-    // single acquire load. Returns nullptr (and freezes nothing) while
-    // ring_dim is still unset, so a failed early compute does not lock
-    // the user out of configuring afterwards. Once frozen, parameter
-    // mutators behave exactly as after configure_device(): identical
-    // re-sets succeed, changes are rejected. Cleared by reset().
-    const ConfigSnapshot *freeze() noexcept;
-    bool frozen() const noexcept;
+    // The parameter snapshot published by init_params: lock-free, one
+    // acquire load, valid for the Config's lifetime. nullptr only on a
+    // default-constructed Config that was never init_params'd (a
+    // hazeContextCreate'd context always has one).
+    const ConfigSnapshot *params() const noexcept {
+        return snapshot_.load(std::memory_order_acquire);
+    }
 
     // Program / target metadata fed to the compiler during init.
     // Defaults: name="haze", version="0.1", description="HAZE runtime",
@@ -136,7 +121,7 @@ class Config {
     bool has_program_directory() const noexcept;
     std::string program_directory() const noexcept;
 
-    void reset(BindingTable &values) noexcept;
+    ~Config() { delete snapshot_.exchange(nullptr, std::memory_order_acq_rel); }
 
     Config(const Config &) = delete;
     Config &operator=(const Config &) = delete;
@@ -148,7 +133,6 @@ class Config {
     mutable HazeMutex mutex_;
     uint64_t ring_dim_ = 0;
     std::vector<uint64_t> moduli_;
-    std::vector<uint64_t> twiddle_generators_;
     bool configured_ = false;
 
     // Defaults applied lazily on first read.
@@ -165,8 +149,6 @@ class Config {
     bool montgomery_set_ = false;
     bool bit_reversal_set_ = false;
 };
-
-Config &config() noexcept; // TEMPORARY default-context bridge (context.cpp)
 
 // Shared truthy env-var read ("1" or "true"; anything else — including
 // unset — yields `fallback`). The single truthiness definition for

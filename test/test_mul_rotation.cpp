@@ -53,11 +53,11 @@ struct SrpDriver {
 
     static void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
                     const std::vector<const void *> &s2) {
-        REQUIRE(hazeMul(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMul(haze::test::ctx(), dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
                           uint64_t k) {
-        REQUIRE(hazeAutomorph(dst[0], src[0], k, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAutomorph(haze::test::ctx(), dst[0], src[0], k, nullptr) == HAZE_SUCCESS);
     }
 };
 
@@ -68,28 +68,23 @@ struct MrpDriver {
     std::vector<uint64_t> base;
 
     uint64_t setup() {
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+        haze::test::recreate_ctx(kRingDim, {kQ0, kQ1, kQ2});
         uint64_t picked = 0;
         REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
         REQUIRE(picked != 0);
-        REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-        REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
         base = {kQ0, kQ1, kQ2};
         return kQ0;
     }
 
     void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
              const std::vector<const void *> &s2) const {
-        REQUIRE(hazeMulMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), dst.data(), s1.data(), s2.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
     }
     void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
                    uint64_t k) const {
-        REQUIRE(hazeAutomorphMrp(dst.data(), src.data(), k, base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeAutomorphMrp(haze::test::ctx(), dst.data(), src.data(), k, base.data(),
+                                 base.size(), nullptr) == HAZE_SUCCESS);
     }
 };
 
@@ -127,7 +122,8 @@ void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
     REQUIRE(expected.size() == Driver::kNumResidues);
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO(Driver::kShape << " residue " << i << " (mod " << d.base[i] << ") slot " << k);
             REQUIRE(got[k] == expected[i][k]);
@@ -173,10 +169,10 @@ TEMPLATE_TEST_CASE("mul→automorph→automorph: two rotations sharing one produ
     d.automorph(d_r2, haze::test::to_const(d_c), kIdx2);
 
     for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
-        REQUIRE(hazeTagOutput(d_r1[i]) == HAZE_SUCCESS);
-        REQUIRE(hazeTagOutput(d_r2[i]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), d_r1[i]) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), d_r2[i]) == HAZE_SUCCESS);
     }
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     check_against_per_residue(d, d_r1, r1_expected);
     check_against_per_residue(d, d_r2, r2_expected);

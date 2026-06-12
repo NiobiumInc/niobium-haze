@@ -30,6 +30,43 @@
 
 namespace haze::cxx::inline v1 {
 
+// Owning RAII handle over a hazeContext_t: one recording program with
+// its FHE parameters fixed at creation. Buffers allocated from a
+// context must not outlive it (mirrors the C ABI contract).
+class Context {
+  public:
+    static Result<Context> create(uint64_t ring_dim, std::span<const uint64_t> moduli) noexcept {
+        hazeContext_t raw = nullptr;
+        if (const hazeError_t err = hazeContextCreate(&raw, ring_dim, moduli.data(), moduli.size());
+            err != HAZE_SUCCESS)
+            return Status{err};
+        return Context{raw};
+    }
+
+    Context(Context &&other) noexcept : raw_(std::exchange(other.raw_, nullptr)) {}
+    Context &operator=(Context &&other) noexcept {
+        if (this != &other) {
+            destroy_now();
+            raw_ = std::exchange(other.raw_, nullptr);
+        }
+        return *this;
+    }
+    Context(const Context &) = delete;
+    Context &operator=(const Context &) = delete;
+    ~Context() { destroy_now(); }
+
+    hazeContext_t get() const noexcept { return raw_; }
+
+  private:
+    explicit Context(hazeContext_t raw) noexcept : raw_(raw) {}
+    void destroy_now() noexcept {
+        if (raw_ != nullptr)
+            (void)hazeContextDestroy(std::exchange(raw_, nullptr));
+    }
+
+    hazeContext_t raw_ = nullptr;
+};
+
 // A ciphertext modulus VALUE paired with the config index the
 // single-residue C ABI addresses it by. The typed layer always passes
 // both together so a kernel can never read an ambient index that
@@ -44,29 +81,32 @@ struct ModSlot {
 // One single-residue polynomial allocation.
 class Srp {
   public:
-    static Result<Srp> allocate(ModSlot mod, size_t bytes) noexcept {
+    static Result<Srp> allocate(hazeContext_t ctx, ModSlot mod, size_t bytes) noexcept {
         void *ptr = nullptr;
-        if (const hazeError_t err = hazeMalloc(&ptr, bytes); err != HAZE_SUCCESS)
+        if (const hazeError_t err = hazeMalloc(ctx, &ptr, bytes); err != HAZE_SUCCESS)
             return Status{err};
-        return Srp{ptr, mod};
+        return Srp{ctx, ptr, mod};
     }
 
     // allocate + H2D in one step.
-    static Result<Srp> upload(ModSlot mod, std::span<const uint64_t> values) noexcept {
-        auto srp = allocate(mod, values.size_bytes());
+    static Result<Srp> upload(hazeContext_t ctx, ModSlot mod,
+                              std::span<const uint64_t> values) noexcept {
+        auto srp = allocate(ctx, mod, values.size_bytes());
         if (!srp)
             return srp;
-        if (const hazeError_t err = hazeMemcpy(srp.value().addr(), values.data(),
+        if (const hazeError_t err = hazeMemcpy(ctx, srp.value().addr(), values.data(),
                                                values.size_bytes(), HAZE_MEMCPY_HOST_TO_DEVICE);
             err != HAZE_SUCCESS)
             return Status{err};
         return srp;
     }
 
-    Srp(Srp &&other) noexcept : addr_(std::exchange(other.addr_, nullptr)), mod_(other.mod_) {}
+    Srp(Srp &&other) noexcept
+        : ctx_(other.ctx_), addr_(std::exchange(other.addr_, nullptr)), mod_(other.mod_) {}
     Srp &operator=(Srp &&other) noexcept {
         if (this != &other) {
             free_now();
+            ctx_ = other.ctx_;
             addr_ = std::exchange(other.addr_, nullptr);
             mod_ = other.mod_;
         }
@@ -76,20 +116,23 @@ class Srp {
     Srp &operator=(const Srp &) = delete;
     ~Srp() { free_now(); }
 
+    hazeContext_t context() const noexcept { return ctx_; }
     void *addr() const noexcept { return addr_; }
     ModSlot mod() const noexcept { return mod_; }
 
     Status download(std::span<uint64_t> out) const noexcept {
-        return Status{hazeMemcpy(out.data(), addr_, out.size_bytes(), HAZE_MEMCPY_DEVICE_TO_HOST)};
+        return Status{
+            hazeMemcpy(ctx_, out.data(), addr_, out.size_bytes(), HAZE_MEMCPY_DEVICE_TO_HOST)};
     }
 
   private:
-    Srp(void *addr, ModSlot mod) noexcept : addr_(addr), mod_(mod) {}
+    Srp(hazeContext_t ctx, void *addr, ModSlot mod) noexcept : ctx_(ctx), addr_(addr), mod_(mod) {}
     void free_now() noexcept {
         if (addr_ != nullptr)
-            (void)hazeFree(std::exchange(addr_, nullptr)); // post-reset free is benign
+            (void)hazeFree(ctx_, std::exchange(addr_, nullptr)); // post-destroy free is benign
     }
 
+    hazeContext_t ctx_ = nullptr;
     void *addr_ = nullptr;
     ModSlot mod_{};
 };
@@ -99,13 +142,15 @@ class Srp {
 // base[i]).
 class Mrp {
   public:
-    static Result<Mrp> allocate(std::span<const uint64_t> base, size_t poly_bytes) noexcept {
+    static Result<Mrp> allocate(hazeContext_t ctx, std::span<const uint64_t> base,
+                                size_t poly_bytes) noexcept {
         Mrp mrp;
+        mrp.ctx_ = ctx;
         mrp.base_.assign(base.begin(), base.end());
         mrp.ptrs_.reserve(base.size());
         for (size_t i = 0; i < base.size(); ++i) {
             void *ptr = nullptr;
-            if (const hazeError_t err = hazeMalloc(&ptr, poly_bytes); err != HAZE_SUCCESS)
+            if (const hazeError_t err = hazeMalloc(ctx, &ptr, poly_bytes); err != HAZE_SUCCESS)
                 return Status{err}; // mrp's dtor frees the residues already allocated
             mrp.ptrs_.push_back(ptr);
         }
@@ -113,14 +158,14 @@ class Mrp {
     }
 
     // allocate + per-residue H2D (residues[i] under base[i]).
-    static Result<Mrp> upload(std::span<const std::vector<uint64_t>> residues,
+    static Result<Mrp> upload(hazeContext_t ctx, std::span<const std::vector<uint64_t>> residues,
                               std::span<const uint64_t> base) noexcept {
         if (residues.size() != base.size() || residues.empty())
             return Status{HAZE_ERROR_INVALID_VALUE};
         for (const auto &r : residues)
             if (r.size() != residues[0].size())
                 return Status{HAZE_ERROR_INVALID_VALUE}; // ragged towers: refuse loudly
-        auto mrp = allocate(base, residues[0].size() * sizeof(uint64_t));
+        auto mrp = allocate(ctx, base, residues[0].size() * sizeof(uint64_t));
         if (!mrp)
             return mrp;
         // One hazeMemcpyMrp so the residues register as one MRP upload.
@@ -129,27 +174,30 @@ class Mrp {
         for (const auto &r : residues)
             srcs.push_back(r.data());
         if (const hazeError_t err = hazeMemcpyMrp(
-                mrp.value().data(), srcs.data(), residues[0].size() * sizeof(uint64_t),
+                ctx, mrp.value().data(), srcs.data(), residues[0].size() * sizeof(uint64_t),
                 HAZE_MEMCPY_HOST_TO_DEVICE, base.data(), base.size());
             err != HAZE_SUCCESS)
             return Status{err};
         return mrp;
     }
 
-    // Interop: take ownership of raw C-ABI allocations (they will be
-    // hazeFree'd by this handle).
-    static Mrp adopt(std::span<void *const> ptrs, std::span<const uint64_t> base) noexcept {
+    // Interop: take ownership of raw C-ABI allocations from `ctx` (they
+    // will be hazeFree'd against it by this handle).
+    static Mrp adopt(hazeContext_t ctx, std::span<void *const> ptrs,
+                     std::span<const uint64_t> base) noexcept {
         Mrp mrp;
+        mrp.ctx_ = ctx;
         mrp.ptrs_.assign(ptrs.begin(), ptrs.end());
         mrp.base_.assign(base.begin(), base.end());
         return mrp;
     }
 
     Mrp(Mrp &&other) noexcept
-        : ptrs_(std::exchange(other.ptrs_, {})), base_(std::move(other.base_)) {}
+        : ctx_(other.ctx_), ptrs_(std::exchange(other.ptrs_, {})), base_(std::move(other.base_)) {}
     Mrp &operator=(Mrp &&other) noexcept {
         if (this != &other) {
             free_now();
+            ctx_ = other.ctx_;
             ptrs_ = std::move(other.ptrs_);
             base_ = std::move(other.base_);
             other.ptrs_.clear();
@@ -160,6 +208,7 @@ class Mrp {
     Mrp &operator=(const Mrp &) = delete;
     ~Mrp() { free_now(); }
 
+    hazeContext_t context() const noexcept { return ctx_; }
     void *const *data() const noexcept { return ptrs_.data(); }
     const uint64_t *base() const noexcept { return base_.data(); }
     size_t base_len() const noexcept { return base_.size(); }
@@ -170,7 +219,7 @@ class Mrp {
         if (i >= ptrs_.size())
             return Status{HAZE_ERROR_INVALID_VALUE};
         return Status{
-            hazeMemcpy(out.data(), ptrs_[i], out.size_bytes(), HAZE_MEMCPY_DEVICE_TO_HOST)};
+            hazeMemcpy(ctx_, out.data(), ptrs_[i], out.size_bytes(), HAZE_MEMCPY_DEVICE_TO_HOST)};
     }
 
     // Interop: give the allocations up to the caller (no hazeFree here).
@@ -184,10 +233,11 @@ class Mrp {
     void free_now() noexcept {
         for (void *p : ptrs_)
             if (p != nullptr)
-                (void)hazeFree(p);
+                (void)hazeFree(ctx_, p);
         ptrs_.clear();
     }
 
+    hazeContext_t ctx_ = nullptr;
     std::vector<void *> ptrs_;
     std::vector<uint64_t> base_;
 };

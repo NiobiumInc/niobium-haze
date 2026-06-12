@@ -28,16 +28,22 @@ haze::DevAddr nth_slot_addr(size_t n) {
     return haze::DevAddr{haze::kHbmBase + (n * kSlotBytes)};
 }
 
-// The table and graph are process singletons; every test starts and
-// ends from a clean slate so ordering between cases never matters.
+// One file-local Context: these are unit tests of the context's value
+// table and tape members. Every test starts and ends from a clean slate
+// so ordering between cases never matters.
+haze::Context &tctx() {
+    static haze::Context ctx;
+    return ctx;
+}
+
 struct TapeFixture {
     TapeFixture() {
-        haze::bindings().set_slot_bytes(kSlotBytes);
-        haze::graph().reset();
+        tctx().values.set_slot_bytes(kSlotBytes);
+        tctx().tape.reset();
     }
     ~TapeFixture() {
-        haze::graph().reset();
-        haze::bindings().set_slot_bytes(0);
+        tctx().tape.reset();
+        tctx().values.set_slot_bytes(0);
     }
     TapeFixture(const TapeFixture &) = delete;
     TapeFixture &operator=(const TapeFixture &) = delete;
@@ -57,14 +63,14 @@ TEST_CASE("BindingTable: load/store/erase roundtrip", "[unit][tape]") {
     TapeFixture fixture;
     const haze::DevAddr addr = nth_slot_addr(0);
 
-    REQUIRE(haze::bindings().load(addr) == haze::kUnbound);
+    REQUIRE(tctx().values.load(addr) == haze::kUnbound);
 
     const haze::ValueId id = haze::new_value_id();
-    haze::bindings().store(addr, id);
-    REQUIRE(haze::bindings().load(addr) == id);
+    tctx().values.store(addr, id);
+    REQUIRE(tctx().values.load(addr) == id);
 
-    haze::bindings().erase(addr);
-    REQUIRE(haze::bindings().load(addr) == haze::kUnbound);
+    tctx().values.erase(addr);
+    REQUIRE(tctx().values.load(addr) == haze::kUnbound);
 }
 
 TEST_CASE("BindingTable: promote binds first touch and returns the resident id", "[unit][tape]") {
@@ -72,13 +78,13 @@ TEST_CASE("BindingTable: promote binds first touch and returns the resident id",
     const haze::DevAddr addr = nth_slot_addr(1);
 
     const haze::ValueId first = haze::new_value_id();
-    REQUIRE(haze::bindings().promote(addr, first) == first);
+    REQUIRE(tctx().values.promote(addr, first) == first);
 
     // A second promotion must NOT rebind: the resident id wins and the
     // caller adopts it (the record path drops its fresh id + snapshot).
     const haze::ValueId second = haze::new_value_id();
-    REQUIRE(haze::bindings().promote(addr, second) == first);
-    REQUIRE(haze::bindings().load(addr) == first);
+    REQUIRE(tctx().values.promote(addr, second) == first);
+    REQUIRE(tctx().values.load(addr) == first);
 }
 
 TEST_CASE("BindingTable: store overwrites an existing binding", "[unit][tape]") {
@@ -87,9 +93,9 @@ TEST_CASE("BindingTable: store overwrites an existing binding", "[unit][tape]") 
 
     const haze::ValueId first = haze::new_value_id();
     const haze::ValueId second = haze::new_value_id();
-    haze::bindings().store(addr, first);
-    haze::bindings().store(addr, second); // result rebind / H2D re-upload
-    REQUIRE(haze::bindings().load(addr) == second);
+    tctx().values.store(addr, first);
+    tctx().values.store(addr, second); // result rebind / H2D re-upload
+    REQUIRE(tctx().values.load(addr) == second);
 }
 
 TEST_CASE("BindingTable: distinct slots do not alias across chunk boundaries", "[unit][tape]") {
@@ -100,10 +106,10 @@ TEST_CASE("BindingTable: distinct slots do not alias across chunk boundaries", "
 
     const haze::ValueId a = haze::new_value_id();
     const haze::ValueId b = haze::new_value_id();
-    haze::bindings().store(last_of_first, a);
-    haze::bindings().store(first_of_second, b);
-    REQUIRE(haze::bindings().load(last_of_first) == a);
-    REQUIRE(haze::bindings().load(first_of_second) == b);
+    tctx().values.store(last_of_first, a);
+    tctx().values.store(first_of_second, b);
+    REQUIRE(tctx().values.load(last_of_first) == a);
+    REQUIRE(tctx().values.load(first_of_second) == b);
 }
 
 TEST_CASE("BindingTable: unset geometry and out-of-range addrs read unbound", "[unit][tape]") {
@@ -111,27 +117,27 @@ TEST_CASE("BindingTable: unset geometry and out-of-range addrs read unbound", "[
 
     // Below the HBM base (e.g. a host pointer cast by mistake).
     const haze::DevAddr below{haze::kHbmBase - kSlotBytes};
-    REQUIRE(haze::bindings().load(below) == haze::kUnbound);
-    haze::bindings().store(below, haze::new_value_id()); // must not crash
-    REQUIRE(haze::bindings().load(below) == haze::kUnbound);
+    REQUIRE(tctx().values.load(below) == haze::kUnbound);
+    tctx().values.store(below, haze::new_value_id()); // must not crash
+    REQUIRE(tctx().values.load(below) == haze::kUnbound);
 
     // Geometry unset: every lookup is unbound, writes are dropped.
-    haze::bindings().set_slot_bytes(0);
+    tctx().values.set_slot_bytes(0);
     const haze::DevAddr addr = nth_slot_addr(0);
-    haze::bindings().store(addr, haze::new_value_id());
-    REQUIRE(haze::bindings().load(addr) == haze::kUnbound);
+    tctx().values.store(addr, haze::new_value_id());
+    REQUIRE(tctx().values.load(addr) == haze::kUnbound);
 }
 
 TEST_CASE("BindingTable: clear drops every binding", "[unit][tape]") {
     TapeFixture fixture;
     const haze::DevAddr a = nth_slot_addr(0);
     const haze::DevAddr b = nth_slot_addr(5000); // second chunk
-    haze::bindings().store(a, haze::new_value_id());
-    haze::bindings().store(b, haze::new_value_id());
+    tctx().values.store(a, haze::new_value_id());
+    tctx().values.store(b, haze::new_value_id());
 
-    haze::bindings().clear();
-    REQUIRE(haze::bindings().load(a) == haze::kUnbound);
-    REQUIRE(haze::bindings().load(b) == haze::kUnbound);
+    tctx().values.clear();
+    REQUIRE(tctx().values.load(a) == haze::kUnbound);
+    REQUIRE(tctx().values.load(b) == haze::kUnbound);
 }
 
 TEST_CASE("Graph: seal returns nodes in append order and empties the tape", "[unit][tape]") {
@@ -146,24 +152,24 @@ TEST_CASE("Graph: seal returns nodes in append order and empties the tape", "[un
     second.addr = nth_slot_addr(1);
     second.entry = "test-second";
 
-    haze::graph().append(std::move(first));
-    haze::graph().append(std::move(second));
-    REQUIRE(haze::graph().size() == 2);
+    tctx().tape.append(std::move(first));
+    tctx().tape.append(std::move(second));
+    REQUIRE(tctx().tape.size() == 2);
 
-    const std::vector<haze::Node> tape = haze::graph().seal();
+    const std::vector<haze::Node> tape = tctx().tape.seal();
     REQUIRE(tape.size() == 2);
     REQUIRE(tape[0].kind == haze::Node::Kind::InputSnapshot);
     REQUIRE(tape[1].kind == haze::Node::Kind::TagOutput);
-    REQUIRE(haze::graph().size() == 0);
+    REQUIRE(tctx().tape.size() == 0);
 
     // seal() swaps the tape only; clearing the context's BindingTables
     // is the CALLER's job (finalize / reset pair them explicitly, since
     // the tape does not know its sibling tables).
-    haze::bindings().store(nth_slot_addr(0), haze::new_value_id());
-    (void)haze::graph().seal();
-    REQUIRE(haze::bindings().load(nth_slot_addr(0)) != haze::kUnbound);
-    haze::bindings().clear();
-    REQUIRE(haze::bindings().load(nth_slot_addr(0)) == haze::kUnbound);
+    tctx().values.store(nth_slot_addr(0), haze::new_value_id());
+    (void)tctx().tape.seal();
+    REQUIRE(tctx().values.load(nth_slot_addr(0)) != haze::kUnbound);
+    tctx().values.clear();
+    REQUIRE(tctx().values.load(nth_slot_addr(0)) == haze::kUnbound);
 }
 
 TEST_CASE("Graph: reset discards the tape without lowering", "[unit][tape]") {
@@ -173,18 +179,13 @@ TEST_CASE("Graph: reset discards the tape without lowering", "[unit][tape]") {
     node.kind = haze::Node::Kind::Invalidate;
     node.addr = nth_slot_addr(3);
     node.entry = "test-reset";
-    haze::graph().append(std::move(node));
-    REQUIRE(haze::graph().size() == 1);
+    tctx().tape.append(std::move(node));
+    REQUIRE(tctx().tape.size() == 1);
 
-    haze::graph().reset();
-    REQUIRE(haze::graph().size() == 0);
+    tctx().tape.reset();
+    REQUIRE(tctx().tape.size() == 0);
 }
 
-namespace {
-
-// Config is a process singleton too; bracket every freeze test with a
-// full reset so the C-ABI test cases (which reset via hazeDeviceReset)
-// never observe a frozen leftover.
 TEST_CASE("hazeContextCreate fixes the parameters at birth", "[tape][context]") {
     constexpr uint64_t kQ[] = {576460752303415297ULL, 576460752303439873ULL};
 
@@ -201,76 +202,51 @@ TEST_CASE("hazeContextCreate fixes the parameters at birth", "[tape][context]") 
     SECTION("creates a self-contained engine, params published immediately") {
         REQUIRE(hazeContextCreate(&ctx, 4096, kQ, 2) == HAZE_SUCCESS);
         REQUIRE(ctx != nullptr);
-        const haze::ConfigSnapshot *snap = ctx->config.freeze();
+        const haze::ConfigSnapshot *snap = ctx->config.params();
         REQUIRE(snap != nullptr);
         REQUIRE(snap->ring_dim == 4096);
         REQUIRE(snap->modulus(0) == kQ[0]);
         REQUIRE(snap->modulus(1) == kQ[1]);
         REQUIRE(snap->modulus(2) == 0);
-        // Immutable from birth: the legacy piecewise setters reject it.
-        REQUIRE_FALSE(haze::set_ring_dimension(*ctx, 8192).has_value());
         REQUIRE(hazeContextDestroy(ctx) == HAZE_SUCCESS);
     }
 }
 
-struct ConfigResetFixture {
-    ConfigResetFixture() { haze::config().reset(haze::bindings()); }
-    ~ConfigResetFixture() { haze::config().reset(haze::bindings()); }
-    ConfigResetFixture(const ConfigResetFixture &) = delete;
-    ConfigResetFixture &operator=(const ConfigResetFixture &) = delete;
-};
-
-} // namespace
-
-TEST_CASE("Config::freeze is a no-op before ring_dim is set", "[unit][tape]") {
-    ConfigResetFixture fixture;
-    REQUIRE(haze::config().freeze() == nullptr);
-    REQUIRE_FALSE(haze::config().frozen());
-    // The failed early freeze must not lock the user out of configuring.
-    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
-    REQUIRE(haze::config().set_modulus(0, 576460752303415297ULL).has_value());
-}
-
-TEST_CASE("Config::freeze publishes an immutable snapshot", "[unit][tape]") {
-    ConfigResetFixture fixture;
+TEST_CASE("Config::init_params publishes the snapshot immediately", "[unit][tape]") {
     constexpr uint64_t kQ0 = 576460752303415297ULL;
     constexpr uint64_t kQ1 = 576460752303439873ULL;
-    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
-    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
-    REQUIRE(haze::config().set_modulus(1, kQ1).has_value());
+    haze::Context ctx;
+    REQUIRE(ctx.config.params() == nullptr); // never-initialized context
+    const uint64_t moduli[] = {kQ0, kQ1};
+    REQUIRE(ctx.config.init_params(4096, moduli, 2, ctx.allocator, ctx.values, ctx.recorded_moduli)
+                .has_value());
 
-    const haze::ConfigSnapshot *snap = haze::config().freeze();
+    const haze::ConfigSnapshot *snap = ctx.config.params();
     REQUIRE(snap != nullptr);
-    REQUIRE(haze::config().frozen());
     REQUIRE(snap->ring_dim == 4096);
     REQUIRE(snap->modulus(0) == kQ0);
     REQUIRE(snap->modulus(1) == kQ1);
-    REQUIRE(snap->modulus(2) == 0);  // out of range reads as unset
-    REQUIRE(snap->modulus(-1) == 0); // negative index reads as unset
+    REQUIRE(snap->modulus(2) == 0);       // out of range reads as unset
+    REQUIRE(snap->modulus(-1) == 0);      // negative index reads as unset
+    REQUIRE(ctx.config.params() == snap); // stable for the context's lifetime
 
-    // Idempotent: same snapshot object on re-freeze.
-    REQUIRE(haze::config().freeze() == snap);
+    // Immutable from birth: re-initialization is rejected.
+    REQUIRE_FALSE(
+        ctx.config.init_params(8192, moduli, 2, ctx.allocator, ctx.values, ctx.recorded_moduli)
+            .has_value());
 }
 
-TEST_CASE("Config: post-freeze mutation gets the configure_device treatment", "[unit][tape]") {
-    ConfigResetFixture fixture;
+TEST_CASE("Config::init_params validates parameters loudly", "[unit][tape]") {
     constexpr uint64_t kQ0 = 576460752303415297ULL;
-    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
-    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
-    REQUIRE(haze::config().freeze() != nullptr);
-
-    // Identical re-sets keep succeeding (idempotent setters)...
-    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
-    REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
-    // ...changes are rejected.
-    REQUIRE_FALSE(haze::set_ring_dimension(haze::default_context(), 8192).has_value());
-    REQUIRE_FALSE(haze::config().set_modulus(0, kQ0 + 2).has_value());
-    REQUIRE_FALSE(haze::config().set_modulus(1, kQ0).has_value());
-
-    // reset() thaws everything.
-    haze::config().reset(haze::bindings());
-    REQUIRE_FALSE(haze::config().frozen());
-    REQUIRE(haze::set_ring_dimension(haze::default_context(), 8192).has_value());
+    const uint64_t zero_q[] = {kQ0, 0};
+    haze::Context ctx;
+    REQUIRE_FALSE(
+        ctx.config.init_params(4095, &kQ0, 1, ctx.allocator, ctx.values, ctx.recorded_moduli)
+            .has_value());
+    REQUIRE_FALSE(
+        ctx.config.init_params(4096, zero_q, 2, ctx.allocator, ctx.values, ctx.recorded_moduli)
+            .has_value());
+    REQUIRE(ctx.config.params() == nullptr); // nothing published on failure
 }
 
 // ---------------------------------------------------------------------------

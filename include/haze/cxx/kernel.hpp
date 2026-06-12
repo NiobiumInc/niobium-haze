@@ -226,6 +226,11 @@ class KeyBuilder {
 // need stable one-element residue/base arrays; reserve() up front keeps
 // every pointer valid (each parameter contributes at most one entry).
 struct CallBuffers {
+    // The context every traced parameter must come from, captured off
+    // the first one described; a mismatch poisons the call (the C ABI
+    // would otherwise record cross-context dangling values).
+    hazeContext_t ctx = nullptr;
+    bool ctx_conflict = false;
     std::vector<hazeKernelInput> inputs;
     std::vector<hazeKernelOutput> outputs;
     std::vector<const void *> srp_in_ptrs;
@@ -244,7 +249,15 @@ struct CallBuffers {
     }
 };
 
+inline void note_context(CallBuffers &bufs, hazeContext_t ctx) {
+    if (bufs.ctx == nullptr)
+        bufs.ctx = ctx;
+    else if (bufs.ctx != ctx)
+        bufs.ctx_conflict = true;
+}
+
 inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Srp &srp) {
+    note_context(bufs, srp.context());
     bufs.srp_in_ptrs.push_back(srp.addr());
     bufs.srp_mods.push_back(srp.mod().value);
     bufs.inputs.push_back({&bufs.srp_in_ptrs.back(), &bufs.srp_mods.back(), 1});
@@ -253,6 +266,7 @@ inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Srp &srp) {
 }
 
 inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Mrp &mrp) {
+    note_context(bufs, mrp.context());
     bufs.inputs.push_back({mrp.data(), mrp.base(), mrp.base_len()});
     key.word(mrp.base_len());
     for (std::size_t i = 0; i < mrp.base_len(); ++i)
@@ -260,6 +274,7 @@ inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Mrp &mrp) {
 }
 
 inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Srp &srp) {
+    note_context(bufs, srp.context());
     bufs.srp_out_ptrs.push_back(srp.addr());
     bufs.srp_mods.push_back(srp.mod().value);
     bufs.outputs.push_back({&bufs.srp_out_ptrs.back(), &bufs.srp_mods.back(), 1});
@@ -268,6 +283,7 @@ inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Srp &srp) {
 }
 
 inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Mrp &mrp) {
+    note_context(bufs, mrp.context());
     bufs.outputs.push_back({mrp.data(), mrp.base(), mrp.base_len()});
     key.word(mrp.base_len());
     for (std::size_t i = 0; i < mrp.base_len(); ++i)
@@ -296,10 +312,16 @@ template <class F> class Kernel {
         detail::CallBuffers bufs(traits::arity);
         describe(std::index_sequence_for<Actuals...>{}, key, bufs, actuals...);
 
+        // The kernel runs in the context its buffers came from; mixed
+        // contexts (or a kernel with no traced parameter at all) cannot
+        // be recorded meaningfully.
+        if (bufs.ctx == nullptr || bufs.ctx_conflict)
+            return Status{HAZE_ERROR_INVALID_VALUE};
+
         hazeKernelDisposition disposition{};
         if (const hazeError_t err =
-                hazeKernelBegin(name_, key.hash(), key.data(), key.size(), bufs.inputs.data(),
-                                bufs.inputs.size(), &disposition);
+                hazeKernelBegin(bufs.ctx, name_, key.hash(), key.data(), key.size(),
+                                bufs.inputs.data(), bufs.inputs.size(), &disposition);
             err != HAZE_SUCCESS)
             return Status{err};
 
@@ -307,11 +329,11 @@ template <class F> class Kernel {
             Status body_status =
                 invoke(std::index_sequence_for<Actuals...>{}, std::forward<Actuals>(actuals)...);
             if (!body_status.ok()) {
-                (void)hazeKernelAbort(); // nothing reaches the tape
+                (void)hazeKernelAbort(bufs.ctx); // nothing reaches the tape
                 return body_status;
             }
         }
-        return Status{hazeKernelEnd(bufs.outputs.data(), bufs.outputs.size())};
+        return Status{hazeKernelEnd(bufs.ctx, bufs.outputs.data(), bufs.outputs.size())};
     }
 
   private:

@@ -47,7 +47,7 @@ std::expected<void, HazeInternalError> binary_pp_op(Context &ctx, DevAddr dst, D
     const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "compute before hazeSetRingDimension");
+                              "compute on a context with no parameters");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
     const uint64_t q = cfg->modulus(mod_idx);
@@ -92,7 +92,7 @@ std::expected<void, HazeInternalError> binary_ps_op(Context &ctx, DevAddr dst, D
     const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "compute before hazeSetRingDimension");
+                              "compute on a context with no parameters");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
     const uint64_t q = cfg->modulus(mod_idx);
@@ -130,7 +130,7 @@ std::expected<void, HazeInternalError> unary_pq_op(Context &ctx, DevAddr dst, De
     const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "compute before hazeSetRingDimension");
+                              "compute on a context with no parameters");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
     const uint64_t q = cfg->modulus(mod_idx);

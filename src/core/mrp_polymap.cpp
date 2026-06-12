@@ -167,7 +167,7 @@ std::expected<void, HazeInternalError> copy_device_to_device_mrp(Context &ctx, v
     const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "hazeMemcpyMrp D2D before hazeSetRingDimension");
+                              "hazeMemcpyMrp D2D on a context with no parameters");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
     const uint64_t ring_dim = cfg->ring_dim;

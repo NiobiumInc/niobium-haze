@@ -20,9 +20,10 @@
 // the same oracles as ordinary mode. The cases in this file run without a
 // compiler install: they cover the mod_arith helpers, the config/API
 // resolution rules, the local-target rejection, and record-time trace /
-// replay-JSON / captured-input assertions via hazeWriteProgram().
+// replay-JSON / captured-input assertions via hazeWriteProgram(haze::test::ctx()).
 
 #include "core/config.hpp"
+#include "core/context.hpp"
 #include "integration_helpers.hpp"
 #include "mod_arith_ref.hpp"
 
@@ -139,15 +140,18 @@ class EnvGuard {
 // Record one scalar-multiply (and optionally a mod-down) into a uniquely
 // named program dir with the current data-format settings, then write
 // the project without replaying. Returns the program directory.
-std::filesystem::path record_program(const std::string &program_name, bool with_mod_down) {
-    REQUIRE(hazeSetProgramInfo(program_name.c_str(), "0.1", "data-format test") == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+std::filesystem::path record_program(const std::string &program_name, bool with_mod_down,
+                                     bool data_format) {
+    // recreate_ctx replaces the context, so the per-context toggles
+    // (target, data format) are applied HERE, after it exists.
+    haze::test::recreate_ctx(kRingDim, {kQ0, kQ1, kQ2});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget(haze::test::ctx(), "FUNC_SIM") == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramInfo(haze::test::ctx(), program_name.c_str(), "0.1",
+                               "data-format test") == HAZE_SUCCESS);
 
     std::vector<uint64_t> vals(kRingDim);
     for (uint64_t i = 0; i < kRingDim; ++i)
@@ -155,21 +159,24 @@ std::filesystem::path record_program(const std::string &program_name, bool with_
 
     void *src = nullptr;
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalar(dst, src, 7, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(haze::test::ctx(), dst, src, 7, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), dst) == HAZE_SUCCESS);
 
     if (with_mod_down) {
         void *s0 = nullptr;
         void *s1 = nullptr;
         void *d0 = nullptr;
-        REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(s0, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(s1, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &s0, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &s1, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &d0, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), s0, vals.data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), s1, vals.data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
         const uint64_t src_base[] = {kQ0, kQ1};
         const uint64_t rescale_base[] = {kQ1};
@@ -180,11 +187,11 @@ std::filesystem::path record_program(const std::string &program_name, bool with_
         p.src_base_len = 2;
         p.rescale_base = rescale_base;
         p.rescale_base_len = 1;
-        REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
+        REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), d0) == HAZE_SUCCESS);
     }
 
-    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram(haze::test::ctx()) == HAZE_SUCCESS);
     return std::filesystem::path{program_name};
 }
 
@@ -278,54 +285,55 @@ TEST_CASE("mod_arith: switchmodulus immediates (ordinary and montgomery)", "[uni
 
 TEST_CASE("data format config: setter beats env var beats default", "[unit][hwfmt]") {
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
+    const auto &cfg = [] -> const haze::Config & { return haze::test::ctx()->config; };
 
     // Default: both off.
-    REQUIRE_FALSE(haze::config().montgomery());
-    REQUIRE_FALSE(haze::config().bit_reversal());
+    REQUIRE_FALSE(cfg().montgomery());
+    REQUIRE_FALSE(cfg().bit_reversal());
 
     // Env enables independently.
     ::setenv("HAZE_MONTGOMERY", "1", 1); // NOLINT(misc-include-cleaner)
-    REQUIRE(haze::config().montgomery());
-    REQUIRE_FALSE(haze::config().bit_reversal());
+    REQUIRE(cfg().montgomery());
+    REQUIRE_FALSE(cfg().bit_reversal());
     ::setenv("HAZE_BIT_REVERSAL", "true", 1); // NOLINT(misc-include-cleaner)
-    REQUIRE(haze::config().bit_reversal());
+    REQUIRE(cfg().bit_reversal());
 
     // Explicit setter beats env.
-    REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
-    REQUIRE_FALSE(haze::config().montgomery());
-    REQUIRE(haze::config().bit_reversal()); // untouched
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 0) == HAZE_SUCCESS);
+    REQUIRE_FALSE(cfg().montgomery());
+    REQUIRE(cfg().bit_reversal()); // untouched
 
-    // Reset clears the explicit setter, so the env applies again.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(haze::config().montgomery());
+    // The setter is per-context state: a fresh context falls back to env.
+    haze::test::recreate_ctx(kRingDim, {kQ0});
+    REQUIRE(cfg().montgomery());
 
     // Both flags set independently via explicit setters.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
-    REQUIRE(haze::config().montgomery());
-    REQUIRE(haze::config().bit_reversal());
+    haze::test::recreate_ctx(kRingDim, {kQ0});
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), 1) == HAZE_SUCCESS);
+    REQUIRE(cfg().montgomery());
+    REQUIRE(cfg().bit_reversal());
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
 TEST_CASE("data format on local target is rejected at flush", "[unit][hwfmt]") {
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
     // make test-unit exports HAZE_TARGET=local; pin it programmatically so
     // the case also holds when run standalone.
-    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget(haze::test::ctx(), "local") == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), 1) == HAZE_SUCCESS);
 
-    REQUIRE(hazeFlush() == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_ERROR_NOT_SUPPORTED);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
 
     // Turning the format off restores normal local operation.
-    REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(0) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), 0) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
@@ -335,36 +343,37 @@ TEST_CASE("data format rejected at flush keeps the in-flight recording", "[integ
     // materialize — the op is not silently dropped. Pinned local so the
     // rejection fires regardless of the harness target.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {picked});
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget(haze::test::ctx(), "local") == HAZE_SUCCESS);
 
     std::vector<uint64_t> vals(kRingDim);
     for (uint64_t i = 0; i < kRingDim; ++i)
         vals[i] = (i * 3 + 1) % picked;
     void *src = nullptr;
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalar(dst, src, 3, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(haze::test::ctx(), dst, src, 3, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), dst) == HAZE_SUCCESS);
 
     // Enable the data format and flush: rejected on the local target.
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_ERROR_NOT_SUPPORTED);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 1) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), 1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_ERROR_NOT_SUPPORTED);
 
     // Correct the config; the same recorded op now materializes.
-    REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(0) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), 0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), 0) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         INFO("slot " << k);
         REQUIRE(out[k] == niobium::mod_arith::mulmod(vals[k], 3, picked));
@@ -377,11 +386,9 @@ TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers
           "[unit][hwfmt]") {
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
-    const auto dir = record_program("haze_hwfmt_on", /*with_mod_down=*/true);
+    const auto dir = record_program("haze_hwfmt_on", /*with_mod_down=*/true,
+                                    /*data_format=*/true);
 
     // Client traces are ordinary-form even with the data format on:
     // encoding (input data, immediates, switchmodulus substitution)
@@ -459,9 +466,9 @@ TEST_CASE("store_input_element keeps values ordinary under the data format", "[u
 TEST_CASE("record-time: modes off leaves trace and JSON in ordinary form", "[unit][hwfmt]") {
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
 
-    const auto dir = record_program("haze_hwfmt_off", /*with_mod_down=*/false);
+    const auto dir = record_program("haze_hwfmt_off", /*with_mod_down=*/false,
+                                    /*data_format=*/false);
 
     // The scalar immediate appears verbatim and its Montgomery encoding
     // does not — identical to the toggles-on case, since recordings are
@@ -497,19 +504,18 @@ bool transport_target_active() {
 // Record a fixed mixed computation (elementwise ops + mod-down) with the
 // current format settings under a unique program name, flush through the
 // transport, and return the D2H output vectors (sum, prod, scaled, down).
-std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
+std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down, bool data_format) {
     // Use the default shared "haze" program dir: the replay bridge plants
     // program_name "haze" at init and writes cryptocontext.dat there, so a
     // per-test rename would strand the crypto context the transport driver
-    // needs for probe serialization. hazeDeviceReset between cases keeps the
-    // shared dir clean (same pattern as the rest of the integration suite).
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    // needs for probe serialization. The fresh context per call keeps the
+    // shared dir clean; the data-format toggles are per-context, so they
+    // are applied HERE, after the context exists.
+    haze::test::recreate_ctx(kRingDim, {kQ0, kQ1, kQ2});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    REQUIRE(hazeSetMontgomery(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
+    REQUIRE(hazeSetBitReversal(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
 
     const std::vector<uint64_t> a = haze::test::make_residue(kQ0, 101, kRingDim);
     const std::vector<uint64_t> b = haze::test::make_residue(kQ0, 202, kRingDim);
@@ -523,14 +529,17 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
     void *scaled = nullptr;
     void *down = nullptr;
     for (void **p : {&pa, &pb, &p1, &sum, &prod, &scaled, &down})
-        REQUIRE(hazeMalloc(p, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(pa, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(pb, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(p1, r1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), p, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), pa, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), pb, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), p1, r1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
-    REQUIRE(hazeAdd(sum, pa, pb, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeMul(prod, pa, pb, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalar(scaled, pa, 7, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), sum, pa, pb, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMul(haze::test::ctx(), prod, pa, pb, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(haze::test::ctx(), scaled, pa, 7, 0, nullptr) == HAZE_SUCCESS);
 
     // Mod-down exercises the FBC gadget (and, under --niobium_hw, the
     // driver's switchmodulus-block substitution).
@@ -544,10 +553,11 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
         p.src_base_len = 2;
         p.rescale_base = rescale_base;
         p.rescale_base_len = 1;
-        REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
     } else {
         // Keep the output list shape: alias `down` to a plain copy.
-        REQUIRE(hazeMemcpy(down, pa, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), down, pa, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) ==
+                HAZE_SUCCESS);
     }
 
     // NOTE: basis-convert with overlapping primes (the copy_residue
@@ -557,13 +567,14 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down) {
     // produce input values" under make test-transport), so it is excluded
     // here until that path is fixed compiler-side.
     for (void *out : {sum, prod, scaled, down})
-        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), out) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<std::vector<uint64_t>> results;
     for (void *out : {sum, prod, scaled, down}) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), out, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), out, kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         results.push_back(std::move(got));
     }
     return results;
@@ -577,10 +588,8 @@ TEST_CASE("data-format transport: elementwise results byte-exact vs plain oracle
         SKIP("data format requires a transport target (run under make test-transport)");
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
-    const auto results = run_mixed_computation(/*with_mod_down=*/false);
+    const auto results = run_mixed_computation(/*with_mod_down=*/false, /*data_format=*/true);
 
     // Plain (ordinary-form) oracles — the replay engine decodes the
     // Montgomery/bit-reversed outputs back, so the data format must be
@@ -608,12 +617,10 @@ TEST_CASE("data-format transport: A/B byte-exact vs ordinary mode", "[integratio
     // internal representation, so the full output vectors (including the
     // FBC/mod-down path) must compare byte-for-byte equal.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto ordinary = run_mixed_computation(/*with_mod_down=*/true);
+    const auto ordinary = run_mixed_computation(/*with_mod_down=*/true, /*data_format=*/false);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
-    const auto encoded = run_mixed_computation(/*with_mod_down=*/true);
+    const auto encoded = run_mixed_computation(/*with_mod_down=*/true, /*data_format=*/true);
 
     REQUIRE(ordinary.size() == encoded.size());
     for (size_t i = 0; i < ordinary.size(); ++i) {
@@ -646,12 +653,12 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
     // modulus-carrying path; the bare SRP hazeAutomorph is modulus-less, so
     // its output template keeps the bridge's synthetic prime and cannot be
     // probe-filled under the data format).
-    auto run_ntt = [&]() {
-        REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    auto run_ntt = [&](bool data_format) {
+        haze::test::recreate_ctx(kRingDim, {kQ0});
         uint64_t picked = 0;
         REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-        REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+        REQUIRE(hazeSetMontgomery(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
+        REQUIRE(hazeSetBitReversal(haze::test::ctx(), data_format ? 1 : 0) == HAZE_SUCCESS);
 
         const std::vector<uint64_t> a = haze::test::make_residue(kQ0, 404, kRingDim);
         void *src = nullptr;
@@ -659,39 +666,39 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
         void *fwd = nullptr;
         void *rot = nullptr;
         for (void **p : {&src, &coeff, &fwd, &rot})
-            REQUIRE(hazeMalloc(p, kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+            REQUIRE(hazeMalloc(haze::test::ctx(), p, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                HAZE_SUCCESS);
         // In-contract NTT use: program inputs are always evaluation-form on
         // the executor; coefficient-form data exists only BETWEEN
         // executor ops. Exercise the INTT -> NTT round trip so the
         // coefficient intermediate never crosses the program boundary.
-        REQUIRE(hazeINTT(coeff, src, 0, nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeNTT(fwd, coeff, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeINTT(haze::test::ctx(), coeff, src, 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeNTT(haze::test::ctx(), fwd, coeff, 0, nullptr) == HAZE_SUCCESS);
         const uint64_t base[] = {kQ0};
         void *rot_dst[] = {rot};
         const void *rot_src[] = {src};
-        REQUIRE(hazeAutomorphMrp(rot_dst, rot_src, 5, base, 1, nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeTagOutput(fwd) == HAZE_SUCCESS);
-        REQUIRE(hazeTagOutput(rot) == HAZE_SUCCESS);
-        REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeAutomorphMrp(haze::test::ctx(), rot_dst, rot_src, 5, base, 1, nullptr) ==
+                HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), fwd) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), rot) == HAZE_SUCCESS);
+        REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
         std::vector<void *> outs = {fwd, rot};
         std::vector<std::vector<uint64_t>> results;
         for (void *out : outs) {
             std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-            REQUIRE(hazeMemcpy(got.data(), out, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                    HAZE_SUCCESS);
+            REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), out, kBytes,
+                               HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
             results.push_back(std::move(got));
         }
         return results;
     };
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto ordinary = run_ntt();
+    const auto ordinary = run_ntt(/*data_format=*/false);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
-    const auto encoded = run_ntt();
+    const auto encoded = run_ntt(/*data_format=*/true);
     for (size_t i = 0; i < ordinary.size(); ++i) {
         INFO("output " << i);
         REQUIRE(ordinary[i] == encoded[i]);
@@ -706,15 +713,12 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
 // confirming the trace modulus — not the scaffold prime — drives replay.
 TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
           "[integration][modulus]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ1});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
     // The only prerequisite: the scaffold prime sits below the trace prime, so
     // the wrap window [picked, kQ1) used below is non-empty (and picked != kQ1).
     REQUIRE(picked < kQ1);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     // a = kQ1 - 7, b = 11  =>  a + b = kQ1 + 4.
     //   mod kQ1    = 4              (trace authoritative)
@@ -730,17 +734,20 @@ TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
     void *pa = nullptr;
     void *pb = nullptr;
     void *sum = nullptr;
-    REQUIRE(hazeMalloc(&pa, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&pb, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&sum, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(pa, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(pb, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(sum, pa, pb, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(sum) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &pa, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &pb, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &sum, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), pa, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), pb, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), sum, pa, pb, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), sum) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), sum, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), sum, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         INFO("slot " << k << " picked=" << picked);
         REQUIRE(out[k] == expect_kq1);
@@ -755,13 +762,10 @@ TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
 // this pins it explicitly.
 TEST_CASE("input residues above the scaffold prime survive .bin synthesis",
           "[integration][modulus]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
     REQUIRE(picked < kQ0); // the wrap window [picked, kQ0) below relies on it
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     // Seed the wrap window: values that exceed the scaffold prime but are
     // valid mod the trace prime. A scalar-mul by 1 is the identity, so each
@@ -775,15 +779,17 @@ TEST_CASE("input residues above the scaffold prime survive .bin synthesis",
 
     void *src = nullptr;
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMulScalar(dst, src, 1, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(haze::test::ctx(), dst, src, 1, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         INFO("slot " << k << " in=" << vals[k] << " picked=" << picked << " kQ0=" << kQ0);
         REQUIRE(out[k] == vals[k]);

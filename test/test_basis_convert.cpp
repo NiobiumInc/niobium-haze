@@ -10,6 +10,8 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
+#include "integration_helpers.hpp"
+
 #include <algorithm>
 #include <array>
 #include <catch2/catch_message.hpp>
@@ -20,7 +22,6 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <math/math-hal.h>
-#include <utility>
 #include <vector>
 
 static constexpr uint64_t kRingDim = 4096;
@@ -43,40 +44,38 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 // and the multi-residue tests need to keep their explicit kQ0 / kQ1 / kQ2
 // values rather than be clobbered by the bridge's single picked prime.
 static void configure_three_moduli() {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0, kQ1, kQ2});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
 // Parameter validation.
 
 TEST_CASE("hazeBasisConvert rejects null params", "[unit]") {
     configure_three_moduli();
-    REQUIRE(hazeBasisConvert(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), nullptr, nullptr, nullptr, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeModDown rejects null params", "[unit]") {
     configure_three_moduli();
-    REQUIRE(hazeModDown(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(haze::test::ctx(), nullptr, nullptr, nullptr, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeModUp rejects null params", "[unit]") {
     configure_three_moduli();
-    REQUIRE(hazeModUp(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModUp(haze::test::ctx(), nullptr, nullptr, nullptr, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
     configure_three_moduli();
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0};
     const uint64_t dst_base[] = {kQ1};
@@ -88,10 +87,11 @@ TEST_CASE("hazeBasisConvert rejects empty source base", "[unit]") {
     p.src_base_len = 0; // invalid
     p.dst_base = dst_base;
     p.dst_base_len = 1;
-    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]") {
@@ -100,7 +100,7 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]"
     // the next flush would replay a dirty recording and crash.
     configure_three_moduli();
     void *d = nullptr;
-    REQUIRE(hazeMalloc(&d, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d, kBytes) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t rescale_base[] = {kQ2}; // not a member of src_base
@@ -112,31 +112,35 @@ TEST_CASE("hazeModDown rejects foreign modulus in rescale_base", "[integration]"
     p.src_base_len = 2;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
-    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     // Subsequent compute + D2H must still work (recording state is clean).
     void *a = nullptr;
     void *b = nullptr;
     void *c = nullptr;
-    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &c, kBytes) == HAZE_SUCCESS);
     std::vector<uint64_t> va(kRingDim, 1);
     std::vector<uint64_t> vb(kRingDim, 2);
-    REQUIRE(hazeMemcpy(a, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(b, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), a, va.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), b, vb.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), c) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     REQUIRE(out[0] == 3);
 
-    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), c) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len", "[unit]") {
@@ -146,7 +150,7 @@ TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len", "[unit]") {
     // backend call.
     configure_three_moduli();
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0};
     const uint64_t rescale_base_eq[] = {kQ0};
@@ -159,14 +163,16 @@ TEST_CASE("hazeModDown rejects rescale_base_len >= src_base_len", "[unit]") {
     p.src_base_len = 1;
     p.rescale_base = rescale_base_eq;
     p.rescale_base_len = 1; // equal to src_base_len — would yield empty dst
-    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
 
     p.rescale_base = rescale_base_gt;
     p.rescale_base_len = 2; // strictly greater than src_base_len
-    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
@@ -175,7 +181,7 @@ TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
     configure_three_moduli();
 
     void *src = nullptr;
-    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src, kBytes) == HAZE_SUCCESS);
     const void *src_polys[] = {src};
 
     const uint64_t src_base[] = {kQ0};
@@ -184,7 +190,7 @@ TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
     const uint64_t p_base[] = {kQ2};
 
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
     void *dst_polys[] = {dst};
 
     hazeModUpParams p{};
@@ -196,11 +202,12 @@ TEST_CASE("hazeModUp rejects mismatched digit_bases_total_len", "[unit]") {
     p.digit_count = 1;
     p.p_base = p_base;
     p.p_base_len = 1;
-    REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeModUp(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(src) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), src) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), dst) == HAZE_SUCCESS);
 }
 
 // End-to-end: basis-convert and retrieve results.
@@ -229,18 +236,20 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[inte
     void *d0 = nullptr;
     void *d1 = nullptr;
     void *d2 = nullptr;
-    REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d2, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d2, kBytes) == HAZE_SUCCESS);
 
     constexpr uint64_t kInput0 = 17;
     constexpr uint64_t kInput1 = 42;
     std::vector<uint64_t> poly_a(kRingDim, kInput0);
     std::vector<uint64_t> poly_b(kRingDim, kInput1);
-    REQUIRE(hazeMemcpy(s0, poly_a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, poly_b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s0, poly_a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s1, poly_b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t dst_base[] = {kQ0, kQ1, kQ2};
@@ -252,19 +261,22 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[inte
     p.src_base_len = 2;
     p.dst_base = dst_base;
     p.dst_base_len = 3;
-    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d2) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d1) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d2) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out0(kRingDim, 0);
     std::vector<uint64_t> out1(kRingDim, 0);
     std::vector<uint64_t> out2(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(out2.data(), d2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out2.data(), d2, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
 
     // Same-modulus copies: dst residue == src residue, every coefficient.
     for (uint64_t i = 0; i < kRingDim; ++i) {
@@ -282,14 +294,16 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") 
     void *s1 = nullptr;
     void *d0 = nullptr;
     void *d1 = nullptr;
-    REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d1, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t dst_base[] = {kQ0, kQ2};
@@ -301,16 +315,18 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") 
     p.src_base_len = 2;
     p.dst_base = dst_base;
     p.dst_base_len = 2;
-    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
-    REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
 
     // Catches both (a) a backend that writes garbage and (b) the
     // multi-D2H staleness regression where the second D2H would read
@@ -330,10 +346,11 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integr
     configure_three_moduli();
 
     void *p0 = nullptr;
-    REQUIRE(hazeMalloc(&p0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &p0, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> input(kRingDim, 42);
-    REQUIRE(hazeMemcpy(p0, input.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), p0, input.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     const uint64_t base[] = {kQ0};
     const void *src_polys[] = {p0};
@@ -344,15 +361,16 @@ TEST_CASE("hazeBasisConvert: src/dst aliasing is safe (in-place 1->1)", "[integr
     p.src_base_len = 1;
     p.dst_base = base;
     p.dst_base_len = 1;
-    REQUIRE(hazeBasisConvert(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    REQUIRE(hazeTagOutput(p0) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), p0) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), p0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     REQUIRE(out[0] == 42);
 
-    REQUIRE(hazeFree(p0) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), p0) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
@@ -371,16 +389,19 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     void *s2 = nullptr;
     void *d0 = nullptr;
     void *d1 = nullptr;
-    REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&s2, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s2, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d1, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s2, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s2, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1, kQ2};
     const uint64_t rescale_base[] = {kQ2};
@@ -392,27 +413,29 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     p.src_base_len = 3;
     p.rescale_base = rescale_base;
     p.rescale_base_len = 1;
-    REQUIRE(hazeModDown(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModDown(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
-    REQUIRE(hazeTagOutput(d0) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d1) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d0) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d1) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // Initialise to non-zero so a no-op D2H would surface as a failure.
     std::vector<uint64_t> out0(kRingDim, 0xDEADBEEF);
     std::vector<uint64_t> out1(kRingDim, 0xDEADBEEF);
-    REQUIRE(hazeMemcpy(out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out0.data(), d0, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), out1.data(), d1, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(out0[i] == 0);
         REQUIRE(out1[i] == 0);
     }
 
-    REQUIRE(hazeFree(s0) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(s1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(s2) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d0) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), s0) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), s1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), s2) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d0) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d1) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[integration]") {
@@ -427,17 +450,19 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
 
     void *s0 = nullptr;
     void *s1 = nullptr;
-    REQUIRE(hazeMalloc(&s0, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&s1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &s1, kBytes) == HAZE_SUCCESS);
 
     void *dst_storage[6] = {nullptr};
     for (auto &slot : dst_storage) {
-        REQUIRE(hazeMalloc(&slot, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &slot, kBytes) == HAZE_SUCCESS);
     }
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     const uint64_t src_base[] = {kQ0, kQ1};
     const uint64_t digit_bases_flat[] = {kQ0, kQ1};
@@ -456,25 +481,26 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
     p.digit_count = 2;
     p.p_base = p_base;
     p.p_base_len = 1;
-    REQUIRE(hazeModUp(dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModUp(haze::test::ctx(), dst_polys, src_polys, &p, nullptr) == HAZE_SUCCESS);
 
     for (auto *slot : dst_storage)
-        REQUIRE(hazeTagOutput(slot) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), slot) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // D2H every output and verify exact zero. Initialise the host
     // buffer to a sentinel so a skipped D2H is detectable.
     for (auto &slot : dst_storage) {
         std::vector<uint64_t> out(kRingDim, 0xDEADBEEF);
-        REQUIRE(hazeMemcpy(out.data(), slot, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), out.data(), slot, kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t i = 0; i < kRingDim; ++i) {
             REQUIRE(out[i] == 0);
         }
     }
-    REQUIRE(hazeFree(s0) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(s1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), s0) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), s1) == HAZE_SUCCESS);
     for (auto *slot : dst_storage) {
-        REQUIRE(hazeFree(slot) == HAZE_SUCCESS);
+        REQUIRE(hazeFree(haze::test::ctx(), slot) == HAZE_SUCCESS);
     }
 }
 
@@ -541,14 +567,10 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 // modulus_table carries the real kBigBase[i] values from the recorded
 // sr_* ops.
 void configure_sixteen_moduli() {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim,
+                             {std::begin(kBigBase), std::begin(kBigBase) + (kSrcLimbs + kPLimbs)});
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
-    for (int i = 0; std::cmp_less(i, kSrcLimbs + kPLimbs); ++i) {
-        REQUIRE(hazeSetCiphertextModulus(i, kBigBase[static_cast<size_t>(i)]) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
 // Deterministic non-trivial residues. Avoids zeros (which trigger
@@ -746,9 +768,9 @@ std::vector<std::vector<std::vector<uint64_t>>> dig_decomp(
 std::vector<void *> allocate_and_h2d(const std::vector<std::vector<uint64_t>> &residues) {
     std::vector<void *> ptrs(residues.size(), nullptr);
     for (size_t i = 0; i < residues.size(); ++i) {
-        REQUIRE(hazeMalloc(&ptrs[i], kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &ptrs[i], kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), ptrs[i], residues[i].data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     }
     return ptrs;
 }
@@ -757,14 +779,14 @@ std::vector<void *> allocate_and_h2d(const std::vector<std::vector<uint64_t>> &r
 std::vector<void *> allocate_dst(size_t count) {
     std::vector<void *> ptrs(count, nullptr);
     for (size_t i = 0; i < count; ++i) {
-        REQUIRE(hazeMalloc(&ptrs[i], kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(haze::test::ctx(), &ptrs[i], kBytes) == HAZE_SUCCESS);
     }
     return ptrs;
 }
 
 void free_all(const std::vector<void *> &ptrs) {
     for (void *p : ptrs) {
-        REQUIRE(hazeFree(p) == HAZE_SUCCESS);
+        REQUIRE(hazeFree(haze::test::ctx(), p) == HAZE_SUCCESS);
     }
 }
 
@@ -778,7 +800,8 @@ void check_against_reference(const std::vector<void *> &dst,
     REQUIRE(dst.size() == dst_base.size());
     for (size_t j = 0; j < dst.size(); ++j) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), dst[j], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst[j], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t s = 0; s < kRingDim; ++s) {
             INFO("dst index " << j << " (mod " << dst_base[j] << ") slot " << s);
             REQUIRE(got[s] == expected[j][s]);
@@ -812,12 +835,12 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[int
     params.src_base_len = src_base.size();
     params.dst_base = dst_base.data();
     params.dst_base_len = dst_base.size();
-    REQUIRE(hazeBasisConvert(dst_ptrs.data(), src_const_ptrs.data(), &params, nullptr) ==
-            HAZE_SUCCESS);
+    REQUIRE(hazeBasisConvert(haze::test::ctx(), dst_ptrs.data(), src_const_ptrs.data(), &params,
+                             nullptr) == HAZE_SUCCESS);
 
     for (void *p : dst_ptrs)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     auto expected = ref::fast_base_convert(residues, src_base, dst_base);
     check_against_reference(dst_ptrs, expected, dst_base);
@@ -850,7 +873,8 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
     params.src_base_len = src_base.size();
     params.rescale_base = rescale_base.data();
     params.rescale_base_len = rescale_base.size();
-    REQUIRE(hazeModDown(dst_ptrs.data(), src_const_ptrs.data(), &params, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModDown(haze::test::ctx(), dst_ptrs.data(), src_const_ptrs.data(), &params,
+                        nullptr) == HAZE_SUCCESS);
 
     auto expected = ref::rescale_fbc(residues, src_base, rescale_base);
     // Output basis = src_base \ rescale_base = the first 10 src primes,
@@ -858,8 +882,8 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
     const std::vector<uint64_t> dst_base(src_base.begin(),
                                          src_base.begin() + static_cast<long>(dst_count));
     for (void *p : dst_ptrs)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     check_against_reference(dst_ptrs, expected, dst_base);
 
     free_all(src_ptrs);
@@ -910,7 +934,8 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
     params.digit_count = kDigitCount;
     params.p_base = p_base.data();
     params.p_base_len = p_base.size();
-    REQUIRE(hazeModUp(dst_ptrs.data(), src_const_ptrs.data(), &params, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeModUp(haze::test::ctx(), dst_ptrs.data(), src_const_ptrs.data(), &params,
+                      nullptr) == HAZE_SUCCESS);
 
     auto expected = ref::dig_decomp(residues, src_base, digit_bases, p_base);
     REQUIRE(expected.size() == kDigitCount);
@@ -922,8 +947,8 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
     REQUIRE(per_digit_dst_base.size() == per_digit);
 
     for (void *p : dst_ptrs)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     for (size_t d = 0; d < kDigitCount; ++d) {
         std::vector<void *> digit_dst(dst_ptrs.begin() + static_cast<long>(d * per_digit),

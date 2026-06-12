@@ -54,7 +54,7 @@ constexpr auto ct_double =
 class BorrowedMrp {
   public:
     BorrowedMrp(const haze::test::ops::Allocs &chain, std::span<const uint64_t> base)
-        : mrp_(Mrp::adopt({chain.data(), chain.size()}, base)) {}
+        : mrp_(Mrp::adopt(chain.context(), {chain.data(), chain.size()}, base)) {}
     ~BorrowedMrp() { (void)mrp_.release(); }
     BorrowedMrp(const BorrowedMrp &) = delete;
     BorrowedMrp &operator=(const BorrowedMrp &) = delete;
@@ -109,7 +109,7 @@ TEST_CASE("typed kernels: encrypt -> kernel add/double -> decrypt round-trip", "
 
     const std::size_t poly_bytes = ctx.ring_dim * sizeof(uint64_t);
     auto fresh = [&] {
-        auto mrp = Mrp::allocate(base, poly_bytes);
+        auto mrp = Mrp::allocate(ctx.haze, base, poly_bytes);
         REQUIRE(mrp.ok());
         return std::move(mrp).value();
     };
@@ -121,7 +121,7 @@ TEST_CASE("typed kernels: encrypt -> kernel add/double -> decrypt round-trip", "
     // Kernels record; Out<> buffers are tagged automatically.
     REQUIRE(ct_add(*a0, *a1, *b0, *b1, sum0, sum1).ok());
     REQUIRE(ct_double(sum0, sum1, dbl0, dbl1).ok());
-    REQUIRE(haze::cxx::flush().ok());
+    REQUIRE(haze::cxx::flush(ctx.haze).ok());
 
     // Decrypt both kernel results through OpenFHE shells and compare
     // against the homomorphic reference.

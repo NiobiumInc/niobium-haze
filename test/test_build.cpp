@@ -10,6 +10,8 @@
 // available the Product; (iii) reverse engineer, disassemble, decompile,
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
+#include "integration_helpers.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <haze/haze.h>       // IWYU pragma: keep
@@ -74,12 +76,11 @@ TEST_CASE("multi-device stubs return HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
 }
 
 TEST_CASE("successful stubs do not pollute error state", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Ensure a sequence of successful calls leaves hazeGetLastError as HAZE_SUCCESS.
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    haze::test::recreate_ctx(4096, {});
     void *ptr = nullptr;
-    REQUIRE(hazeMalloc(&ptr, 32768) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(ptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &ptr, 32768) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), ptr) == HAZE_SUCCESS);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
 

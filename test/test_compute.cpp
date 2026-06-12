@@ -58,37 +58,40 @@ struct SrpDriver {
     // counterparts read `base` and stay instance methods.
     static void add(const std::vector<void *> &dst, const std::vector<const void *> &s1,
                     const std::vector<const void *> &s2) {
-        REQUIRE(hazeAdd(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAdd(haze::test::ctx(), dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void sub(const std::vector<void *> &dst, const std::vector<const void *> &s1,
                     const std::vector<const void *> &s2) {
-        REQUIRE(hazeSub(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeSub(haze::test::ctx(), dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
                     const std::vector<const void *> &s2) {
-        REQUIRE(hazeMul(dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMul(haze::test::ctx(), dst[0], s1[0], s2[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void add_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                            const std::vector<uint64_t> &scalars) {
-        REQUIRE(hazeAddScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAddScalar(haze::test::ctx(), dst[0], src[0], scalars[0], 0, nullptr) ==
+                HAZE_SUCCESS);
     }
     static void sub_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                            const std::vector<uint64_t> &scalars) {
-        REQUIRE(hazeSubScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeSubScalar(haze::test::ctx(), dst[0], src[0], scalars[0], 0, nullptr) ==
+                HAZE_SUCCESS);
     }
     static void mul_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                            const std::vector<uint64_t> &scalars) {
-        REQUIRE(hazeMulScalar(dst[0], src[0], scalars[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulScalar(haze::test::ctx(), dst[0], src[0], scalars[0], 0, nullptr) ==
+                HAZE_SUCCESS);
     }
     static void ntt(const std::vector<void *> &dst, const std::vector<const void *> &src) {
-        REQUIRE(hazeNTT(dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeNTT(haze::test::ctx(), dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void intt(const std::vector<void *> &dst, const std::vector<const void *> &src) {
-        REQUIRE(hazeINTT(dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeINTT(haze::test::ctx(), dst[0], src[0], 0, nullptr) == HAZE_SUCCESS);
     }
     static void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
                           uint64_t k) {
-        REQUIRE(hazeAutomorph(dst[0], src[0], k, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAutomorph(haze::test::ctx(), dst[0], src[0], k, nullptr) == HAZE_SUCCESS);
     }
 };
 
@@ -105,66 +108,61 @@ struct MrpDriver {
     std::vector<uint64_t> base;
 
     uint64_t setup() {
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+        haze::test::recreate_ctx(kRingDim, {kQ0, kQ1, kQ2});
         uint64_t picked = 0;
         REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
         REQUIRE(picked != 0);
-        REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-        REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
         base = {kQ0, kQ1, kQ2};
         return kQ0;
     }
 
     void add(const std::vector<void *> &dst, const std::vector<const void *> &s1,
              const std::vector<const void *> &s2) const {
-        REQUIRE(hazeAddMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeAddMrp(haze::test::ctx(), dst.data(), s1.data(), s2.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
     }
     void sub(const std::vector<void *> &dst, const std::vector<const void *> &s1,
              const std::vector<const void *> &s2) const {
-        REQUIRE(hazeSubMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeSubMrp(haze::test::ctx(), dst.data(), s1.data(), s2.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
     }
     void mul(const std::vector<void *> &dst, const std::vector<const void *> &s1,
              const std::vector<const void *> &s2) const {
-        REQUIRE(hazeMulMrp(dst.data(), s1.data(), s2.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMulMrp(haze::test::ctx(), dst.data(), s1.data(), s2.data(), base.data(),
+                           base.size(), nullptr) == HAZE_SUCCESS);
     }
     void add_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                     const std::vector<uint64_t> &scalars) const {
-        REQUIRE(hazeAddScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
-                                 nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeAddScalarMrp(haze::test::ctx(), dst.data(), src.data(), scalars.data(),
+                                 base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     }
     void sub_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                     const std::vector<uint64_t> &scalars) const {
-        REQUIRE(hazeSubScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
-                                 nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeSubScalarMrp(haze::test::ctx(), dst.data(), src.data(), scalars.data(),
+                                 base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     }
     void mul_scalar(const std::vector<void *> &dst, const std::vector<const void *> &src,
                     const std::vector<uint64_t> &scalars) const {
-        REQUIRE(hazeMulScalarMrp(dst.data(), src.data(), scalars.data(), base.data(), base.size(),
-                                 nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeMulScalarMrp(haze::test::ctx(), dst.data(), src.data(), scalars.data(),
+                                 base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     }
     void ntt(const std::vector<void *> &dst, const std::vector<const void *> &src) const {
-        REQUIRE(hazeNTTMrp(dst.data(), src.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeNTTMrp(haze::test::ctx(), dst.data(), src.data(), base.data(), base.size(),
+                           nullptr) == HAZE_SUCCESS);
     }
     void intt(const std::vector<void *> &dst, const std::vector<const void *> &src) const {
-        REQUIRE(hazeINTTMrp(dst.data(), src.data(), base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeINTTMrp(haze::test::ctx(), dst.data(), src.data(), base.data(), base.size(),
+                            nullptr) == HAZE_SUCCESS);
     }
     void automorph(const std::vector<void *> &dst, const std::vector<const void *> &src,
                    uint64_t k) const {
-        REQUIRE(hazeAutomorphMrp(dst.data(), src.data(), k, base.data(), base.size(), nullptr) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeAutomorphMrp(haze::test::ctx(), dst.data(), src.data(), k, base.data(),
+                                 base.size(), nullptr) == HAZE_SUCCESS);
     }
     void rot_automorph_coeff(const std::vector<void *> &dst, const std::vector<const void *> &src,
                              uint64_t offset) const {
-        REQUIRE(hazeRotAutomorphCoeffMrp(dst.data(), src.data(), offset, base.data(), base.size(),
-                                         nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeRotAutomorphCoeffMrp(haze::test::ctx(), dst.data(), src.data(), offset,
+                                         base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     }
 };
 
@@ -195,11 +193,12 @@ void check_against_per_residue(const Driver &d, const std::vector<void *> &dst,
     REQUIRE(dst.size() == Driver::kNumResidues);
     REQUIRE(expected.size() == Driver::kNumResidues);
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i)
-        REQUIRE(hazeTagOutput(dst[i]) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), dst[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO(Driver::kShape << " residue " << i << " (mod " << d.base[i] << ") slot " << k);
             REQUIRE(got[k] == expected[i][k]);
@@ -676,13 +675,13 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
     d.intt(d_c, haze::test::to_const(d_c_eval));
 
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i)
-        REQUIRE(hazeTagOutput(d_c[i]) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(haze::test::ctx(), d_c[i]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<std::vector<uint64_t>> c(Driver::kNumResidues, std::vector<uint64_t>(kRingDim, 0));
     for (std::size_t i = 0; i < Driver::kNumResidues; ++i) {
-        REQUIRE(hazeMemcpy(c[i].data(), d_c[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), c[i].data(), d_c[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     }
 
     haze::test::free_all_residues(d_a);
@@ -1073,10 +1072,10 @@ TEMPLATE_TEST_CASE("multiple materializations: two independent D2H cycles", "[in
         for (uint64_t k = 0; k < kRingDim; ++k) {
             exp2[i][k] = add_mod(a2[i][k], b2[i][k], d.base[i]);
         }
-        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(db[i], b2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), da[i], a2[i].data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), db[i], b2[i].data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     }
     d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, d_dst2, exp2);
@@ -1115,8 +1114,8 @@ TEMPLATE_TEST_CASE("H2D after compute invalidates the polymap binding", "[integr
         for (uint64_t k = 0; k < kRingDim; ++k) {
             exp2[i][k] = add_mod(a2[i][k], b[i][k], d.base[i]);
         }
-        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), da[i], a2[i].data(), kBytes,
+                           HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     }
     d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, d_dst2, exp2);
@@ -1147,7 +1146,7 @@ TEMPLATE_TEST_CASE("memset after compute invalidates the polymap binding", "[int
 
     // memset zeros each residue's shadow; second add must read all zeros.
     for (std::size_t i = 0; i < TestType::kNumResidues; ++i) {
-        REQUIRE(hazeMemset(da[i], 0, kBytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemset(haze::test::ctx(), da[i], 0, kBytes) == HAZE_SUCCESS);
     }
     d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
 
@@ -1173,37 +1172,40 @@ TEST_CASE("hazeDeviceSynchronize does not flush; hazeFlush does", "[integration]
     void *d_a = nullptr;
     void *d_b = nullptr;
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> a(kRingDim, 3);
     std::vector<uint64_t> b(kRingDim, 3);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
 
     std::vector<uint64_t> result(kRingDim, 0);
     // Compute then D2H with no flush — the rawest mistake under the explicit model.
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-            HAZE_ERROR_NOT_FLUSHED);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), result.data(), d_dst, kBytes,
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_ERROR_NOT_FLUSHED);
 
     // Synchronize is a no-op (does not flush), so the tagged read still errors.
-    REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceSynchronize() == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-            HAZE_ERROR_NOT_FLUSHED);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), result.data(), d_dst, kBytes,
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_ERROR_NOT_FLUSHED);
 
     // hazeFlush executes the recording; only now does the read succeed.
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(result.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), result.data(), d_dst, kBytes,
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     for (uint64_t i = 0; i < kRingDim; ++i) {
         REQUIRE(result[i] == 6);
     }
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("D2H of an untagged result is pruned and returns NOT_FLUSHED", "[integration]") {
@@ -1213,30 +1215,33 @@ TEST_CASE("D2H of an untagged result is pruned and returns NOT_FLUSHED", "[integ
     void *d_b = nullptr;
     void *d_keep = nullptr;
     void *d_drop = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_keep, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_drop, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_keep, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_drop, kBytes) == HAZE_SUCCESS);
     std::vector<uint64_t> a(kRingDim, 3);
     std::vector<uint64_t> b(kRingDim, 4);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_keep, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_drop, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_keep, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_drop, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
 
     // Only d_keep is declared an output; d_drop is an intermediate that is
     // never materialized, so its D2H fails while d_keep's succeeds.
-    REQUIRE(hazeTagOutput(d_keep) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d_keep) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
     std::vector<uint64_t> got(kRingDim, 0);
-    REQUIRE(hazeMemcpy(got.data(), d_keep, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(got.data(), d_drop, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+    REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), d_keep, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), d_drop, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
             HAZE_ERROR_NOT_FLUSHED);
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_keep) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_drop) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_keep) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_drop) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integration]") {
@@ -1246,28 +1251,31 @@ TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integ
     fs::remove_all(dir, ec);
 
     // Program dir must be set before the first compute (forwarded at init).
+    // The picked-prime chain needs the bridge built first; recreate_ctx
+    // resets the bridge, so it is re-initialized after.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetProgramDirectory(dir.string().c_str()) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {picked});
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeSetProgramDirectory(haze::test::ctx(), dir.string().c_str()) == HAZE_SUCCESS);
 
     void *d_a = nullptr;
     void *d_b = nullptr;
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
     std::vector<uint64_t> a(kRingDim, 3);
     std::vector<uint64_t> b(kRingDim, 4);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_dst, d_a, d_b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 
-    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram(haze::test::ctx()) == HAZE_SUCCESS);
 
     // The .fhetch trace landed in the project dir, and nothing was replayed.
     REQUIRE(fs::exists(dir));
@@ -1280,23 +1288,20 @@ TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integ
 
     // Write-without-replay leaves the output unmaterialized; a D2H errors.
     std::vector<uint64_t> got(kRingDim, 0);
-    REQUIRE(hazeMemcpy(got.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+    REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
             HAZE_ERROR_NOT_FLUSHED);
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
     fs::remove_all(dir, ec);
 }
 
 TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
 
     // src pointers that were never hazeMemcpy'd (no shadow data). The
     // ints-to-pointers are deliberate: the test asserts the allocator
@@ -1306,85 +1311,82 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeAdd(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_UNKNOWN_ADDRESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_dst, fake1, fake2, 0, nullptr) ==
+            HAZE_ERROR_UNKNOWN_ADDRESS);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     void *d_a = nullptr;
     void *d_b = nullptr;
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> a(kRingDim, 1);
     std::vector<uint64_t> b(kRingDim, 2);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeAdd(d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAdd(haze::test::ctx(), d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
 
     // NOLINTBEGIN(performance-no-int-to-ptr)
     void *fake1 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x8000000ULL);
     void *fake2 = reinterpret_cast<void *>(uintptr_t{0x4000000000ULL} + 0x9000000ULL);
     // NOLINTEND(performance-no-int-to-ptr)
-    REQUIRE(hazeMul(d_dst, fake1, fake2, 0, nullptr) == HAZE_ERROR_UNKNOWN_ADDRESS);
+    REQUIRE(hazeMul(haze::test::ctx(), d_dst, fake1, fake2, 0, nullptr) ==
+            HAZE_ERROR_UNKNOWN_ADDRESS);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     void *d_a = nullptr;
     void *d_b = nullptr;
     void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &d_dst, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> a(kRingDim, 1);
     std::vector<uint64_t> b(kRingDim, 2);
-    REQUIRE(hazeMemcpy(d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_a, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), d_b, b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
-    REQUIRE(hazeMul(d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeMul(haze::test::ctx(), d_dst, d_a, d_b, -1, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeMul(d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeMul(haze::test::ctx(), d_dst, d_a, d_b, 63, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
-    REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), d_dst) == HAZE_SUCCESS);
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,57 +1395,52 @@ TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("hazeAddMrp rejects null arrays / zero base length", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
     const void *src_polys[] = {nullptr};
 
-    REQUIRE(hazeAddMrp(nullptr, src_polys, src_polys, base, 1, nullptr) ==
+    REQUIRE(hazeAddMrp(haze::test::ctx(), nullptr, src_polys, src_polys, base, 1, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAddMrp(dst_polys, nullptr, src_polys, base, 1, nullptr) ==
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst_polys, nullptr, src_polys, base, 1, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAddMrp(dst_polys, src_polys, nullptr, base, 1, nullptr) ==
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst_polys, src_polys, nullptr, base, 1, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAddMrp(dst_polys, src_polys, src_polys, nullptr, 1, nullptr) ==
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst_polys, src_polys, src_polys, nullptr, 1, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAddMrp(dst_polys, src_polys, src_polys, base, 0, nullptr) ==
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst_polys, src_polys, src_polys, base, 0, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeAddScalarMrp rejects null scalars array", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
     const void *src_polys[] = {nullptr};
 
-    REQUIRE(hazeAddScalarMrp(dst_polys, src_polys, /*scalars=*/nullptr, base, 1, nullptr) ==
-            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAddScalarMrp(haze::test::ctx(), dst_polys, src_polys, /*scalars=*/nullptr, base, 1,
+                             nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeNTTMrp rejects null arrays / zero base length", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
     const void *src_polys[] = {nullptr};
 
-    REQUIRE(hazeNTTMrp(nullptr, src_polys, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeNTTMrp(dst_polys, nullptr, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeNTTMrp(dst_polys, src_polys, nullptr, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeNTTMrp(dst_polys, src_polys, base, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(haze::test::ctx(), nullptr, src_polys, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(haze::test::ctx(), dst_polys, nullptr, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(haze::test::ctx(), dst_polys, src_polys, nullptr, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeNTTMrp(haze::test::ctx(), dst_polys, src_polys, base, 0, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
@@ -1451,20 +1448,19 @@ TEST_CASE("hazeAutomorphMrp rejects null arrays / zero base length", "[unit]") {
     // Distinct shape from hazeNTTMrp (carries a uint64_t index argument),
     // so the validation code lives in its own shim block — covered here
     // to ensure the same null-pointer guarantees apply.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(kRingDim, {kQ0});
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
     const void *src_polys[] = {nullptr};
 
-    REQUIRE(hazeAutomorphMrp(nullptr, src_polys, 5, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAutomorphMrp(dst_polys, nullptr, 5, base, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAutomorphMrp(dst_polys, src_polys, 5, nullptr, 1, nullptr) ==
+    REQUIRE(hazeAutomorphMrp(haze::test::ctx(), nullptr, src_polys, 5, base, 1, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeAutomorphMrp(dst_polys, src_polys, 5, base, 0, nullptr) ==
+    REQUIRE(hazeAutomorphMrp(haze::test::ctx(), dst_polys, nullptr, 5, base, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAutomorphMrp(haze::test::ctx(), dst_polys, src_polys, 5, nullptr, 1, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeAutomorphMrp(haze::test::ctx(), dst_polys, src_polys, 5, base, 0, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }

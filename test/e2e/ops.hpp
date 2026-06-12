@@ -15,6 +15,7 @@
 #include <haze/haze_types.h>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <openfhe.h>
 #include <optional>
 #include <utility>
@@ -22,12 +23,12 @@
 
 namespace haze::test::ops {
 
-// RAII move-only vector of haze polynomial allocations.
+// RAII move-only vector of haze polynomial allocations from one context.
 class Allocs {
   public:
     Allocs() = default;
-    Allocs(std::size_t count, std::size_t bytes);
-    explicit Allocs(const std::vector<std::vector<uint64_t>> &residues);
+    Allocs(hazeContext_t ctx, std::size_t count, std::size_t bytes);
+    Allocs(hazeContext_t ctx, const std::vector<std::vector<uint64_t>> &residues);
 
     ~Allocs();
     Allocs(Allocs &&other) noexcept;
@@ -35,6 +36,7 @@ class Allocs {
     Allocs(const Allocs &) = delete;
     Allocs &operator=(const Allocs &) = delete;
 
+    hazeContext_t context() const noexcept { return ctx_; }
     void *const *data() const noexcept { return ptrs_.data(); }
     void **data() noexcept { return ptrs_.data(); }
     std::size_t size() const noexcept { return ptrs_.size(); }
@@ -45,6 +47,7 @@ class Allocs {
 
   private:
     void free_all() noexcept;
+    hazeContext_t ctx_ = nullptr;
     std::vector<void *> ptrs_;
 };
 
@@ -85,6 +88,20 @@ struct RotationKeyEntry {
 };
 
 struct OpCtx {
+    OpCtx() = default;
+    OpCtx(OpCtx &&other) noexcept = default;
+    OpCtx &operator=(OpCtx &&other) noexcept = default;
+    OpCtx(const OpCtx &) = delete;
+    OpCtx &operator=(const OpCtx &) = delete;
+
+    // Owns the haze context for this test program; `haze` is what every
+    // ops call passes to the C ABI.
+    struct CtxDeleter {
+        void operator()(haze_context_s *c) const noexcept { (void)hazeContextDestroy(c); }
+    };
+    std::unique_ptr<haze_context_s, CtxDeleter> haze_owner;
+    hazeContext_t haze = nullptr;
+
     lbcrypto::CryptoContext<lbcrypto::DCRTPoly> cc;
     lbcrypto::KeyPair<lbcrypto::DCRTPoly> keys;
     HybridKeyswitchLimbs relin_key;

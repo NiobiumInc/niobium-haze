@@ -35,15 +35,18 @@ void record_add_chain(uint64_t q, uint64_t seed, std::size_t n, void **out, bool
     void *d_a = nullptr;
     void *d_b = nullptr;
     void *d_dst = nullptr;
-    if (hazeMalloc(&d_a, bytes) != HAZE_SUCCESS || hazeMalloc(&d_b, bytes) != HAZE_SUCCESS ||
-        hazeMalloc(&d_dst, bytes) != HAZE_SUCCESS)
+    if (hazeMalloc(haze::test::ctx(), &d_a, bytes) != HAZE_SUCCESS ||
+        hazeMalloc(haze::test::ctx(), &d_b, bytes) != HAZE_SUCCESS ||
+        hazeMalloc(haze::test::ctx(), &d_dst, bytes) != HAZE_SUCCESS)
         return;
-    if (hazeMemcpy(d_a, a.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) != HAZE_SUCCESS ||
-        hazeMemcpy(d_b, b.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) != HAZE_SUCCESS)
+    if (hazeMemcpy(haze::test::ctx(), d_a, a.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) !=
+            HAZE_SUCCESS ||
+        hazeMemcpy(haze::test::ctx(), d_b, b.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) !=
+            HAZE_SUCCESS)
         return;
-    if (hazeAdd(d_dst, d_a, d_b, 0, nullptr) != HAZE_SUCCESS)
+    if (hazeAdd(haze::test::ctx(), d_dst, d_a, d_b, 0, nullptr) != HAZE_SUCCESS)
         return;
-    if (hazeTagOutput(d_dst) != HAZE_SUCCESS)
+    if (hazeTagOutput(haze::test::ctx(), d_dst) != HAZE_SUCCESS)
         return;
     *out = d_dst;
     *ok = true;
@@ -67,7 +70,7 @@ TEST_CASE("two threads record on disjoint buffers; one flush materializes both",
     REQUIRE(ok_a);
     REQUIRE(ok_b);
 
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // Each thread's chain must be internally consistent regardless of
     // how the two threads' nodes interleaved on the tape.
@@ -75,8 +78,8 @@ TEST_CASE("two threads record on disjoint buffers; one flush materializes both",
         const std::vector<uint64_t> a = haze::test::make_residue(q, seed, kN);
         const std::vector<uint64_t> b = haze::test::make_residue(q, seed + 1, kN);
         std::vector<uint64_t> got(kN);
-        REQUIRE(hazeMemcpy(got.data(), dst, kN * sizeof(uint64_t), HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst, kN * sizeof(uint64_t),
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (std::size_t i = 0; i < kN; ++i) {
             const uint64_t expected = (a[i] + b[i]) % q;
             if (got[i] != expected) {

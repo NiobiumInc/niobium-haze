@@ -116,9 +116,7 @@ class BindingTable {
 };
 
 // Default-context accessors (TEMPORARY bridge; defined in context.cpp).
-BindingTable &bindings() noexcept;
 // addr -> recorded modulus (0 = unknown / sentinel-only address).
-BindingTable &recorded_moduli() noexcept;
 
 // Lowering context handed to thunks at flush time; defined in
 // core/lower.hpp. Single-threaded by construction.
@@ -171,10 +169,10 @@ struct Node {
     const char *entry{""};
 };
 
-// The append-only tape. One process-default instance: the C ABI has no
-// context parameter. append() is the only record-path lock in haze (a
-// short push under an internal mutex — no fhetch work, no allocation of
-// polynomial payloads inside the critical section).
+// The append-only tape (one per context). append() is the only
+// record-path lock in haze (a short push under an internal mutex — no
+// fhetch work, no allocation of polynomial payloads inside the
+// critical section).
 class Graph {
   public:
     Graph() = default; // constructed as a haze_context_s member
@@ -209,7 +207,5 @@ class Graph {
     std::vector<Node> nodes_ HAZE_GUARDED_BY(mutex_);
     std::vector<Node> *frame_sink_ HAZE_GUARDED_BY(mutex_) = nullptr;
 };
-
-Graph &graph() noexcept; // TEMPORARY default-context bridge (context.cpp)
 
 } // namespace haze
