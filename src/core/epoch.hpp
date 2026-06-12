@@ -29,9 +29,8 @@
 
 namespace haze {
 
-// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE):
-// the executor lowers ADDI imm=0 at modulus-table index 0 as a register copy.
-// Used as the "modulus unknown" marker for the addr->modulus tracking below.
+// fhetch's copy sentinel (TraceWriter COPY_MODULUS_VALUE); doubles as the
+// "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 
 // Singleton tracking the polymap, pending outputs, and recording flag for
@@ -88,9 +87,7 @@ class EpochState {
         HAZE_REQUIRES(mutex_);
 
     // Real modulus last recorded for `addr` by a modulus-carrying op, or
-    // kCopyModulus if none is known (raw input, or a result whose op had no
-    // modulus). Lets the modulus-less SRP copy/automorph paths recover the
-    // source's modulus instead of falling back to the bridge's scaffold prime.
+    // kCopyModulus if none (raw input, or a result whose op had no modulus).
     uint64_t recorded_modulus_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
     // Declare `addr` an output (idempotent); it must name a value bound in
@@ -172,10 +169,8 @@ class EpochState {
     // pending_outputs_ is the addr-keyed subset that names the outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
-    // addr -> real modulus recorded by the last modulus-carrying op that wrote
-    // it; consulted by copy_result_locked / the SRP automorph to recover a
-    // source modulus. Kept in lockstep with poly_map_ writes; cleared per
-    // epoch and dropped on invalidate.
+    // addr -> real modulus from the last modulus-carrying op that wrote it.
+    // Kept in lockstep with poly_map_; cleared per epoch, dropped on invalidate.
     std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);
     // MRP-shaped output groupings, keyed by leading-dst-derived name.
     // Registration is latest-write-wins — identical re-registration is a

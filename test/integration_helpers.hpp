@@ -17,25 +17,14 @@
 
 namespace haze::test {
 
-// MODULUS CONTRACT (single source of truth):
-// The .fhetch trace's modulus table is authoritative for replay. The values
-// passed to hazeSetCiphertextModulus ARE the trace moduli; both replay paths
-// reconstruct under them — the in-process simulator rebuilds each NativePoly's
-// params from the trace modulus (libnbfhetch auto_facade), and the transport
-// bridge re-installs the trace moduli onto input .bin towers and output
-// templates (install_trace_*_moduli). hazeReplayBridgeInitCryptoContext only
-// builds a scaffold cryptocontext.dat whose OpenFHE-generated prime is
-// overwritten at reconstruct time, so it is NOT consulted for results — tests
-// use the intended prime directly and compute oracles against the same value.
-// Verified by "trace modulus is authoritative ..." in test_hardware_format.cpp
-// (sets the trace modulus to a prime distinct from desired and from the
-// scaffold prime; result tracks the trace).
-//
-// Modulus-less SRP ops (opaque hazeMemcpy(D2D), bare hazeAutomorph) emit the
-// COPY_MODULUS sentinel, but haze recovers the source's recorded modulus and
-// binds it (epoch.cpp copy_result_locked / unary_pi_op), so they are
-// trace-authoritative too. Only a copy of a never-modulus-bound address (raw
-// opaque H2D buffer) has no modulus to recover.
+// MODULUS CONTRACT (single source of truth): the values passed to
+// hazeSetCiphertextModulus ARE the .fhetch trace moduli, and both replay paths
+// reconstruct under them; hazeReplayBridgeInitCryptoContext's scaffold prime is
+// overwritten at reconstruct and never consulted for results. So tests set the
+// slot to the intended prime and oracle against it (verified by "trace modulus
+// is authoritative ..." in test_hardware_format.cpp). Modulus-less SRP ops are
+// trace-authoritative too — haze recovers and binds the source modulus — except
+// a copy of a never-modulus-bound (raw H2D) address, which has none.
 
 // Combined integration setup: reset, ring dim, bridge CC init, set the
 // ciphertext modulus, configure device. Returns the modulus it set so callers

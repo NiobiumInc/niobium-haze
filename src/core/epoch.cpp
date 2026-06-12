@@ -39,10 +39,6 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-// The modulus-independent copy sentinel (kCopyModulus, in epoch.hpp): the
-// simulator reads it as "no reduction", so sr_addps(x, 0, kCopyModulus) is a
-// pure copy.
-
 EpochState &EpochState::instance() noexcept {
     static EpochState inst;
     return inst;
@@ -132,10 +128,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // Track the residue's real modulus so a later modulus-less copy/automorph
-    // of this address can recover it. A result whose op had no modulus
-    // (kCopyModulus) drops any stale entry rather than keeping the previous
-    // occupant's value.
+    // A no-modulus (kCopyModulus) result drops any stale entry so a later
+    // copy/automorph can't recover a previous occupant's modulus here.
     if (modulus != kCopyModulus)
         addr_modulus_.insert_or_assign(addr, modulus);
     else
@@ -177,12 +171,9 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
 
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
                                                                       uint64_t modulus) noexcept {
-    // The op always carries the COPY sentinel (the executor lowers ADDI imm=0
-    // at modulus-table index 0 as a register copy). The residue's real modulus
-    // rides as address->modulus metadata so the output can be probe-serialized:
-    // the caller supplies it (MRP D2D passes base[i]), else it's recovered from
-    // the source's recorded modulus (a compute-produced SRP value carries one).
-    // Only a never-modulus-bound source (raw opaque H2D buffer) stays sentinel.
+    // The op carries the COPY sentinel (the executor lowers ADDI imm=0 at
+    // modulus-table index 0 as a register copy); the real modulus rides as
+    // metadata. Recover it from the source when the caller passed none.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
