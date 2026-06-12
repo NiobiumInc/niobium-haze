@@ -65,7 +65,7 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
         DevAddr a = to_dev_addr(dst_polys[i]);
-        epoch().store_compute_result_locked(a, mrp[base[i]]);
+        epoch().store_compute_result_locked(a, mrp[base[i]], base[i]);
         addrs.push_back(a);
     }
     if (len > 1) {

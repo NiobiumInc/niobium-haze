@@ -44,7 +44,7 @@ std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, D
     auto p2 = epoch().lookup_or_create_locked(src2);
     if (!p2)
         return std::unexpected(p2.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q));
+    epoch().store_compute_result_locked(dst, OpFn(*p1, *p2, q), q);
     return {};
 }
 
@@ -59,8 +59,8 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return std::unexpected(p.error());
-    epoch().store_compute_result_locked(dst,
-                                        OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q));
+    epoch().store_compute_result_locked(dst, OpFn(*p, niobium::fhetch::Scalar::from_int(scalar), q),
+                                        q);
     return {};
 }
 
@@ -74,11 +74,15 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return std::unexpected(p.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p, q));
+    epoch().store_compute_result_locked(dst, OpFn(*p, q), q);
     return {};
 }
 
-// Polynomial-index. Used by hazeAutomorph.
+// Polynomial-index. Used by hazeAutomorph. The eval-form automorph is a pure
+// slot permutation (value-independent of the modulus), so the op carries the
+// COPY sentinel; recover the source's recorded modulus and bind it as
+// metadata on source + result so a tagged SRP automorph is probe-serializable
+// on transport (matching the MRP automorph, which binds base[i]).
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
                                                    uint64_t index) noexcept {
@@ -86,7 +90,13 @@ std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return std::unexpected(p.error());
-    epoch().store_compute_result_locked(dst, OpFn(*p, index));
+    const uint64_t q = epoch().recorded_modulus_locked(src);
+    auto result = OpFn(*p, index);
+    if (q != kCopyModulus) {
+        niobium::fhetch::bind_modulus(*p, q);
+        niobium::fhetch::bind_modulus(result, q);
+    }
+    epoch().store_compute_result_locked(dst, std::move(result), q);
     return {};
 }
 

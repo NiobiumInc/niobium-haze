@@ -17,63 +17,58 @@
 
 namespace haze::test {
 
-// MODULUS CONTRACT:
-// For ops that carry a real modulus, the .fhetch trace's modulus table is
-// authoritative: both replay paths reconstruct under it — the in-process
-// simulator rebuilds each NativePoly's params from the trace modulus
-// (libnbfhetch auto_facade), and the transport bridge re-installs the trace
-// moduli onto input .bin towers and output templates (install_trace_*_moduli).
-// Verified by "trace modulus is authoritative ..." in test_hardware_format.cpp,
-// which sets the trace modulus to a prime distinct from the one the bridge's
-// scaffold cryptocontext.dat is built around and confirms the result tracks the
-// trace.
+// MODULUS CONTRACT (single source of truth):
+// The .fhetch trace's modulus table is authoritative for replay. The values
+// passed to hazeSetCiphertextModulus ARE the trace moduli; both replay paths
+// reconstruct under them — the in-process simulator rebuilds each NativePoly's
+// params from the trace modulus (libnbfhetch auto_facade), and the transport
+// bridge re-installs the trace moduli onto input .bin towers and output
+// templates (install_trace_*_moduli). hazeReplayBridgeInitCryptoContext only
+// builds a scaffold cryptocontext.dat whose OpenFHE-generated prime is
+// overwritten at reconstruct time, so it is NOT consulted for results — tests
+// use the intended prime directly and compute oracles against the same value.
+// Verified by "trace modulus is authoritative ..." in test_hardware_format.cpp
+// (sets the trace modulus to a prime distinct from desired and from the
+// scaffold prime; result tracks the trace).
 //
-// EXCEPTION — modulus-less SRP ops: an opaque SRP hazeMemcpy(D2D) and a bare
-// SRP hazeAutomorph emit the COPY_MODULUS sentinel with no real modulus to
-// bind, so their OUTPUT template falls back to the bridge's scaffold prime
-// (the one hazeReplayBridgeInitCryptoContext "picks"). For those the trace is
-// NOT authoritative, so this setup aligns slot 0 to the scaffold prime and
-// returns it: tests then generate inputs and oracles against the same value
-// and the modulus-less outputs stay consistent. (Tests that only use
-// modulus-carrying ops would work with any prime; the MRP variants of copy /
-// automorph bind base[i] and are trace-authoritative.)
+// Modulus-less SRP ops (opaque hazeMemcpy(D2D), bare hazeAutomorph) emit the
+// COPY_MODULUS sentinel, but haze recovers the source's recorded modulus and
+// binds it (epoch.cpp copy_result_locked / unary_pi_op), so they are
+// trace-authoritative too. Only a copy of a never-modulus-bound address (raw
+// opaque H2D buffer) has no modulus to recover.
 
-// Combined integration setup: reset, ring dim, bridge CC init, align slot to
-// the bridge's scaffold prime (see contract above), configure device. Returns
-// that prime so callers stay in lockstep with the .ct round-trip.
+// Combined integration setup: reset, ring dim, bridge CC init, set the
+// ciphertext modulus, configure device. Returns the modulus it set so callers
+// generate inputs and oracles against the same (authoritative) value.
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
-                                                 uint64_t desired_modulus = 576460752303415297ULL,
+                                                 uint64_t modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus, &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
-    REQUIRE(hazeSetCiphertextModulus(mod_idx, picked) == HAZE_SUCCESS);
+    uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(mod_idx, modulus) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
-    return picked;
+    return modulus;
 }
 
 // Three-prime variant for MRP cases: all three slots set before the single
-// hazeConfigureDevice. Slot 0 is the bridge's scaffold prime (see the
-// modulus-less exception in the contract above); slots 1 and 2 are the suite's
-// NTT-friendly companion primes. Returns the configured base, index-aligned
-// with the modulus slots.
+// hazeConfigureDevice, each to its intended (trace-authoritative) prime: slot
+// 0 the requested modulus, slots 1 and 2 the suite's NTT-friendly companion
+// primes. Returns the configured base, index-aligned with the modulus slots.
 inline std::vector<uint64_t>
-setup_integration_mrp3_config(uint64_t ring_dim = 4096,
-                              uint64_t desired_modulus = 576460752303415297ULL) {
+setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 576460752303415297ULL) {
     constexpr uint64_t kQ1 = 576460752303439873ULL;
     constexpr uint64_t kQ2 = 576460752303702017ULL;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, desired_modulus, &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
+    uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, modulus) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
     REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
-    return {picked, kQ1, kQ2};
+    return {modulus, kQ1, kQ2};
 }
 
 // a + b mod q for a, b in [0, q): one conditional subtract, no overflow for

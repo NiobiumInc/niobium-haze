@@ -39,9 +39,9 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE)
-// lives as copy_result_locked's default argument in epoch.hpp: the simulator
-// reads it as "no reduction", so sr_addps(x, 0, sentinel) is a pure copy.
+// The modulus-independent copy sentinel (kCopyModulus, in epoch.hpp): the
+// simulator reads it as "no reduction", so sr_addps(x, 0, kCopyModulus) is a
+// pure copy.
 
 EpochState &EpochState::instance() noexcept {
     static EpochState inst;
@@ -94,6 +94,7 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     // unconditional double-erase is simpler than tagging addrs by owner.
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
+    addr_modulus_.erase(addr);
     // A recycled allocation leading a new group gets a fresh name rather
     // than colliding with a possibly-pending group from its previous life.
     mrp_in_names_.erase(addr);
@@ -128,9 +129,22 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     return poly;
 }
 
-void EpochState::store_compute_result_locked(DevAddr addr,
-                                             niobium::fhetch::Polynomial poly) noexcept {
+void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
+                                             uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
+    // Track the residue's real modulus so a later modulus-less copy/automorph
+    // of this address can recover it. A result whose op had no modulus
+    // (kCopyModulus) drops any stale entry rather than keeping the previous
+    // occupant's value.
+    if (modulus != kCopyModulus)
+        addr_modulus_.insert_or_assign(addr, modulus);
+    else
+        addr_modulus_.erase(addr);
+}
+
+uint64_t EpochState::recorded_modulus_locked(DevAddr addr) const noexcept {
+    auto it = addr_modulus_.find(addr);
+    return it == addr_modulus_.end() ? kCopyModulus : it->second;
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr addr) {
@@ -164,21 +178,24 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
                                                                       uint64_t modulus) noexcept {
     // The op always carries the COPY sentinel (the executor lowers ADDI imm=0
-    // at modulus-table index 0 as a register copy). When the caller
-    // knows the residue's real modulus (MRP D2D passes base[i]), bind it as
-    // address->modulus metadata so the output can be probe-serialized.
+    // at modulus-table index 0 as a register copy). The residue's real modulus
+    // rides as address->modulus metadata so the output can be probe-serialized:
+    // the caller supplies it (MRP D2D passes base[i]), else it's recovered from
+    // the source's recorded modulus (a compute-produced SRP value carries one).
+    // Only a never-modulus-bound source (raw opaque H2D buffer) stays sentinel.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
-    constexpr uint64_t kSentinel = 0xFFFFFFFFFFFFFFFFULL;
-    auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kSentinel);
-    if (modulus != kSentinel) {
+    if (modulus == kCopyModulus)
+        modulus = recorded_modulus_locked(src);
+    auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kCopyModulus);
+    if (modulus != kCopyModulus) {
         // Bind the source too: one only ever touched by copies would
         // otherwise stay sentinel-bound and load under the synthetic prime.
         fhetch::bind_modulus(*src_poly, modulus);
         fhetch::bind_modulus(copy, modulus);
     }
-    store_compute_result_locked(dst, std::move(copy));
+    store_compute_result_locked(dst, std::move(copy), modulus);
     return {};
 }
 
@@ -449,6 +466,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
 void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
+    addr_modulus_.clear();
     known_mrp_groups_.clear();
     pending_mrp_groups_.clear();
     addr_to_mrp_groups_.clear();

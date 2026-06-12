@@ -180,16 +180,17 @@ TEST_CASE("hazeMemcpy(D2D) promotes an H2D'd source through the IR copy", "[inte
     // which promotes the shadow bytes into a tagged fhetch input, then
     // emits the copy IR. Round-trip bytes must match the original H2D.
     //
-    // Transport limitation: the SRP D2D of an opaque buffer has no modulus to
-    // bind the copy to, so its output carries the COPY sentinel, which the
-    // transport replay's trace-modulus contract rejects at probe
-    // serialization ("SetValues(): Parameter mismatch"). Use hazeMemcpyMrp
-    // with a base (even base_len=1) when the residue's modulus is known —
-    // that path replays on FUNC_SIM.
+    // Transport limitation: this source is H2D'd raw and never touched by a
+    // modulus-carrying op, so haze has no recorded modulus to bind to the copy
+    // (a compute-produced source WOULD be recovered — see copy_result_locked).
+    // The copy output keeps the COPY sentinel, which the transport replay's
+    // trace-modulus contract rejects at probe serialization ("SetValues():
+    // Parameter mismatch"). Use hazeMemcpyMrp with a base (even base_len=1)
+    // when the residue's modulus is known — that path replays on FUNC_SIM.
     if (const char *target = std::getenv("HAZE_TARGET");
         target != nullptr && target[0] != '\0' && std::string_view{target} != "local")
-        SKIP("sentinel-modulus SRP D2D copy is not replayable on transport targets; "
-             "use hazeMemcpyMrp with a base when the modulus is known");
+        SKIP("D2D copy of a never-modulus-bound source (raw H2D, no compute) has no "
+             "modulus to recover; not replayable on transport — use hazeMemcpyMrp with a base");
     const uint64_t q = haze::test::setup_integration_compute_config();
     (void)q;
 

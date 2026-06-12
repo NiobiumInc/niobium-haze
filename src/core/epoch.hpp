@@ -29,6 +29,11 @@
 
 namespace haze {
 
+// fhetch's modulus-independent copy sentinel (TraceWriter COPY_MODULUS_VALUE):
+// the executor lowers ADDI imm=0 at modulus-table index 0 as a register copy.
+// Used as the "modulus unknown" marker for the addr->modulus tracking below.
+inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
+
 // Singleton tracking the polymap, pending outputs, and recording flag for
 // the active epoch; replay_and_populate() drains it at flush time. Public
 // methods take mutex_; _locked variants require it held via EpochSession
@@ -74,9 +79,19 @@ class EpochState {
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Bind `addr` to `poly`. Output-hood is declared explicitly via
-    // tag_output_locked, not inferred from being computed.
-    void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly) noexcept
+    // tag_output_locked, not inferred from being computed. `modulus` records
+    // the residue's real modulus (kCopyModulus = "unknown") so a later
+    // pass-through copy / eval-form automorph of this address can recover and
+    // bind it; see recorded_modulus_locked.
+    void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
+                                     uint64_t modulus = kCopyModulus) noexcept
         HAZE_REQUIRES(mutex_);
+
+    // Real modulus last recorded for `addr` by a modulus-carrying op, or
+    // kCopyModulus if none is known (raw input, or a result whose op had no
+    // modulus). Lets the modulus-less SRP copy/automorph paths recover the
+    // source's modulus instead of falling back to the bridge's scaffold prime.
+    uint64_t recorded_modulus_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
     // Declare `addr` an output (idempotent); it must name a value bound in
     // poly_map_ or it is a caller error. Tagging any residue of a known MRP
@@ -84,11 +99,13 @@ class EpochState {
     std::expected<void, HazeInternalError> tag_output_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Record a pass-through copy dst <- src. Pass the residue's real modulus
-    // when known (MRP D2D has base[i]) so the output can be probe-serialized
-    // on transport; the sentinel default covers the SRP D2D path (opaque
-    // buffer, no modulus known) on the local simulator.
+    // when the caller knows it (MRP D2D has base[i]); otherwise the modulus is
+    // recovered from the source's recorded_modulus_locked, so a copy of a
+    // compute-produced (or otherwise modulus-bound) SRP value is still
+    // probe-serializable on transport. Only a copy of a never-modulus-bound
+    // address (raw opaque H2D buffer) stays sentinel-only.
     std::expected<void, HazeInternalError>
-    copy_result_locked(DevAddr dst, DevAddr src, uint64_t modulus = 0xFFFFFFFFFFFFFFFFULL) noexcept
+    copy_result_locked(DevAddr dst, DevAddr src, uint64_t modulus = kCopyModulus) noexcept
         HAZE_REQUIRES(mutex_);
 
     // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
@@ -155,6 +172,11 @@ class EpochState {
     // pending_outputs_ is the addr-keyed subset that names the outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
+    // addr -> real modulus recorded by the last modulus-carrying op that wrote
+    // it; consulted by copy_result_locked / the SRP automorph to recover a
+    // source modulus. Kept in lockstep with poly_map_ writes; cleared per
+    // epoch and dropped on invalidate.
+    std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);
     // MRP-shaped output groupings, keyed by leading-dst-derived name.
     // Registration is latest-write-wins — identical re-registration is a
     // no-op, a different-shaped registration replaces the group and evicts
