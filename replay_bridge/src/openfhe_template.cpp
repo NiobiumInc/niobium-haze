@@ -195,14 +195,10 @@ void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &val
     np.SetValues(nv, np.GetFormat());
 }
 
-// Switch tower `t` of `elem` to the trace modulus `q`, recomputing the root of
-// unity (corder = 2 * ring_dim). No-op for the COPY sentinel / 0 (no real
-// modulus) or a tower already at `q`. Applied to a ZERO tower before fill: the
-// .fhetch trace modulus table is authoritative, but OpenFHE's GenCryptoContext
-// can only emit bit-width-approximate primes, so each tower is re-based to the
-// exact trace prime here. Doing it pre-fill (on zeros) means values land under
-// the right modulus directly — no reduction against a smaller scaffold prime,
-// and no post-hoc snapshot/refill.
+// Re-base tower `t` to the exact trace modulus `q` (GenCryptoContext only emits
+// bit-width-approximate primes); no-op for the COPY sentinel/0 or a tower
+// already at `q`. Done on a zero tower before fill, so values land under the
+// right modulus with no wrap against a smaller scaffold prime.
 void switch_tower_modulus(lbcrypto::DCRTPoly &elem, size_t t, uint64_t q, uint32_t corder) {
     if (q == 0 || q == kCopyModulus)
         return;
@@ -214,8 +210,7 @@ void switch_tower_modulus(lbcrypto::DCRTPoly &elem, size_t t, uint64_t q, uint32
 }
 
 // SRP: 1-element / 1-tower CT; empty `values` produces a template. `modulus`
-// is the trace modulus (kCopyModulus when none is known); the tower is rebased
-// to it before fill.
+// (kCopyModulus = unknown) is the trace prime the tower is re-based to.
 lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx, uint64_t modulus,
                                                           const std::vector<uint64_t> &values) {
     auto ct = empty_ct_shell(ctx, /*k_count=*/1);
@@ -444,11 +439,9 @@ void on_post_recording(const HookCtx &hctx) {
                 log_hook_error("input '" + rec.name + "': no CC available for shape");
                 return;
             }
-            // synthesize_for_shape rebases each tower to its trace modulus
-            // before filling, so the .bin carries the exact trace primes.
             // [[clang::suppress]]: the analyzer reports divide-by-zero /
-            // shift-overflow on paths inside OpenFHE's ubintnat.h reached
-            // via RootOfUnity; q == 0 / sentinel is guarded before any call.
+            // shift-overflow on ubintnat.h paths reached via RootOfUnity (in
+            // switch_tower_modulus); q == 0 / sentinel is guarded before any call.
             [[clang::suppress]] auto ct =
                 synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
@@ -467,10 +460,9 @@ void on_post_recording(const HookCtx &hctx) {
                     log_hook_error("output '" + name + "': no CC available for shape");
                     return;
                 }
-                // Template towers are rebased to the trace moduli in
-                // synthesize_for_shape (on zeros), so the driver's SetValues
-                // matches without a post-hoc install. [[clang::suppress]]:
-                // same ubintnat.h RootOfUnity analyzer false positives.
+                // Template towers carry the trace moduli from synthesize, so
+                // the driver's SetValues matches with no post-hoc install.
+                // [[clang::suppress]]: same RootOfUnity analyzer noise as inputs.
                 [[clang::suppress]] auto ct =
                     synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {

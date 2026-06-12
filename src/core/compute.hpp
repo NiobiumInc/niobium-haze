@@ -78,11 +78,10 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
     return {};
 }
 
-// Polynomial-index. Used by hazeAutomorph. The eval-form automorph is a pure
-// slot permutation (value-independent of the modulus), so the op carries the
-// COPY sentinel; recover the source's recorded modulus and bind it as
-// metadata on source + result so a tagged SRP automorph is probe-serializable
-// on transport (matching the MRP automorph, which binds base[i]).
+// Polynomial-index (hazeAutomorph). The eval-form automorph is a pure slot
+// permutation, so the op carries the COPY sentinel; recover the source's
+// recorded modulus and bind it (source + result) so a tagged SRP automorph is
+// probe-serializable on transport.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
                                                    uint64_t index) noexcept {

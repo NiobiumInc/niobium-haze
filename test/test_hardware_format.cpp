@@ -697,14 +697,11 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-// The trace's modulus table — not the bridge's scaffold cryptocontext.dat
-// prime — is authoritative for replay. Three distinct valid primes are in
-// play: kQ0 (the desired modulus requested of the bridge), `picked` (what
-// OpenFHE's GenCryptoContext actually built cryptocontext.dat around), and the
-// trace modulus we set (kQ1). The add is crafted to WRAP — a+b lands in
-// [picked, kQ1) — so reducing mod kQ1 (no wrap) and mod picked (wrap) give
-// different results. The result must equal the kQ1 oracle, proving the
-// install-trace machinery makes the trace authoritative on this target.
+// Three distinct valid primes are in play: kQ0 (requested of the bridge),
+// `picked` (what GenCryptoContext built cryptocontext.dat around), and the
+// trace modulus we set (kQ1). The add wraps into [picked, kQ1) so mod-kQ1 (no
+// wrap) and mod-picked (wrap) differ; the result must equal the kQ1 oracle,
+// confirming the trace modulus — not the scaffold prime — drives replay.
 TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
           "[integration][modulus]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
@@ -751,13 +748,11 @@ TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-// Input residues in [scaffold_prime, trace_prime) must survive serialization.
-// The bridge builds the input ciphertext from OpenFHE's scaffold prime, which
-// is SMALLER than the trace prime here (measured picked < kQ0), so a residue
-// in that window would wrap if filled before the modulus was rebased to the
-// trace prime. synthesize rebases each tower first, so the .bin carries the
-// exact trace prime and the value round-trips. Random residues land in this
-// ~3.4M-wide window with negligible probability, so this pins it explicitly.
+// Input residues in [scaffold_prime, trace_prime) must round-trip: the scaffold
+// prime is smaller than the trace prime (picked < kQ0), so such a value would
+// wrap if filled before the tower was rebased (synthesize rebases first).
+// Random residues hit this ~3.4M-wide window with negligible probability, so
+// this pins it explicitly.
 TEST_CASE("input residues above the scaffold prime survive .bin synthesis",
           "[integration][modulus]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
