@@ -25,11 +25,6 @@
 
 namespace haze {
 
-DeviceAllocator &DeviceAllocator::instance() noexcept {
-    static DeviceAllocator inst;
-    return inst;
-}
-
 void DeviceAllocator::clear_pool_locked() noexcept {
     for (DevAddr addr : pool_free_) {
         alloc_set_.erase(addr);

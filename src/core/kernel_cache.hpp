@@ -44,7 +44,7 @@ namespace haze {
 // Graph never calls back into the cache.
 class KernelCache {
   public:
-    static KernelCache &instance() noexcept;
+    KernelCache() = default; // constructed as a haze_context_s member
 
     // True while a Begin bracket is open (nesting gate for the shim).
     bool has_open_frame() const noexcept HAZE_EXCLUDES(mutex_);
@@ -73,8 +73,6 @@ class KernelCache {
     KernelCache &operator=(const KernelCache &) = delete;
 
   private:
-    KernelCache() = default;
-
     struct SubTape {
         std::string name;
         std::vector<uint8_t> key_bytes;
@@ -121,8 +119,6 @@ class KernelCache {
     int validate_override_ HAZE_GUARDED_BY(mutex_) = -1;
 };
 
-inline KernelCache &kernel_cache() noexcept {
-    return KernelCache::instance();
-}
+KernelCache &kernel_cache() noexcept; // TEMPORARY default-context bridge
 
 } // namespace haze

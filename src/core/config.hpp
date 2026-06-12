@@ -63,7 +63,7 @@ struct ConfigSnapshot {
 // taken under the same lock for consistency with vector resizes.
 class Config {
   public:
-    static Config &instance() noexcept;
+    Config() = default; // constructed as a haze_context_s member
 
     // FHE parameters (existing public API).
     std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept;
@@ -120,8 +120,6 @@ class Config {
     Config &operator=(const Config &) = delete;
 
   private:
-    Config() = default;
-
     // Published-once snapshot; written under mutex_, read lock-free.
     std::atomic<const ConfigSnapshot *> snapshot_{nullptr};
 
@@ -146,9 +144,7 @@ class Config {
     bool bit_reversal_set_ = false;
 };
 
-inline Config &config() noexcept {
-    return Config::instance();
-}
+Config &config() noexcept; // TEMPORARY default-context bridge (context.cpp)
 
 // Shared truthy env-var read ("1" or "true"; anything else — including
 // unset — yields `fallback`). The single truthiness definition for

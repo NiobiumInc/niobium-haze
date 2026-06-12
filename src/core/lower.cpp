@@ -315,6 +315,8 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
         return {};
 
     const std::vector<Node> tape = graph().seal();
+    bindings().clear();
+    recorded_moduli().clear();
     DerivedState d = derive(tape);
 
     if (!d.has_outputs()) {

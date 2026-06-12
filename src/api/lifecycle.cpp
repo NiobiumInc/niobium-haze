@@ -39,6 +39,8 @@ void reset_all() noexcept {
     // otherwise.
     kernel_cache().reset(); // open bracket + memo entries die first
     graph().reset();
+    bindings().clear();
+    recorded_moduli().clear();
     backend().reset();
     allocator().reset();
     config().reset();

@@ -34,16 +34,6 @@ ValueId new_value_id() noexcept {
     return g_next_value_id.fetch_add(1, std::memory_order_relaxed);
 }
 
-BindingTable &BindingTable::instance() noexcept {
-    static BindingTable inst;
-    return inst;
-}
-
-BindingTable &BindingTable::moduli_instance() noexcept {
-    static BindingTable inst;
-    return inst;
-}
-
 void BindingTable::set_slot_bytes(size_t bytes) noexcept {
     // Geometry changes are only reachable pre-freeze (set_ring_dimension
     // before the first compute), i.e. while no binding exists; clearing
@@ -123,11 +113,6 @@ void BindingTable::clear() noexcept {
     }
 }
 
-Graph &Graph::instance() noexcept {
-    static Graph inst;
-    return inst;
-}
-
 void Graph::append(Node &&node) noexcept {
     HazeLockGuard lock(mutex_);
     if (frame_sink_ != nullptr) {
@@ -158,8 +143,6 @@ std::vector<Node> Graph::seal() noexcept {
         HazeLockGuard lock(mutex_);
         out.swap(nodes_);
     }
-    bindings().clear();
-    recorded_moduli().clear();
     return out;
 }
 
@@ -169,8 +152,6 @@ void Graph::reset() noexcept {
         nodes_.clear();
         frame_sink_ = nullptr; // an open kernel bracket dies with the reset
     }
-    bindings().clear();
-    recorded_moduli().clear();
 }
 
 } // namespace haze

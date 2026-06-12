@@ -69,7 +69,7 @@ ValueId new_value_id() noexcept;
 // memory-safe, nothing more).
 class BindingTable {
   public:
-    static BindingTable &instance() noexcept;
+    BindingTable() = default; // constructed as a haze_context_s member
 
     // Configure the slot geometry (allocation size in bytes). Called by
     // Config::set_ring_dimension next to allocator().set_polynomial_size;
@@ -99,15 +99,7 @@ class BindingTable {
     BindingTable(const BindingTable &) = delete;
     BindingTable &operator=(const BindingTable &) = delete;
 
-    // Second instance: addr -> last recorded REAL modulus (the eager
-    // engine's addr_modulus_). kUnbound (0) = unknown; 0 is never a
-    // valid prime so the sentinel can share the slot encoding. Same
-    // epoch lifetime as the value bindings (seal/reset clear both).
-    static BindingTable &moduli_instance() noexcept;
-
   private:
-    BindingTable() = default;
-
     static constexpr size_t kChunkSlots = 4096; // 32 KiB of atomics per chunk
     static constexpr size_t kMaxChunks = 16384; // 64M slots ceiling
     struct Chunk {
@@ -123,14 +115,10 @@ class BindingTable {
     std::atomic<size_t> slot_bytes_{0};
 };
 
-inline BindingTable &bindings() noexcept {
-    return BindingTable::instance();
-}
-
+// Default-context accessors (TEMPORARY bridge; defined in context.cpp).
+BindingTable &bindings() noexcept;
 // addr -> recorded modulus (0 = unknown / sentinel-only address).
-inline BindingTable &recorded_moduli() noexcept {
-    return BindingTable::moduli_instance();
-}
+BindingTable &recorded_moduli() noexcept;
 
 // Lowering context handed to thunks at flush time; defined in
 // core/lower.hpp. Single-threaded by construction.
@@ -189,7 +177,7 @@ struct Node {
 // polynomial payloads inside the critical section).
 class Graph {
   public:
-    static Graph &instance() noexcept;
+    Graph() = default; // constructed as a haze_context_s member
 
     void append(Node &&node) noexcept HAZE_EXCLUDES(mutex_);
 
@@ -204,28 +192,24 @@ class Graph {
     // Number of nodes currently recorded (diagnostics/tests).
     size_t size() const noexcept HAZE_EXCLUDES(mutex_);
 
-    // Swap the tape out for lowering and clear all slot bindings. The
-    // record path observes a fresh epoch from this point on, whatever
-    // the lowering outcome.
+    // Swap the tape out for lowering. Callers clear their context's
+    // BindingTables alongside (the tape does not know its siblings) so
+    // the record path observes a fresh epoch whatever lowering does.
     std::vector<Node> seal() noexcept HAZE_EXCLUDES(mutex_);
 
-    // Discard the tape without lowering (hazeDeviceReset): thunks never
-    // run, so nothing is ever emitted to fhetch.
+    // Discard the tape without lowering: thunks never run, so nothing
+    // is ever emitted to fhetch. Callers clear the BindingTables too.
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     Graph(const Graph &) = delete;
     Graph &operator=(const Graph &) = delete;
 
   private:
-    Graph() = default;
-
     mutable HazeMutex mutex_;
     std::vector<Node> nodes_ HAZE_GUARDED_BY(mutex_);
     std::vector<Node> *frame_sink_ HAZE_GUARDED_BY(mutex_) = nullptr;
 };
 
-inline Graph &graph() noexcept {
-    return Graph::instance();
-}
+Graph &graph() noexcept; // TEMPORARY default-context bridge (context.cpp)
 
 } // namespace haze

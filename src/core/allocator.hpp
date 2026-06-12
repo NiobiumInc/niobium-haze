@@ -78,11 +78,7 @@ class AllocatorTestAccess;
 // locks never nest.
 class DeviceAllocator {
   public:
-    // HAZE_API on this and `extract_polynomial_components` exports the
-    // symbols from libhaze's hidden-visibility .so so the test binary
-    // can resolve them; encapsulation rests on allocator.hpp living in
-    // src/ (private include path), not on the visibility attribute.
-    HAZE_API static DeviceAllocator &instance() noexcept;
+    DeviceAllocator() = default; // constructed as a haze_context_s member
 
     // Configure the pool's polynomial size. Calling with a size different
     // from the current configuration drains the pool. Calling with size 0
@@ -149,8 +145,6 @@ class DeviceAllocator {
     DeviceAllocator &operator=(const DeviceAllocator &) = delete;
 
   private:
-    DeviceAllocator() = default;
-
     friend class test::AllocatorTestAccess;
 
     // Helper (caller holds mutex_).
@@ -176,8 +170,8 @@ class DeviceAllocator {
     uintptr_t next_addr_ HAZE_GUARDED_BY(mutex_) = kHbmBase;
 };
 
-inline DeviceAllocator &allocator() noexcept {
-    return DeviceAllocator::instance();
-}
+// TEMPORARY default-context bridge (context.cpp). HAZE_API so the test
+// binary resolves it out of the hidden-visibility .so.
+HAZE_API DeviceAllocator &allocator() noexcept;
 
 } // namespace haze

@@ -56,6 +56,7 @@
 // Opaque handle types (distinct pointer types, not void*)
 // ---------------------------------------------------------------------------
 
+typedef struct haze_context_s *hazeContext_t;
 typedef struct haze_stream_s *hazeStream_t;
 typedef struct haze_event_s *hazeEvent_t;
 typedef struct haze_graph_s *hazeGraph_t;

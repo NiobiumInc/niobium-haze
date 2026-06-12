@@ -43,11 +43,6 @@ bool env_flag(const char *name, bool fallback) noexcept {
     return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
 }
 
-Config &Config::instance() noexcept {
-    static Config inst;
-    return inst;
-}
-
 std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) noexcept {
     if (!is_supported_ring_dim(n))
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -59,7 +54,7 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
     if (configured_ && ring_dim_ != n)
         return std::unexpected(HazeInternalError::NotConfigured);
     ring_dim_ = n;
-    DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
+    allocator().set_polynomial_size(n * sizeof(uint64_t));
     // Keep the record path's slot table on the same geometry as the
     // allocator pool. Reachable only pre-freeze, i.e. with no bindings.
     bindings().set_slot_bytes(n * sizeof(uint64_t));

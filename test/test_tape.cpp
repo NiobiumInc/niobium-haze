@@ -153,10 +153,13 @@ TEST_CASE("Graph: seal returns nodes in append order and empties the tape", "[un
     REQUIRE(tape[1].kind == haze::Node::Kind::TagOutput);
     REQUIRE(haze::graph().size() == 0);
 
-    // seal() also clears the binding table: the record path starts a
-    // fresh epoch no matter what lowering later does with the tape.
+    // seal() swaps the tape only; clearing the context's BindingTables
+    // is the CALLER's job (finalize / reset pair them explicitly, since
+    // the tape does not know its sibling tables).
     haze::bindings().store(nth_slot_addr(0), haze::new_value_id());
     (void)haze::graph().seal();
+    REQUIRE(haze::bindings().load(nth_slot_addr(0)) != haze::kUnbound);
+    haze::bindings().clear();
     REQUIRE(haze::bindings().load(nth_slot_addr(0)) == haze::kUnbound);
 }
 

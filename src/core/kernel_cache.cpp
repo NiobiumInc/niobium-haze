@@ -64,11 +64,6 @@ std::vector<uint64_t> flatten_output_moduli(std::span<const hazeKernelOutput> ou
 
 } // namespace
 
-KernelCache &KernelCache::instance() noexcept {
-    static KernelCache inst;
-    return inst;
-}
-
 bool KernelCache::has_open_frame() const noexcept {
     HazeLockGuard lock(mutex_);
     return frame_ != nullptr;
