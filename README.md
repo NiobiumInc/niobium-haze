@@ -63,10 +63,10 @@ simulator internals, see the companion repository:
    against `libhaze`. No probes, no instrumented OpenFHE. Haze pulls
    `libnbfhetch` in transitively for the recording back-end.
 
-2. **Configure** — `hazeSetRingDimension(N)`, `hazeSetCiphertextModulus(idx, q)`
-   for each residue, and `hazeConfigureDevice()` lock in the FHE parameter set.
-   Optional: `hazeSetTarget("FUNC_SIM")` (or set `HAZE_TARGET` in the
-   environment) to pick a non-default replay target.
+2. **Create a context** — `hazeContextCreate(&ctx, N, moduli, n_moduli)` fixes
+   the FHE parameter set for the context's lifetime; every stateful call takes
+   the context first. Optional: `hazeSetTarget(ctx, "FUNC_SIM")` (or set
+   `HAZE_TARGET` in the environment) to pick a non-default replay target.
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable
    polynomial. Compute calls (`hazeAdd`, `hazeMul`, `hazeNTT`, `hazeAutomorph`,
@@ -104,35 +104,32 @@ int main(void) {
     const uint64_t modulus  = 576460752303415297ULL;
     const int      mod_idx  = 0;
 
-    /* ---- Configure the FHE parameter set. ---- */
-    hazeSetRingDimension(ring_dim);
-    hazeSetCiphertextModulus(mod_idx, modulus);
-    hazeConfigureDevice();
+    /* ---- One context = one program, parameters fixed at birth. ---- */
+    hazeContext_t ctx = NULL;
+    hazeContextCreate(&ctx, ring_dim, &modulus, 1);
 
     /* ---- Allocate three device polynomials. ---- */
     void *d_a = NULL, *d_b = NULL, *d_dst = NULL;
-    hazeMalloc(&d_a,   bytes);
-    hazeMalloc(&d_b,   bytes);
-    hazeMalloc(&d_dst, bytes);
+    hazeMalloc(ctx, &d_a,   bytes);
+    hazeMalloc(ctx, &d_b,   bytes);
+    hazeMalloc(ctx, &d_dst, bytes);
 
     /* ---- Stage host inputs and record the add. ---- */
     uint64_t a[ring_dim], b[ring_dim], result[ring_dim];
     for (uint64_t i = 0; i < ring_dim; ++i) { a[i] = 1; b[i] = 2; }
-    hazeMemcpy(d_a, a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
-    hazeMemcpy(d_b, b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+    hazeMemcpy(ctx, d_a, a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+    hazeMemcpy(ctx, d_b, b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
 
-    hazeAdd(d_dst, d_a, d_b, mod_idx, /*stream=*/NULL);
+    hazeAdd(ctx, d_dst, d_a, d_b, mod_idx, /*stream=*/NULL);
 
     /* ---- Declare the output, run the recorded program, then read it back. ---- */
-    hazeTagOutput(d_dst);
-    hazeFlush();
-    hazeMemcpy(result, d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+    hazeTagOutput(ctx, d_dst);
+    hazeFlush(ctx);
+    hazeMemcpy(ctx, result, d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
 
     printf("result[0] = %llu\n", (unsigned long long)result[0]);  /* 3 */
 
-    hazeFree(d_a);
-    hazeFree(d_b);
-    hazeFree(d_dst);
+    hazeContextDestroy(ctx);  /* frees the context's allocations */
     return 0;
 }
 ```

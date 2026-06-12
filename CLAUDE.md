@@ -87,7 +87,7 @@ is unaffected.
 Symptom: a clean release build links with warnings like `object file ...
 was built for newer macOS version (26.0) than being linked (14.0)`, then
 segfaults non-deterministically inside calls that should be no-ops
-(`hazeSetRingDimension`, `hazeMalloc`). Two libc++ ABI versions are
+(`hazeContextCreate`, `hazeMalloc`). Two libc++ ABI versions are
 colliding in the same process.
 
 Fix: rebuild every dylib in the link graph in the same shell so each
@@ -359,10 +359,10 @@ This is the central design contribution. Every compute API call
 (`hazeAdd`, `hazeMul`, `hazeNTT`, ...) records onto an append-only tape
 (`src/core/graph.hpp`) without calling fhetch at all:
 
-1. `record_prelude()` brings up `niobium::compiler()` on first compute
-   (idempotent, lock-free fast path) and freezes the FHE parameters
-   into a lock-free `ConfigSnapshot` (post-compute parameter mutation
-   is rejected like post-`hazeConfigureDevice` mutation).
+1. `record_prelude(ctx)` brings up `niobium::compiler()` on first
+   compute (idempotent, lock-free fast path) and reads the context's
+   FHE parameters — a lock-free `ConfigSnapshot` published once by
+   `hazeContextCreate` and immutable for the context's lifetime.
 2. Each `void*` operand resolves through the lock-free `BindingTable`
    (addr → `ValueId`, one atomic word per allocation slot). First touch
    snapshots the shadow bytes NOW (evicting) and appends an
@@ -424,11 +424,11 @@ CUDA-shape parity but do not flush and do not model ordering.
   unflushed addr) or `SourceUnavailable` (compute / D2D extract path — using an
   addr that was never written is a contract violation).
 
-Every `hazeMalloc` allocation must equal the configured polynomial size
-(`ring_dim * sizeof(uint64_t)`). `hazeSetRingDimension` is required before
-the first `hazeMalloc`. Non-polynomial scratch (pointer arrays, twiddle
-tables, kernel-arg packs) goes through `hazeHostAlloc` or ordinary host
-malloc, not `hazeMalloc`.
+Every `hazeMalloc` allocation must equal the context's polynomial size
+(`ring_dim * sizeof(uint64_t)`, fixed at `hazeContextCreate`).
+Non-polynomial scratch (pointer arrays, twiddle tables, kernel-arg
+packs) goes through `hazeHostAlloc` or ordinary host malloc, not
+`hazeMalloc`.
 
 `DevAddr` is an `enum class : uintptr_t` cast from / to `void*` only at
 the C ABI boundary. `kHbmBase = 0x4000000000ULL` keeps haze-allocated
@@ -471,8 +471,11 @@ directory (`build/runs/haze/...`). Each functional epoch produces its own
 (MRP) operations like `hazeModUp` / `hazeModDown` produce
 `ciphertext_templates/<name>.template` files via the `replay_bridge`'s
 `post_recording_hook`, registered when `hazeReplayBridgeInitCryptoContext`
-runs. The hook is wiped by `hazeDeviceReset`, so any test that resets
-must re-call `hazeReplayBridgeInitCryptoContext` afterward — the
+runs. Every flush scrubs and rebinds the process-global fhetch engine
+from the flushing context (`LoweringSession::ensure_backend`), restoring
+the hook from the bridge's stored state; `hazeDeviceReset` wipes the
+stored state too, so any test that resets must re-call
+`hazeReplayBridgeInitCryptoContext` afterward — the
 `integration_helpers.hpp::setup_integration_compute_config` helper
 enforces this.
 
@@ -511,9 +514,10 @@ parent project (e.g., niobium-client) has already built it.
 - C-ABI public headers use `HAZE_NOEXCEPT`; never throw across the
   boundary. Internal code uses `std::expected<T, HazeInternalError>` for
   fallible paths and translates to `hazeError_t` at the API edge.
-- Every test that records must reset state per case
-  (`hazeDeviceReset`) and re-init the bridge if it uses MRP outputs.
-  See `integration_helpers.hpp::setup_integration_compute_config`.
+- Every test that records gets per-case isolation from a FRESH context
+  (`haze::test::recreate_ctx`, which also resets the process globals)
+  and re-inits the bridge if it uses MRP outputs. See
+  `integration_helpers.hpp::setup_integration_compute_config`.
 - Tests `cd` into a runs dir before recording so `program_dir`
   resolves under the build tree, not the source tree.
 - For new CKKS-op e2e tests, see `test/e2e/README.md` — the
