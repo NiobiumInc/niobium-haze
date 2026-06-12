@@ -204,7 +204,9 @@ void switch_tower_modulus(lbcrypto::DCRTPoly &elem, size_t t, uint64_t q, uint32
         return;
     if (elem.GetAllElements()[t].GetModulus().ConvertToInt() == q)
         return;
-    const auto root =
+    // [[clang::suppress]]: ubintnat.h divide-by-zero / shift-overflow false
+    // positives reached via RootOfUnity; q is guarded non-zero/non-sentinel above.
+    [[clang::suppress]] const auto root =
         lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
     elem.SwitchModulusAtIndex(t, DCRTPoly::Integer(q), DCRTPoly::Integer(root.ConvertToInt()));
 }
@@ -437,11 +439,9 @@ void on_post_recording(const HookCtx &hctx) {
                 log_hook_error("input '" + rec.name + "': no CC available for shape");
                 return;
             }
-            // [[clang::suppress]]: the analyzer reports divide-by-zero /
-            // shift-overflow on ubintnat.h paths reached via RootOfUnity (in
-            // switch_tower_modulus); q == 0 / sentinel is guarded before any call.
-            [[clang::suppress]] auto ct =
-                synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
+            // synthesize_for_shape rebases towers to the trace primes, so the
+            // .bin carries the exact moduli (see switch_tower_modulus).
+            auto ct = synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
                 log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }
@@ -460,9 +460,7 @@ void on_post_recording(const HookCtx &hctx) {
                 }
                 // Template towers carry the trace moduli from synthesize, so
                 // the driver's SetValues matches with no post-hoc install.
-                // [[clang::suppress]]: same RootOfUnity analyzer noise as inputs.
-                [[clang::suppress]] auto ct =
-                    synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
+                auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
                     log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }
