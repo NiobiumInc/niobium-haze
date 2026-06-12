@@ -195,15 +195,36 @@ void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &val
     np.SetValues(nv, np.GetFormat());
 }
 
-// SRP: 1-element / 1-tower CT; empty `values` produces a template.
-lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx,
+// Switch tower `t` of `elem` to the trace modulus `q`, recomputing the root of
+// unity (corder = 2 * ring_dim). No-op for the COPY sentinel / 0 (no real
+// modulus) or a tower already at `q`. Applied to a ZERO tower before fill: the
+// .fhetch trace modulus table is authoritative, but OpenFHE's GenCryptoContext
+// can only emit bit-width-approximate primes, so each tower is re-based to the
+// exact trace prime here. Doing it pre-fill (on zeros) means values land under
+// the right modulus directly — no reduction against a smaller scaffold prime,
+// and no post-hoc snapshot/refill.
+void switch_tower_modulus(lbcrypto::DCRTPoly &elem, size_t t, uint64_t q, uint32_t corder) {
+    if (q == 0 || q == kCopyModulus)
+        return;
+    if (elem.GetAllElements()[t].GetModulus().ConvertToInt() == q)
+        return;
+    const auto root =
+        lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
+    elem.SwitchModulusAtIndex(t, DCRTPoly::Integer(q), DCRTPoly::Integer(root.ConvertToInt()));
+}
+
+// SRP: 1-element / 1-tower CT; empty `values` produces a template. `modulus`
+// is the trace modulus (kCopyModulus when none is known); the tower is rebased
+// to it before fill.
+lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_ciphertext(const Context &ctx, uint64_t modulus,
                                                           const std::vector<uint64_t> &values) {
     auto ct = empty_ct_shell(ctx, /*k_count=*/1);
-    trim_towers_to(ct->GetElements()[0], 1);
+    auto &dcrt = ct->GetElements()[0];
+    trim_towers_to(dcrt, 1);
+    switch_tower_modulus(dcrt, 0, modulus, static_cast<uint32_t>(2 * ctx.ring_dim));
     if (values.empty())
         return ct; // template
-    fill_native_poly(ct->GetElements()[0].GetAllElements()[0], values,
-                     "synthesize_haze_ciphertext");
+    fill_native_poly(dcrt.GetAllElements()[0], values, "synthesize_haze_ciphertext");
     return ct;
 }
 
@@ -215,8 +236,11 @@ synthesize_haze_mrp_ciphertext(const Context &ctx, const std::vector<uint64_t> &
     auto ct = empty_ct_shell(ctx, /*k_count=*/1);
     auto &dcrt = ct->GetElements()[0];
     trim_towers_to(dcrt, moduli.size());
+    const auto corder = static_cast<uint32_t>(2 * ctx.ring_dim);
+    for (size_t i = 0; i < moduli.size(); ++i)
+        switch_tower_modulus(dcrt, i, moduli[i], corder);
     if (per_residue_values.empty())
-        return ct; // template — reconstruct_probes installs trace moduli.
+        return ct; // template — towers already at the trace moduli.
     if (per_residue_values.size() != moduli.size()) {
         std::ostringstream body;
         body << "synthesize_haze_mrp_ciphertext: per_residue_values.size()="
@@ -252,10 +276,14 @@ lbcrypto::Ciphertext<DCRTPoly> synthesize_haze_array_ciphertext(
     const size_t k_count = per_element_moduli.size();
 
     auto ct = empty_ct_shell(ctx, k_count);
-    for (auto &dcrt : ct->GetElements())
+    const auto corder = static_cast<uint32_t>(2 * ctx.ring_dim);
+    for (auto &dcrt : ct->GetElements()) {
         trim_towers_to(dcrt, shared_moduli.size());
+        for (size_t i = 0; i < shared_moduli.size(); ++i)
+            switch_tower_modulus(dcrt, i, shared_moduli[i], corder);
+    }
     if (per_element_values.empty())
-        return ct; // template path: K-element shell, zeros in each tower
+        return ct; // template path: K-element shell at trace moduli, zeros in each tower
     if (per_element_values.size() != k_count) {
         std::ostringstream body;
         body << "synthesize_haze_array_ciphertext: per_element_values.size()="
@@ -315,9 +343,17 @@ lbcrypto::Ciphertext<DCRTPoly>
 synthesize_for_shape(const Context &ctx, const niobium::CapturedShape &shape,
                      const std::vector<std::vector<uint64_t>> &per_residue_values) {
     switch (shape.kind) {
-    case niobium::CapturedKind::SRP:
-        return synthesize_haze_ciphertext(
-            ctx, per_residue_values.empty() ? std::vector<uint64_t>{} : per_residue_values.front());
+    case niobium::CapturedKind::SRP: {
+        // SRP shape carries one element with one modulus; kCopyModulus when
+        // the address was never modulus-bound (raw opaque buffer).
+        const uint64_t modulus =
+            (shape.per_element_moduli.empty() || shape.per_element_moduli.front().empty())
+                ? kCopyModulus
+                : shape.per_element_moduli.front().front();
+        return synthesize_haze_ciphertext(ctx, modulus,
+                                          per_residue_values.empty() ? std::vector<uint64_t>{}
+                                                                     : per_residue_values.front());
+    }
     case niobium::CapturedKind::MRP:
         return synthesize_haze_mrp_ciphertext(ctx, shape.per_element_moduli.front(),
                                               per_residue_values);
@@ -392,80 +428,6 @@ const Context *context_for_shape(const HookCtx &hctx,
     return &ins->second;
 }
 
-// After fhetch 55fd616, reconstruct fills output templates via SetValues
-// without rebuilding params, so each template tower's modulus must already
-// equal the trace modulus. The synthetic per-shape context (Init path) is
-// built from bit-widths, so GenCryptoContext's primes won't match — install
-// the exact trace moduli. Towers already at the right modulus are left
-// untouched so their precomputed params stay byte-identical; COPY_MODULUS / 0
-// towers carry no real modulus and keep the template's.
-void install_trace_output_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
-                                 const niobium::CapturedShape &shape, uint64_t ring_dim) {
-    const auto corder = static_cast<uint32_t>(2 * ring_dim);
-    auto &elements = ct->GetElements();
-    // synthesize_for_shape builds one CT element per per_element_moduli entry
-    // and trims each to its moduli-list length, so the two stay in lockstep.
-    if (elements.size() != shape.per_element_moduli.size())
-        throw std::runtime_error("install_trace_output_moduli: element/shape count mismatch");
-    for (size_t e = 0; e < elements.size(); ++e) {
-        const auto &moduli = shape.per_element_moduli[e];
-        auto &towers = elements[e].GetAllElements();
-        if (towers.size() != moduli.size())
-            throw std::runtime_error("install_trace_output_moduli: tower/moduli count mismatch");
-        for (size_t t = 0; t < moduli.size(); ++t) {
-            const uint64_t q = moduli[t];
-            if (q == 0 || q == kCopyModulus)
-                continue;
-            if (towers[t].GetModulus().ConvertToInt() == q)
-                continue;
-            const auto root =
-                lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
-            elements[e].SwitchModulusAtIndex(t, DCRTPoly::Integer(q),
-                                             DCRTPoly::Integer(root.ConvertToInt()));
-        }
-    }
-}
-
-// Input counterpart of install_trace_output_moduli, but value-preserving:
-// inputs carry real residues. SwitchModulusAtIndex recenters values (right
-// for zeroed templates, wrong for data), so snapshot the raw residues, switch
-// the tower params, then restore them. Otherwise the .bin towers keep the
-// synthetic CC's prime and a --niobium_hw replay Montgomery-encodes with the
-// wrong modulus.
-void install_trace_input_moduli(lbcrypto::Ciphertext<DCRTPoly> &ct,
-                                const niobium::CapturedShape &shape, uint64_t ring_dim) {
-    const auto corder = static_cast<uint32_t>(2 * ring_dim);
-    auto &elements = ct->GetElements();
-    if (elements.size() != shape.per_element_moduli.size())
-        throw std::runtime_error("install_trace_input_moduli: element/shape count mismatch");
-    for (size_t e = 0; e < elements.size(); ++e) {
-        const auto &moduli = shape.per_element_moduli[e];
-        auto &towers = elements[e].GetAllElements();
-        if (towers.size() != moduli.size())
-            throw std::runtime_error("install_trace_input_moduli: tower/moduli count mismatch");
-        for (size_t t = 0; t < moduli.size(); ++t) {
-            const uint64_t q = moduli[t];
-            if (q == 0 || q == kCopyModulus)
-                continue;
-            if (towers[t].GetModulus().ConvertToInt() == q)
-                continue;
-            const size_t n = towers[t].GetLength();
-            std::vector<uint64_t> raw(n);
-            const auto &vals = towers[t].GetValues();
-            for (size_t i = 0; i < n; ++i)
-                raw[i] = vals[i].ConvertToInt();
-            const auto root =
-                lbcrypto::RootOfUnity<lbcrypto::NativeInteger>(corder, lbcrypto::NativeInteger(q));
-            elements[e].SwitchModulusAtIndex(t, DCRTPoly::Integer(q),
-                                             DCRTPoly::Integer(root.ConvertToInt()));
-            // Captured residues are already reduced mod q, so a verbatim
-            // refill restores them under the freshly-installed modulus.
-            fill_native_poly(elements[e].GetAllElements()[t], raw,
-                             "install_trace_input_moduli[tower " + std::to_string(t) + "]");
-        }
-    }
-}
-
 // LOAD-BEARING. Runs between stop_recording and reconstruct to produce the
 // OpenFHE artifacts the replay path needs. local_cache is per-call.
 void on_post_recording(const HookCtx &hctx) {
@@ -482,11 +444,13 @@ void on_post_recording(const HookCtx &hctx) {
                 log_hook_error("input '" + rec.name + "': no CC available for shape");
                 return;
             }
-            auto ct = synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
+            // synthesize_for_shape rebases each tower to its trace modulus
+            // before filling, so the .bin carries the exact trace primes.
             // [[clang::suppress]]: the analyzer reports divide-by-zero /
             // shift-overflow on paths inside OpenFHE's ubintnat.h reached
-            // via RootOfUnity; q == 0 is guarded before any such call.
-            [[clang::suppress]] install_trace_input_moduli(ct, rec.shape, hctx.ring_dim);
+            // via RootOfUnity; q == 0 / sentinel is guarded before any call.
+            [[clang::suppress]] auto ct =
+                synthesize_for_shape(*ctx, rec.shape, rec.per_residue_values);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
                 log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }
@@ -503,10 +467,12 @@ void on_post_recording(const HookCtx &hctx) {
                     log_hook_error("output '" + name + "': no CC available for shape");
                     return;
                 }
-                auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
-                // [[clang::suppress]]: same ubintnat.h analyzer false
-                // positives as the input-moduli install above.
-                [[clang::suppress]] install_trace_output_moduli(ct, shape, hctx.ring_dim);
+                // Template towers are rebased to the trace moduli in
+                // synthesize_for_shape (on zeros), so the driver's SetValues
+                // matches without a post-hoc install. [[clang::suppress]]:
+                // same ubintnat.h RootOfUnity analyzer false positives.
+                [[clang::suppress]] auto ct =
+                    synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
                     log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }

@@ -750,3 +750,48 @@ TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
     }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
+
+// Input residues in [scaffold_prime, trace_prime) must survive serialization.
+// The bridge builds the input ciphertext from OpenFHE's scaffold prime, which
+// is SMALLER than the trace prime here (measured picked < kQ0), so a residue
+// in that window would wrap if filled before the modulus was rebased to the
+// trace prime. synthesize rebases each tower first, so the .bin carries the
+// exact trace prime and the value round-trips. Random residues land in this
+// ~3.4M-wide window with negligible probability, so this pins it explicitly.
+TEST_CASE("input residues above the scaffold prime survive .bin synthesis",
+          "[integration][modulus]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(picked < kQ0); // the wrap window [picked, kQ0) below relies on it
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+
+    // Seed the wrap window: values that exceed the scaffold prime but are
+    // valid mod the trace prime. A scalar-mul by 1 is the identity, so each
+    // output must equal its input exactly.
+    std::vector<uint64_t> vals(kRingDim);
+    for (uint64_t i = 0; i < kRingDim; ++i)
+        vals[i] = (i % 5 == 0) ? (kQ0 - 1 - (i % 7)) // in [picked, kQ0)
+                               : (i * 11 + 3) % picked;
+    vals[1] = picked;     // exact lower edge of the window
+    vals[2] = picked - 1; // just below — control
+
+    void *src = nullptr;
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&src, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(src, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMulScalar(dst, src, 1, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    for (uint64_t k = 0; k < kRingDim; ++k) {
+        INFO("slot " << k << " in=" << vals[k] << " picked=" << picked << " kQ0=" << kQ0);
+        REQUIRE(out[k] == vals[k]);
+    }
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
