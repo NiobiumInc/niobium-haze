@@ -25,6 +25,9 @@
 
 namespace haze {
 
+class BindingTable;
+class DeviceAllocator;
+
 // Canonical target string dispatched through libnbfhetch's compiler.
 // kLocalTarget runs the in-process FHETCH instruction-set simulator:
 // libnbfhetch loads the .fhetch trace into fhetch_sim::Simulator,
@@ -65,8 +68,13 @@ class Config {
   public:
     Config() = default; // constructed as a haze_context_s member
 
-    // FHE parameters (existing public API).
-    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept;
+    // FHE parameters (existing public API). The ring dimension also
+    // fixes the sibling components' geometry (allocator pool, binding
+    // slot tables); they are passed in so the update is atomic under
+    // the Config lock — Config holds no sibling references itself.
+    std::expected<void, HazeInternalError>
+    set_ring_dimension(uint64_t n, DeviceAllocator &alloc, BindingTable &values,
+                       BindingTable &recorded_moduli) noexcept;
     std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept;
     std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
                                                                  uint64_t generator) noexcept;
@@ -114,7 +122,7 @@ class Config {
     bool has_program_directory() const noexcept;
     std::string program_directory() const noexcept;
 
-    void reset() noexcept;
+    void reset(BindingTable &values) noexcept;
 
     Config(const Config &) = delete;
     Config &operator=(const Config &) = delete;

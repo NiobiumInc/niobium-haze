@@ -16,6 +16,7 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 #include "core/config.hpp"
+#include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/record.hpp"
 
@@ -96,7 +97,8 @@ const KernelCache::SubTape *KernelCache::find_locked(uint64_t key_hash,
 }
 
 std::expected<hazeKernelDisposition, HazeInternalError>
-KernelCache::begin(const char *name, uint64_t key_hash, std::span<const uint8_t> key_bytes,
+KernelCache::begin(Context &ctx, const char *name, uint64_t key_hash,
+                   std::span<const uint8_t> key_bytes,
                    std::span<const hazeKernelInput> inputs) noexcept {
     HazeLockGuard lock(mutex_);
     // Nesting is gated in the shim (NOT_SUPPORTED); a frame here with the
@@ -114,7 +116,7 @@ KernelCache::begin(const char *name, uint64_t key_hash, std::span<const uint8_t>
     frame->in_addrs = flatten_inputs(inputs);
     frame->in_vids.reserve(frame->in_addrs.size());
     for (DevAddr a : frame->in_addrs) {
-        const ValueId vid = bindings().load(a);
+        const ValueId vid = ctx.values.load(a);
         if (vid == kUnbound) {
             // Every kernel input must already be a recorded value (H2D'd
             // or computed); a kernel can't promote foreign shadow bytes.
@@ -136,7 +138,7 @@ KernelCache::begin(const char *name, uint64_t key_hash, std::span<const uint8_t>
             // Re-trace the body into a scratch frame and diff at End.
             frame->validate_against = hit;
             frame->body = std::make_unique<std::vector<Node>>();
-            graph().install_frame_sink(frame->body.get());
+            ctx.tape.install_frame_sink(frame->body.get());
             frame_ = std::move(frame);
             return HAZE_KERNEL_RECORD;
         }
@@ -146,7 +148,7 @@ KernelCache::begin(const char *name, uint64_t key_hash, std::span<const uint8_t>
     }
 
     frame->body = std::make_unique<std::vector<Node>>();
-    graph().install_frame_sink(frame->body.get());
+    ctx.tape.install_frame_sink(frame->body.get());
     frame_ = std::move(frame);
     return HAZE_KERNEL_RECORD;
 }
@@ -245,22 +247,22 @@ KernelCache::check_closed_body_locked(const OpenFrame &frame,
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static) — carries HAZE_REQUIRES(mutex_)
-void KernelCache::rollback_body_bindings_locked(const OpenFrame &frame) const {
+void KernelCache::rollback_body_bindings_locked(Context &ctx, const OpenFrame &frame) const {
     if (frame.body == nullptr)
         return;
     for (const Node &node : *frame.body) {
         if (node.dst_vid != kUnbound) {
-            bindings().erase(node.addr);
-            recorded_moduli().erase(node.addr);
+            ctx.values.erase(node.addr);
+            ctx.recorded_moduli.erase(node.addr);
         }
         for (DevAddr a : node.group_addrs) {
-            bindings().erase(a);
-            recorded_moduli().erase(a);
+            ctx.values.erase(a);
+            ctx.recorded_moduli.erase(a);
         }
     }
 }
 
-void KernelCache::instantiate_locked(const SubTape &sub, const OpenFrame &frame,
+void KernelCache::instantiate_locked(Context &ctx, const SubTape &sub, const OpenFrame &frame,
                                      std::span<const DevAddr> out_addrs,
                                      std::span<const uint64_t> out_moduli) {
     // Positional formal translation, total under the closed-body rule.
@@ -299,7 +301,7 @@ void KernelCache::instantiate_locked(const SubTape &sub, const OpenFrame &frame,
         // leading addr, so instances name exactly like cold recordings —
         // nothing to re-derive here.
         clone.vid_remap = vid_map;
-        graph().append(std::move(clone));
+        ctx.tape.append(std::move(clone));
     }
 
     // Bind the outputs to their instance values so subsequent ops (and
@@ -307,14 +309,14 @@ void KernelCache::instantiate_locked(const SubTape &sub, const OpenFrame &frame,
     // them — including the recorded modulus a cold bind_result stores,
     // which post-kernel copies/automorphs recover.
     for (size_t i = 0; i < sub.out_addrs.size(); ++i) {
-        bindings().store(out_addrs[i], fresh_vid(sub.out_vids[i]));
-        recorded_moduli().store(out_addrs[i], out_moduli[i]);
+        ctx.values.store(out_addrs[i], fresh_vid(sub.out_vids[i]));
+        ctx.recorded_moduli.store(out_addrs[i], out_moduli[i]);
     }
 }
 // NOLINTEND(readability-convert-member-functions-to-static)
 
 std::expected<void, HazeInternalError>
-KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
+KernelCache::end(Context &ctx, std::span<const hazeKernelOutput> outputs) noexcept {
     std::vector<DevAddr> out_addrs = flatten_outputs(outputs);
     {
         HazeLockGuard lock(mutex_);
@@ -325,7 +327,7 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
         }
         const std::unique_ptr<OpenFrame> frame = std::move(frame_);
         if (frame->body != nullptr)
-            graph().install_frame_sink(nullptr);
+            ctx.tape.install_frame_sink(nullptr);
 
         if (frame->replay != nullptr) {
             const SubTape &sub = *frame->replay;
@@ -356,19 +358,19 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
                     }
                 }
             }
-            instantiate_locked(sub, *frame, out_addrs, flatten_output_moduli(outputs));
+            instantiate_locked(ctx, sub, *frame, out_addrs, flatten_output_moduli(outputs));
         } else if (!frame->passthrough) {
             if (auto closed = check_closed_body_locked(*frame, out_addrs); !closed) {
-                rollback_body_bindings_locked(*frame);
+                rollback_body_bindings_locked(ctx, *frame);
                 return closed;
             }
 
             std::vector<ValueId> out_vids;
             out_vids.reserve(out_addrs.size());
             for (DevAddr a : out_addrs) {
-                const ValueId vid = bindings().load(a);
+                const ValueId vid = ctx.values.load(a);
                 if (vid == kUnbound) {
-                    rollback_body_bindings_locked(*frame);
+                    rollback_body_bindings_locked(ctx, *frame);
                     record_internal_error(HazeInternalError::SourceUnavailable,
                                           "hazeKernelEnd: declared output was never written");
                     return std::unexpected(HazeInternalError::SourceUnavailable);
@@ -390,7 +392,7 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
                            a.group_moduli == b.group_moduli;
                 }
                 if (!same) {
-                    rollback_body_bindings_locked(*frame);
+                    rollback_body_bindings_locked(ctx, *frame);
                     record_internal_error(HazeInternalError::KernelValidationFailed,
                                           "kernel re-trace diverged from the cached sub-tape");
                     return std::unexpected(HazeInternalError::KernelValidationFailed);
@@ -398,7 +400,7 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
                 // Equivalent: keep the fresh trace (cold-identical) and
                 // leave the cache entry in place.
                 for (Node &node : *frame->body)
-                    graph().append(std::move(node));
+                    ctx.tape.append(std::move(node));
             } else {
                 // Fresh recording: memoize a copy, then land the body on
                 // the main tape exactly as a cold recording would.
@@ -412,7 +414,7 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
                 sub->body = *frame->body; // copy: the original lands on the tape
                 cache_.emplace(frame->key_hash, std::move(sub));
                 for (Node &node : *frame->body)
-                    graph().append(std::move(node));
+                    ctx.tape.append(std::move(node));
             }
         }
     }
@@ -421,12 +423,12 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
     // Out<> contract). Outside the cache lock; record_tag_output appends
     // TagOutput nodes through the normal path.
     for (DevAddr a : out_addrs)
-        if (auto tagged = record_tag_output(a); !tagged)
+        if (auto tagged = record_tag_output(ctx, a); !tagged)
             return tagged;
     return {};
 }
 
-std::expected<void, HazeInternalError> KernelCache::abort_frame() noexcept {
+std::expected<void, HazeInternalError> KernelCache::abort_frame(Context &ctx) noexcept {
     HazeLockGuard lock(mutex_);
     if (frame_ == nullptr) {
         record_internal_error(HazeInternalError::InvalidArgument,
@@ -434,7 +436,7 @@ std::expected<void, HazeInternalError> KernelCache::abort_frame() noexcept {
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     if (frame_->body != nullptr)
-        graph().install_frame_sink(nullptr);
+        ctx.tape.install_frame_sink(nullptr);
     frame_.reset(); // recorded nodes die with the frame; nothing reached the tape
     return {};
 }
@@ -449,10 +451,10 @@ void KernelCache::set_validate(bool enabled) noexcept {
     validate_override_ = enabled ? 1 : 0;
 }
 
-void KernelCache::reset() noexcept {
+void KernelCache::reset(Context &ctx) noexcept {
     HazeLockGuard lock(mutex_);
     if (frame_ != nullptr && frame_->body != nullptr)
-        graph().install_frame_sink(nullptr);
+        ctx.tape.install_frame_sink(nullptr);
     frame_.reset();
     cache_.clear();
     // Overrides survive reset (mirrors hollow/multithreaded flags in

@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/context_fwd.hpp"
 #include "core/graph.hpp"
 
 #include <cstddef>
@@ -49,16 +50,20 @@ class KernelCache {
     // True while a Begin bracket is open (nesting gate for the shim).
     bool has_open_frame() const noexcept HAZE_EXCLUDES(mutex_);
 
+    // The owning context is passed in (rather than held) so the cache
+    // stays an inert value member of haze_context_s; ctx must be the
+    // context this cache is a member of.
     std::expected<hazeKernelDisposition, HazeInternalError>
-    begin(const char *name, uint64_t key_hash, std::span<const uint8_t> key_bytes,
+    begin(Context &ctx, const char *name, uint64_t key_hash, std::span<const uint8_t> key_bytes,
           std::span<const hazeKernelInput> inputs) noexcept HAZE_EXCLUDES(mutex_);
 
-    std::expected<void, HazeInternalError> end(std::span<const hazeKernelOutput> outputs) noexcept
+    std::expected<void, HazeInternalError> end(Context &ctx,
+                                               std::span<const hazeKernelOutput> outputs) noexcept
         HAZE_EXCLUDES(mutex_);
 
     // Discard the open frame after a body error (no memo entry, no
     // nodes reach the main tape).
-    std::expected<void, HazeInternalError> abort_frame() noexcept HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> abort_frame(Context &ctx) noexcept HAZE_EXCLUDES(mutex_);
 
     // Toggles; unset means "consult the env" (HAZE_KERNEL_MEMO,
     // HAZE_KERNEL_VALIDATE), matching HAZE_TARGET's resolution style.
@@ -67,7 +72,7 @@ class KernelCache {
 
     // hazeDeviceReset: drop the cache and any open bracket (the sink is
     // cleared by Graph::reset; call this first).
-    void reset() noexcept HAZE_EXCLUDES(mutex_);
+    void reset(Context &ctx) noexcept HAZE_EXCLUDES(mutex_);
 
     KernelCache(const KernelCache &) = delete;
     KernelCache &operator=(const KernelCache &) = delete;
@@ -106,8 +111,9 @@ class KernelCache {
     // a caller that continues recording past a failed End sees a LOUD
     // SourceUnavailable on next use instead of a stale value resolving
     // to a node that never reached the tape.
-    void rollback_body_bindings_locked(const OpenFrame &frame) const HAZE_REQUIRES(mutex_);
-    void instantiate_locked(const SubTape &sub, const OpenFrame &frame,
+    void rollback_body_bindings_locked(Context &ctx, const OpenFrame &frame) const
+        HAZE_REQUIRES(mutex_);
+    void instantiate_locked(Context &ctx, const SubTape &sub, const OpenFrame &frame,
                             std::span<const DevAddr> out_addrs,
                             std::span<const uint64_t> out_moduli) HAZE_REQUIRES(mutex_);
 

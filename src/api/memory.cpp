@@ -13,6 +13,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
+#include "core/context.hpp"
 #include "core/mrp_polymap.hpp"
 #include "core/record.hpp"
 
@@ -26,7 +27,7 @@
 extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
     if (ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    auto result = haze::allocator().allocate(size);
+    auto result = haze::default_context().allocator.allocate(size);
     if (!result)
         return set_error(haze::to_public_error(result.error()));
     *ptr = haze::to_void_ptr(*result);
@@ -34,9 +35,10 @@ extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
 }
 
 extern "C" hazeError_t hazeFree(void *ptr) noexcept {
+    haze::Context &ctx = haze::default_context();
     if (ptr != nullptr)
-        haze::record_invalidate(haze::to_dev_addr(ptr));
-    return set_internal_result(haze::allocator().free(haze::to_dev_addr(ptr)));
+        haze::record_invalidate(ctx, haze::to_dev_addr(ptr));
+    return set_internal_result(ctx.allocator.free(haze::to_dev_addr(ptr)));
 }
 
 extern "C" hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t /*stream*/) noexcept {
@@ -61,13 +63,13 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
     // headers in turn rejects. Suppress the cleaner here only.
     if (posix_memalign(&p, kHostAllocAlignment, size) != 0) // NOLINT(misc-include-cleaner)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
-    haze::allocator().register_host_pointer(p);
+    haze::default_context().allocator.register_host_pointer(p);
     *ptr = p;
     return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
-    haze::allocator().unregister_host_pointer(ptr);
+    haze::default_context().allocator.unregister_host_pointer(ptr);
     // posix_memalign-allocated; libc free is the matched deallocator.
     free(ptr); // NOLINT(cppcoreguidelines-no-malloc)
     return HAZE_SUCCESS;
@@ -75,7 +77,7 @@ extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
 
 extern "C" hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
                                                 const void *ptr) noexcept {
-    return set_internal_result(haze::allocator().pointer_attributes(attrs, ptr));
+    return set_internal_result(haze::default_context().allocator.pointer_attributes(attrs, ptr));
 }
 
 extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
@@ -83,23 +85,24 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
 
-    auto &alloc = haze::allocator();
+    haze::Context &ctx = haze::default_context();
+    auto &alloc = ctx.allocator;
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
         const haze::DevAddr dev = haze::to_dev_addr(dst);
         if (auto h2d = alloc.copy_h2d(dev, src, count); !h2d)
             return set_internal_result(h2d);
-        return set_internal_result(haze::tag_h2d_input(dev));
+        return set_internal_result(haze::tag_h2d_input(ctx, dev));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST) {
         // D2H is a pure shadow read; see haze::copy_to_host for the contract.
-        return set_internal_result(haze::copy_to_host(dst, haze::to_dev_addr(src), count));
+        return set_internal_result(haze::copy_to_host(ctx, dst, haze::to_dev_addr(src), count));
     }
 
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE) {
-        return set_internal_result(
-            haze::copy_device_to_device(haze::to_dev_addr(dst), haze::to_dev_addr(src), count));
+        return set_internal_result(haze::copy_device_to_device(ctx, haze::to_dev_addr(dst),
+                                                               haze::to_dev_addr(src), count));
     }
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
@@ -115,13 +118,14 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
                                      size_t base_len) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    haze::Context &ctx = haze::default_context();
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
-        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base_len));
+        return set_internal_result(haze::copy_h2d_mrp(ctx, dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
-        return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
+        return set_internal_result(haze::copy_to_host_mrp(ctx, dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)
-        return set_internal_result(haze::copy_device_to_device_mrp(dst, src, base, base_len));
+        return set_internal_result(haze::copy_device_to_device_mrp(ctx, dst, src, base, base_len));
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
@@ -129,10 +133,11 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
 extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
     if (dev_ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    haze::Context &ctx = haze::default_context();
     const haze::DevAddr dev = haze::to_dev_addr(dev_ptr);
-    if (auto result = haze::allocator().memset(dev, value, count); !result)
+    if (auto result = ctx.allocator.memset(dev, value, count); !result)
         return set_internal_result(result);
-    haze::record_invalidate(dev);
+    haze::record_invalidate(ctx, dev);
     return HAZE_SUCCESS;
 }
 

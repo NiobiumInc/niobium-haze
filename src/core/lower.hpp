@@ -14,6 +14,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/context_fwd.hpp"
 #include "core/graph.hpp"
 #include "core/lowering_session.hpp"
 
@@ -106,7 +107,7 @@ struct LowerCtx {
     LoweringSession &session() const noexcept { return *session_; }
 
   private:
-    friend std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept;
+    friend std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) noexcept;
 
     // Memoized-instance translation for the node currently lowering:
     // thunks captured the recording call's vids; identity when null.
@@ -119,10 +120,11 @@ struct LowerCtx {
     size_t node_idx_ = 0;
 };
 
-// Seal the tape, derive, lower, and run the stop/replay/populate
-// pipeline. run_replay=false backs hazeWriteProgram (stop after the
-// project dir is written); true backs hazeFlush. Serialized internally;
-// returns without side effects when nothing was recorded.
-std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept;
+// Seal the context's tape, derive, lower, and run the stop/replay/
+// populate pipeline. run_replay=false backs hazeWriteProgram (stop
+// after the project dir is written); true backs hazeFlush. Serialized
+// internally (the fhetch engine is still a process global); returns
+// without side effects when nothing was recorded.
+std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) noexcept;
 
 } // namespace haze

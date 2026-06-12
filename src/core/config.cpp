@@ -43,7 +43,9 @@ bool env_flag(const char *name, bool fallback) noexcept {
     return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
 }
 
-std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) noexcept {
+std::expected<void, HazeInternalError>
+Config::set_ring_dimension(uint64_t n, DeviceAllocator &alloc, BindingTable &values,
+                           BindingTable &recorded_moduli) noexcept {
     if (!is_supported_ring_dim(n))
         return std::unexpected(HazeInternalError::InvalidArgument);
     // Hold the Config lock across the allocator update so no observer
@@ -54,11 +56,11 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
     if (configured_ && ring_dim_ != n)
         return std::unexpected(HazeInternalError::NotConfigured);
     ring_dim_ = n;
-    allocator().set_polynomial_size(n * sizeof(uint64_t));
+    alloc.set_polynomial_size(n * sizeof(uint64_t));
     // Keep the record path's slot table on the same geometry as the
     // allocator pool. Reachable only pre-freeze, i.e. with no bindings.
-    bindings().set_slot_bytes(n * sizeof(uint64_t));
-    recorded_moduli().set_slot_bytes(n * sizeof(uint64_t));
+    values.set_slot_bytes(n * sizeof(uint64_t));
+    recorded_moduli.set_slot_bytes(n * sizeof(uint64_t));
     return {};
 }
 
@@ -261,12 +263,12 @@ bool Config::bit_reversal() const noexcept {
     return env_flag("HAZE_BIT_REVERSAL", false);
 }
 
-void Config::reset() noexcept {
+void Config::reset(BindingTable &values) noexcept {
     HazeLockGuard lock(mutex_);
     // Safe to free: reset concurrent with recording is documented-
     // undefined, so no lock-free reader holds the snapshot here.
     delete snapshot_.exchange(nullptr, std::memory_order_acq_rel);
-    bindings().set_slot_bytes(0);
+    values.set_slot_bytes(0);
     ring_dim_ = 0;
     moduli_.clear();
     twiddle_generators_.clear();

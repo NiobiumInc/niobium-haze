@@ -14,6 +14,7 @@
 #include "core/basis_convert.hpp"
 
 #include "common/errors.hpp"
+#include "core/context.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
@@ -25,7 +26,7 @@ hazeError_t dispatch(void *const *dst, const void *const *src, const void *param
     if (params == nullptr || src == nullptr || dst == nullptr) {
         return set_error(HAZE_ERROR_INVALID_VALUE);
     }
-    auto result = OpFn(dst, src, *static_cast<const ParamsT *>(params));
+    auto result = OpFn(haze::default_context(), dst, src, *static_cast<const ParamsT *>(params));
     if (!result) {
         return set_error(haze::to_public_error(result.error()));
     }

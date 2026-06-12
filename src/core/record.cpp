@@ -17,6 +17,7 @@
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
+#include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/lower.hpp"
 
@@ -36,32 +37,32 @@ namespace {
 // (format included) — shared by lazy promotion and the H2D eager tag.
 Thunk make_input_thunk(std::vector<uint64_t> &&bytes, uint64_t ring_dim, ValueId vid) {
     return [bytes = std::move(bytes), ring_dim,
-            vid](LowerCtx &ctx) mutable -> std::expected<void, HazeInternalError> {
+            vid](LowerCtx &lower) mutable -> std::expected<void, HazeInternalError> {
         fhetch::Polynomial poly =
             fhetch::Polynomial::from_data(std::move(bytes), ring_dim, fhetch::Format::Evaluation);
-        fhetch::tag_input(ctx.node_name(), poly);
-        ctx.bind(vid, std::move(poly));
+        fhetch::tag_input(lower.node_name(), poly);
+        lower.bind(vid, std::move(poly));
         return {};
     };
 }
 } // namespace
 
-const ConfigSnapshot *record_prelude() noexcept {
+const ConfigSnapshot *record_prelude(Context &ctx) noexcept {
     // Init before anything else so first-call side effects (program-dir
     // resolution, probe suppression) keep their eager-engine timing;
     // failure surfaces at flush, not here.
-    [[maybe_unused]] const bool initialized = backend().ensure_initialized();
-    return config().freeze();
+    [[maybe_unused]] const bool initialized = backend().ensure_initialized(ctx.config);
+    return ctx.config.freeze();
 }
 
-std::expected<ValueId, HazeInternalError> resolve_operand(DevAddr addr,
+std::expected<ValueId, HazeInternalError> resolve_operand(Context &ctx, DevAddr addr,
                                                           uint64_t ring_dim) noexcept {
-    if (const ValueId existing = bindings().load(addr); existing != kUnbound)
+    if (const ValueId existing = ctx.values.load(addr); existing != kUnbound)
         return existing;
 
     // Evicting read: the caller now owns the bytes via the recording;
     // the shadow is freed mid-program exactly as the eager engine did.
-    auto components = allocator().extract_polynomial_components(addr, ring_dim);
+    auto components = ctx.allocator.extract_polynomial_components(addr, ring_dim);
     if (!components) {
         // Compute / D2D on an addr with neither shadow data nor a
         // binding is undefined under the record-and-replay model.
@@ -74,7 +75,7 @@ std::expected<ValueId, HazeInternalError> resolve_operand(DevAddr addr,
     }
 
     const ValueId fresh = new_value_id();
-    if (const ValueId resident = bindings().promote(addr, fresh); resident != fresh) {
+    if (const ValueId resident = ctx.values.promote(addr, fresh); resident != fresh) {
         // Another thread first-touched the same addr (user-undefined,
         // memory-safe): adopt the winner and drop our snapshot.
         return resident;
@@ -86,30 +87,30 @@ std::expected<ValueId, HazeInternalError> resolve_operand(DevAddr addr,
     node.dst_vid = fresh;
     node.entry = "haze input promotion";
     node.thunk = make_input_thunk(std::move(*components), ring_dim, fresh);
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
     return fresh;
 }
 
-ValueId bind_result(DevAddr addr, uint64_t modulus) noexcept {
+ValueId bind_result(Context &ctx, DevAddr addr, uint64_t modulus) noexcept {
     const ValueId fresh = new_value_id();
-    bindings().store(addr, fresh);
+    ctx.values.store(addr, fresh);
     // A no-modulus (kCopyModulus) result drops any stale entry so a
     // later copy/automorph can't recover a previous occupant's modulus.
     if (modulus != kCopyModulus)
-        recorded_moduli().store(addr, modulus);
+        ctx.recorded_moduli.store(addr, modulus);
     else
-        recorded_moduli().erase(addr);
+        ctx.recorded_moduli.erase(addr);
     return fresh;
 }
 
-uint64_t recorded_modulus(DevAddr addr) noexcept {
-    const uint64_t q = recorded_moduli().load(addr);
+uint64_t recorded_modulus(Context &ctx, DevAddr addr) noexcept {
+    const uint64_t q = ctx.recorded_moduli.load(addr);
     return q == 0 ? kCopyModulus : q;
 }
 
-std::expected<void, HazeInternalError> record_copy(DevAddr dst, DevAddr src, uint64_t ring_dim,
-                                                   uint64_t modulus) noexcept {
-    const auto src_vid = resolve_operand(src, ring_dim);
+std::expected<void, HazeInternalError> record_copy(Context &ctx, DevAddr dst, DevAddr src,
+                                                   uint64_t ring_dim, uint64_t modulus) noexcept {
+    const auto src_vid = resolve_operand(ctx, src, ring_dim);
     if (!src_vid)
         return std::unexpected(src_vid.error());
     // The op carries the COPY sentinel (the executor lowers ADDI imm=0
@@ -117,10 +118,10 @@ std::expected<void, HazeInternalError> record_copy(DevAddr dst, DevAddr src, uin
     // rides as metadata. Recover it from the source when the caller
     // passed none, and record it back onto src to match the binding.
     if (modulus == kCopyModulus)
-        modulus = recorded_modulus(src);
+        modulus = recorded_modulus(ctx, src);
     if (modulus != kCopyModulus)
-        recorded_moduli().store(src, modulus);
-    const ValueId dst_vid = bind_result(dst, modulus);
+        ctx.recorded_moduli.store(src, modulus);
+    const ValueId dst_vid = bind_result(ctx, dst, modulus);
 
     Node node{};
     node.kind = Node::Kind::Copy;
@@ -129,8 +130,8 @@ std::expected<void, HazeInternalError> record_copy(DevAddr dst, DevAddr src, uin
     node.src_vids = {*src_vid};
     node.entry = "hazeMemcpy D2D";
     node.thunk = [s = *src_vid, d = dst_vid,
-                  modulus](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
-        const auto src_poly = ctx.poly(s);
+                  modulus](LowerCtx &lower) -> std::expected<void, HazeInternalError> {
+        const auto src_poly = lower.poly(s);
         if (!src_poly)
             return std::unexpected(src_poly.error());
         auto copy = fhetch::sr_addps(**src_poly, fhetch::Scalar::from_int(0), kCopyModulus);
@@ -140,19 +141,19 @@ std::expected<void, HazeInternalError> record_copy(DevAddr dst, DevAddr src, uin
             fhetch::bind_modulus(**src_poly, modulus);
             fhetch::bind_modulus(copy, modulus);
         }
-        ctx.bind(d, std::move(copy));
+        lower.bind(d, std::move(copy));
         return {};
     };
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
     return {};
 }
 
-std::expected<void, HazeInternalError> record_h2d_input(DevAddr addr) noexcept {
+std::expected<void, HazeInternalError> record_h2d_input(Context &ctx, DevAddr addr) noexcept {
     // Both guards cover invariants the H2D entry point already enforced
     // (copy_h2d requires alloc_set_ membership and a configured
     // poly_bytes_); hits are broken-haze internal errors so the input
     // tag is never silently dropped.
-    const ConfigSnapshot *cfg = config().freeze();
+    const ConfigSnapshot *cfg = ctx.config.freeze();
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
                               "record_h2d_input: unconfigured after copy_h2d");
@@ -161,7 +162,7 @@ std::expected<void, HazeInternalError> record_h2d_input(DevAddr addr) noexcept {
     const uint64_t ring_dim = cfg->ring_dim;
     // Non-evicting: a subsequent compute-free D2H still reads the
     // original H2D bytes from the shadow.
-    auto components = allocator().read_polynomial_components(addr, ring_dim);
+    auto components = ctx.allocator.read_polynomial_components(addr, ring_dim);
     if (!components)
         return std::unexpected(components.error());
 
@@ -172,14 +173,14 @@ std::expected<void, HazeInternalError> record_h2d_input(DevAddr addr) noexcept {
     node.dst_vid = fresh;
     node.entry = "hazeMemcpy H2D";
     node.thunk = make_input_thunk(std::move(*components), ring_dim, fresh);
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
     // New H2D bytes are the truth at addr: overwrite any binding.
-    bindings().store(addr, fresh);
+    ctx.values.store(addr, fresh);
     return {};
 }
 
-std::expected<void, HazeInternalError> record_tag_output(DevAddr addr) noexcept {
-    if (bindings().load(addr) == kUnbound) {
+std::expected<void, HazeInternalError> record_tag_output(Context &ctx, DevAddr addr) noexcept {
+    if (ctx.values.load(addr) == kUnbound) {
         record_internal_error(HazeInternalError::SourceUnavailable,
                               "record_tag_output: addr not bound");
         return std::unexpected(HazeInternalError::SourceUnavailable);
@@ -188,65 +189,67 @@ std::expected<void, HazeInternalError> record_tag_output(DevAddr addr) noexcept 
     node.kind = Node::Kind::TagOutput;
     node.addr = addr;
     node.entry = "hazeTagOutput";
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
     return {};
 }
 
-void record_invalidate(DevAddr addr) noexcept {
-    bindings().erase(addr);
-    recorded_moduli().erase(addr);
+void record_invalidate(Context &ctx, DevAddr addr) noexcept {
+    ctx.values.erase(addr);
+    ctx.recorded_moduli.erase(addr);
     // Empty tape ⇒ no binding/group can reference addr, and a metadata
     // node would make a compute-free hazeFlush initialize the backend.
     // An installed kernel-frame sink overrides the skip: the node must
     // reach the frame so the closed-body free/memset ban can see it.
-    if (graph().size() == 0 && !graph().frame_sink_installed())
+    if (ctx.tape.size() == 0 && !ctx.tape.frame_sink_installed())
         return;
     Node node{};
     node.kind = Node::Kind::Invalidate;
     node.addr = addr;
     node.entry = "hazeFree/hazeMemset";
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
 }
 
-std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    return allocator().copy_to_host(dst, src, count);
+std::expected<void, HazeInternalError> copy_to_host(Context &ctx, void *dst, DevAddr src,
+                                                    size_t count) noexcept {
+    return ctx.allocator.copy_to_host(dst, src, count);
 }
 
-std::expected<void, HazeInternalError> write_program() noexcept {
-    return finalize(/*run_replay=*/false);
+std::expected<void, HazeInternalError> write_program(Context &ctx) noexcept {
+    return finalize(ctx, /*run_replay=*/false);
 }
 
-std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
-    return record_tag_output(addr);
+std::expected<void, HazeInternalError> tag_output(Context &ctx, DevAddr addr) noexcept {
+    return record_tag_output(ctx, addr);
 }
 
-std::expected<void, HazeInternalError> flush() noexcept {
+std::expected<void, HazeInternalError> flush(Context &ctx) noexcept {
     // Montgomery / bit-reversed traces can't execute on the in-process
     // simulator; surface the failure at the flush call instead of a
     // silent no-op followed by OutputNotFlushed on the next D2H.
-    if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
+    if ((ctx.config.montgomery() || ctx.config.bit_reversal()) &&
+        ctx.config.target() == kLocalTarget) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "haze::flush (montgomery/bit_reversal require a transport "
                               "target such as FUNC_SIM)");
         return std::unexpected(HazeInternalError::UnsupportedDataFormat);
     }
-    return finalize(/*run_replay=*/true);
+    return finalize(ctx, /*run_replay=*/true);
 }
 
-std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
+std::expected<void, HazeInternalError> copy_device_to_device(Context &ctx, DevAddr dst, DevAddr src,
                                                              size_t /*count*/) noexcept {
-    const ConfigSnapshot *cfg = record_prelude();
+    const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
                               "hazeMemcpy D2D before hazeSetRingDimension");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
-    return record_copy(dst, src, cfg->ring_dim);
+    return record_copy(ctx, dst, src, cfg->ring_dim);
 }
 
-std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept {
-    [[maybe_unused]] const bool initialized = backend().ensure_initialized();
-    return record_h2d_input(addr);
+std::expected<void, HazeInternalError> tag_h2d_input(Context &ctx, DevAddr addr) noexcept {
+    [[maybe_unused]] const bool initialized = backend().ensure_initialized(ctx.config);
+    return record_h2d_input(ctx, addr);
 }
 
 } // namespace haze

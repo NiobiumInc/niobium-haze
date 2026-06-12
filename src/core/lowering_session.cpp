@@ -13,6 +13,7 @@
 #include "core/lowering_session.hpp"
 
 #include "core/backend.hpp"
+#include "core/context.hpp"
 
 #include <haze/replay_bridge.h>
 #include <niobium/compiler.h>
@@ -23,13 +24,13 @@ namespace haze {
 // is the only one that may name niobium::compiler() / CompilerBackend
 // on the flush path (see the seam note in the header).
 //
-// The members are instance methods BY DESIGN even though nothing reads
+// The members are instance methods BY DESIGN even where nothing reads
 // member state yet: they become forwards to the session's owned fhetch
 // context, and the call sites must not churn when that lands.
 // NOLINTBEGIN(readability-convert-member-functions-to-static)
 
 bool LoweringSession::ensure_backend() noexcept {
-    return backend().ensure_initialized();
+    return backend().ensure_initialized(ctx_->config);
 }
 
 void LoweringSession::begin_epoch() noexcept {

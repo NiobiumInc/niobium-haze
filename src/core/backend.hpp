@@ -18,6 +18,8 @@
 
 namespace haze {
 
+class Config;
+
 // Control surface for the niobium::compiler() singleton. HAZE records
 // FHETCH IR via fhetch::sr_*, fhetch::tag_input, and fhetch::result;
 // those route to the linked fhetch "dummy" compiler implicitly. CompilerBackend wraps
@@ -32,13 +34,13 @@ class CompilerBackend {
     static CompilerBackend &instance() noexcept;
 
     // Initialize the underlying compiler with program / target metadata
-    // pulled from Config. Idempotent and safe to call concurrently;
+    // pulled from the given Config. Idempotent and safe to call concurrently;
     // first caller wins, others no-op once init completes. Returns true
     // on success — callers should propagate the error (returns false if
     // the underlying init throws, in which case the backend stays
     // unusable and subsequent compute calls fail at the recording-start
     // gate rather than crashing inside the compiler).
-    [[nodiscard]] bool ensure_initialized() noexcept;
+    [[nodiscard]] bool ensure_initialized(const Config &cfg) noexcept;
 
     // True iff ensure_initialized() has completed successfully.
     bool is_initialized() const noexcept;

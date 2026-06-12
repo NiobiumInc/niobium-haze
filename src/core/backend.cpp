@@ -34,7 +34,7 @@ CompilerBackend &CompilerBackend::instance() noexcept {
     return inst;
 }
 
-bool CompilerBackend::ensure_initialized() noexcept {
+bool CompilerBackend::ensure_initialized(const Config &cfg) noexcept {
     // Lock-free fast path for the common case where init has already
     // completed. The acquire load pairs with the release store below so
     // any reads after this point see the fully-initialized state.
@@ -48,9 +48,9 @@ bool CompilerBackend::ensure_initialized() noexcept {
 
     // The local simulator runs ordinary-form traces only; reject the
     // Montgomery / bit-reversal toggles here so the error names the real cause.
-    const bool montgomery = config().montgomery();
-    const bool bit_reversal = config().bit_reversal();
-    if ((montgomery || bit_reversal) && config().target() == kLocalTarget) {
+    const bool montgomery = cfg.montgomery();
+    const bool bit_reversal = cfg.bit_reversal();
+    if ((montgomery || bit_reversal) && cfg.target() == kLocalTarget) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
                               "require a transport target such as FUNC_SIM)");
@@ -60,10 +60,10 @@ bool CompilerBackend::ensure_initialized() noexcept {
     // niobium::compiler() can throw (bad_alloc, config errors); catch here
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
-        const std::string program_name = config().program_name();
-        const std::string program_version = config().program_version();
-        const std::string program_description = config().program_description();
-        const std::string target = config().target();
+        const std::string program_name = cfg.program_name();
+        const std::string program_version = cfg.program_version();
+        const std::string program_description = cfg.program_description();
+        const std::string target = cfg.target();
 
         // Synthesize a minimal argv to pass --target= (and the Montgomery /
         // bit-reversal flags) to compiler().init() — no setters are exposed.
@@ -86,8 +86,8 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // the project (.fhetch + inputs + templates + cryptocontext) lands
         // here instead of cwd/<program_name>. Must precede the first compute
         // op so it's in effect when stop_epoch() writes the trace.
-        if (config().has_program_directory())
-            niobium::compiler().set_program_directory(config().program_directory());
+        if (cfg.has_program_directory())
+            niobium::compiler().set_program_directory(cfg.program_directory());
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.

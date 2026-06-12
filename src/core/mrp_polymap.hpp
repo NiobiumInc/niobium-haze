@@ -14,6 +14,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/context_fwd.hpp"
 #include "core/graph.hpp"
 #include "core/lower.hpp"
 
@@ -38,7 +39,7 @@ namespace haze {
 // the bridge can synthesize a multi-tower input ciphertext. Returns the
 // residues' values in base order.
 std::expected<std::vector<ValueId>, HazeInternalError>
-record_mrp_sources(const void *const *polys, const uint64_t *base, std::size_t len,
+record_mrp_sources(Context &ctx, const void *const *polys, const uint64_t *base, std::size_t len,
                    uint64_t ring_dim) noexcept;
 
 // Fresh result bindings for the K dst residues. Call AFTER every
@@ -47,11 +48,13 @@ struct MrpDests {
     std::vector<DevAddr> addrs;
     std::vector<ValueId> vids;
 };
-MrpDests record_mrp_dests(void *const *dst_polys, const uint64_t *base, std::size_t len) noexcept;
+MrpDests record_mrp_dests(Context &ctx, void *const *dst_polys, const uint64_t *base,
+                          std::size_t len) noexcept;
 
 // Register the dst residues as an MRP output group (no-op for len == 1;
 // the addr-derived name dedups re-registration of the same op).
-std::expected<void, HazeInternalError> record_mrp_out_group(std::span<const DevAddr> addrs,
+std::expected<void, HazeInternalError> record_mrp_out_group(Context &ctx,
+                                                            std::span<const DevAddr> addrs,
                                                             const uint64_t *base,
                                                             std::size_t len) noexcept;
 
@@ -59,19 +62,20 @@ std::expected<void, HazeInternalError> record_mrp_out_group(std::span<const DevA
 // polynomials into an fhetch MRP (the from_pairs the eager build_mrp
 // did at record time).
 std::expected<niobium::fhetch::MRP, HazeInternalError>
-build_lowered_mrp(const LowerCtx &ctx, const std::vector<ValueId> &vids,
+build_lowered_mrp(const LowerCtx &lower, const std::vector<ValueId> &vids,
                   const std::vector<uint64_t> &base);
 
 // Per-residue fan-out backing hazeMemcpyMrp; signatures unchanged from
 // the eager engine.
-std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
-                                                    std::size_t count, std::size_t len) noexcept;
+std::expected<void, HazeInternalError> copy_h2d_mrp(Context &ctx, void *const *dst,
+                                                    const void *const *src, std::size_t count,
+                                                    std::size_t len) noexcept;
 
-std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
-                                                        std::size_t count,
+std::expected<void, HazeInternalError> copy_to_host_mrp(Context &ctx, void *const *dst,
+                                                        const void *const *src, std::size_t count,
                                                         std::size_t len) noexcept;
 
-std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
+std::expected<void, HazeInternalError> copy_device_to_device_mrp(Context &ctx, void *const *dst,
                                                                  const void *const *src,
                                                                  const uint64_t *base,
                                                                  std::size_t len) noexcept;

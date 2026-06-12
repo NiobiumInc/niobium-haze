@@ -12,6 +12,8 @@
 // from the Product.
 #pragma once
 
+#include "core/context_fwd.hpp"
+
 namespace haze {
 
 // The per-flush handle to the fhetch/compiler control surface — the
@@ -34,7 +36,10 @@ namespace haze {
 // compiler/fhetch control calls HERE, never inline in lower.cpp.
 class LoweringSession {
   public:
-    LoweringSession() = default;
+    // Binds the flush to the context being lowered: backend init reads
+    // the context's Config, and the planned per-flush fhetch scrub will
+    // re-derive program info / target / ring dim from it.
+    explicit LoweringSession(Context &ctx) noexcept : ctx_(&ctx) {}
     LoweringSession(const LoweringSession &) = delete;
     LoweringSession &operator=(const LoweringSession &) = delete;
 
@@ -61,6 +66,9 @@ class LoweringSession {
     // Drop captured input/output state so a failed materialize can't
     // leak into the next epoch. Safe to call on every exit path.
     void clear_captured() noexcept;
+
+  private:
+    Context *ctx_;
 };
 
 } // namespace haze

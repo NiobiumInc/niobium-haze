@@ -13,6 +13,7 @@
 #pragma once
 
 #include "common/errors.hpp"
+#include "core/context_fwd.hpp"
 
 #include <cstddef>
 #include <expected>
@@ -26,13 +27,16 @@ namespace haze {
 // Each function does its own pre-flight validation on the params struct
 // and opens an EpochSession internally.
 
-std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
+std::expected<void, HazeInternalError> basis_convert(Context &ctx, void *const *dst,
+                                                     const void *const *src,
                                                      const hazeBasisConvertParams &params) noexcept;
 
-std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
+std::expected<void, HazeInternalError> mod_down(Context &ctx, void *const *dst,
+                                                const void *const *src,
                                                 const hazeModDownParams &params) noexcept;
 
-std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
+std::expected<void, HazeInternalError> mod_up(Context &ctx, void *const *dst,
+                                              const void *const *src,
                                               const hazeModUpParams &params) noexcept;
 
 } // namespace haze

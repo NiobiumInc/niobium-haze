@@ -16,6 +16,7 @@
 // include/haze/haze.h.
 
 #include "common/errors.hpp"
+#include "core/context.hpp"
 #include "core/kernel_cache.hpp"
 #include "core/record.hpp"
 
@@ -50,15 +51,16 @@ extern "C" hazeError_t hazeKernelBegin(const char *name, uint64_t key_hash,
     if (name == nullptr || disposition == nullptr || (key_bytes_len != 0 && key_bytes == nullptr) ||
         !well_formed(inputs, n_inputs))
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    haze::Context &ctx = haze::default_context();
     // Nesting a kernel inside an open bracket is reserved future work.
-    if (haze::kernel_cache().has_open_frame())
+    if (ctx.kernels.has_open_frame())
         return set_error(HAZE_ERROR_NOT_SUPPORTED);
     // Bring the backend up / freeze parameters with first-compute timing
     // even when the body is about to be skipped.
-    (void)haze::record_prelude();
+    (void)haze::record_prelude(ctx);
 
     auto result =
-        haze::kernel_cache().begin(name, key_hash, {key_bytes, key_bytes_len}, {inputs, n_inputs});
+        ctx.kernels.begin(ctx, name, key_hash, {key_bytes, key_bytes_len}, {inputs, n_inputs});
     if (!result)
         return set_error(haze::to_public_error(result.error()));
     *disposition = *result;
@@ -68,19 +70,21 @@ extern "C" hazeError_t hazeKernelBegin(const char *name, uint64_t key_hash,
 extern "C" hazeError_t hazeKernelEnd(const hazeKernelOutput *outputs, size_t n_outputs) noexcept {
     if (!well_formed(outputs, n_outputs))
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::kernel_cache().end({outputs, n_outputs}));
+    haze::Context &ctx = haze::default_context();
+    return set_internal_result(ctx.kernels.end(ctx, {outputs, n_outputs}));
 }
 
 extern "C" hazeError_t hazeKernelAbort(void) noexcept {
-    return set_internal_result(haze::kernel_cache().abort_frame());
+    haze::Context &ctx = haze::default_context();
+    return set_internal_result(ctx.kernels.abort_frame(ctx));
 }
 
 extern "C" hazeError_t hazeSetKernelMemo(int enable) noexcept {
-    haze::kernel_cache().set_memo_enabled(enable != 0);
+    haze::default_context().kernels.set_memo_enabled(enable != 0);
     return set_error(HAZE_SUCCESS);
 }
 
 extern "C" hazeError_t hazeSetKernelValidate(int enable) noexcept {
-    haze::kernel_cache().set_validate(enable != 0);
+    haze::default_context().kernels.set_validate(enable != 0);
     return set_error(HAZE_SUCCESS);
 }

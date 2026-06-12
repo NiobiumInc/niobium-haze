@@ -8,6 +8,7 @@
 
 #include "common/handle.hpp"
 #include "core/config.hpp"
+#include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/lower.hpp"
 
@@ -183,8 +184,8 @@ namespace {
 // full reset so the C-ABI test cases (which reset via hazeDeviceReset)
 // never observe a frozen leftover.
 struct ConfigResetFixture {
-    ConfigResetFixture() { haze::config().reset(); }
-    ~ConfigResetFixture() { haze::config().reset(); }
+    ConfigResetFixture() { haze::config().reset(haze::bindings()); }
+    ~ConfigResetFixture() { haze::config().reset(haze::bindings()); }
     ConfigResetFixture(const ConfigResetFixture &) = delete;
     ConfigResetFixture &operator=(const ConfigResetFixture &) = delete;
 };
@@ -196,7 +197,7 @@ TEST_CASE("Config::freeze is a no-op before ring_dim is set", "[unit][tape]") {
     REQUIRE(haze::config().freeze() == nullptr);
     REQUIRE_FALSE(haze::config().frozen());
     // The failed early freeze must not lock the user out of configuring.
-    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
     REQUIRE(haze::config().set_modulus(0, 576460752303415297ULL).has_value());
 }
 
@@ -204,7 +205,7 @@ TEST_CASE("Config::freeze publishes an immutable snapshot", "[unit][tape]") {
     ConfigResetFixture fixture;
     constexpr uint64_t kQ0 = 576460752303415297ULL;
     constexpr uint64_t kQ1 = 576460752303439873ULL;
-    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
     REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
     REQUIRE(haze::config().set_modulus(1, kQ1).has_value());
 
@@ -224,22 +225,22 @@ TEST_CASE("Config::freeze publishes an immutable snapshot", "[unit][tape]") {
 TEST_CASE("Config: post-freeze mutation gets the configure_device treatment", "[unit][tape]") {
     ConfigResetFixture fixture;
     constexpr uint64_t kQ0 = 576460752303415297ULL;
-    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
     REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
     REQUIRE(haze::config().freeze() != nullptr);
 
     // Identical re-sets keep succeeding (idempotent setters)...
-    REQUIRE(haze::config().set_ring_dimension(4096).has_value());
+    REQUIRE(haze::set_ring_dimension(haze::default_context(), 4096).has_value());
     REQUIRE(haze::config().set_modulus(0, kQ0).has_value());
     // ...changes are rejected.
-    REQUIRE_FALSE(haze::config().set_ring_dimension(8192).has_value());
+    REQUIRE_FALSE(haze::set_ring_dimension(haze::default_context(), 8192).has_value());
     REQUIRE_FALSE(haze::config().set_modulus(0, kQ0 + 2).has_value());
     REQUIRE_FALSE(haze::config().set_modulus(1, kQ0).has_value());
 
     // reset() thaws everything.
-    haze::config().reset();
+    haze::config().reset(haze::bindings());
     REQUIRE_FALSE(haze::config().frozen());
-    REQUIRE(haze::config().set_ring_dimension(8192).has_value());
+    REQUIRE(haze::set_ring_dimension(haze::default_context(), 8192).has_value());
 }
 
 // ---------------------------------------------------------------------------

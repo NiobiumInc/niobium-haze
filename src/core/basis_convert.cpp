@@ -16,6 +16,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/config.hpp"
+#include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/lower.hpp"
 #include "core/mrp_polymap.hpp"
@@ -102,22 +103,23 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
 
 } // namespace
 
-std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
+std::expected<void, HazeInternalError> basis_convert(Context &ctx, void *const *dst,
+                                                     const void *const *src,
                                                      const hazeBasisConvertParams &p) noexcept {
     if (auto v = validate(p); !v) {
         return v;
     }
-    const ConfigSnapshot *cfg = record_prelude();
+    const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr)
         return std::unexpected(HazeInternalError::NotConfigured);
 
-    auto svids = record_mrp_sources(src, p.src_base, p.src_base_len, cfg->ring_dim);
+    auto svids = record_mrp_sources(ctx, src, p.src_base, p.src_base_len, cfg->ring_dim);
     if (!svids)
         return std::unexpected(svids.error());
 
     const std::vector<uint64_t> src_base(p.src_base, p.src_base + p.src_base_len);
     const std::vector<uint64_t> dst_base(p.dst_base, p.dst_base + p.dst_base_len);
-    MrpDests dests = record_mrp_dests(dst, p.dst_base, p.dst_base_len);
+    MrpDests dests = record_mrp_dests(ctx, dst, p.dst_base, p.dst_base_len);
 
     Node node{};
     node.kind = Node::Kind::Compute;
@@ -127,30 +129,31 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     node.src_vids = *svids;
     node.entry = "hazeBasisConvert";
     node.thunk = [svids = std::move(*svids), src_base, dst_base,
-                  dv = dests.vids](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
-        auto src_mrp = build_lowered_mrp(ctx, svids, src_base);
+                  dv = dests.vids](LowerCtx &lower) -> std::expected<void, HazeInternalError> {
+        auto src_mrp = build_lowered_mrp(lower, svids, src_base);
         if (!src_mrp)
             return std::unexpected(src_mrp.error());
         const fhetch::ModuliBase target_base(dst_base.begin(), dst_base.end());
         const fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base);
         for (size_t i = 0; i < dv.size(); ++i)
-            ctx.bind(dv[i], result[dst_base[i]]);
+            lower.bind(dv[i], result[dst_base[i]]);
         return {};
     };
-    graph().append(std::move(node));
-    return record_mrp_out_group(dests.addrs, p.dst_base, p.dst_base_len);
+    ctx.tape.append(std::move(node));
+    return record_mrp_out_group(ctx, dests.addrs, p.dst_base, p.dst_base_len);
 }
 
-std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
+std::expected<void, HazeInternalError> mod_down(Context &ctx, void *const *dst,
+                                                const void *const *src,
                                                 const hazeModDownParams &p) noexcept {
     if (auto v = validate(p); !v) {
         return v;
     }
-    const ConfigSnapshot *cfg = record_prelude();
+    const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr)
         return std::unexpected(HazeInternalError::NotConfigured);
 
-    auto svids = record_mrp_sources(src, p.src_base, p.src_base_len, cfg->ring_dim);
+    auto svids = record_mrp_sources(ctx, src, p.src_base, p.src_base_len, cfg->ring_dim);
     if (!svids)
         return std::unexpected(svids.error());
 
@@ -169,7 +172,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
             if (!drop.contains(q))
                 dst_base.push_back(q);
     }
-    MrpDests dests = record_mrp_dests(dst, dst_base.data(), dst_base.size());
+    MrpDests dests = record_mrp_dests(ctx, dst, dst_base.data(), dst_base.size());
 
     Node node{};
     node.kind = Node::Kind::Compute;
@@ -179,8 +182,8 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     node.src_vids = *svids;
     node.entry = "hazeModDown";
     node.thunk = [svids = std::move(*svids), src_base, rescale_base, dst_base,
-                  dv = dests.vids](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
-        auto src_mrp = build_lowered_mrp(ctx, svids, src_base);
+                  dv = dests.vids](LowerCtx &lower) -> std::expected<void, HazeInternalError> {
+        auto src_mrp = build_lowered_mrp(lower, svids, src_base);
         if (!src_mrp)
             return std::unexpected(src_mrp.error());
         const fhetch::ModuliBase rb(rescale_base.begin(), rescale_base.end());
@@ -191,23 +194,23 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
             return std::unexpected(HazeInternalError::BackendShapeMismatch);
         }
         for (size_t i = 0; i < dv.size(); ++i)
-            ctx.bind(dv[i], result[dst_base[i]]);
+            lower.bind(dv[i], result[dst_base[i]]);
         return {};
     };
-    graph().append(std::move(node));
-    return record_mrp_out_group(dests.addrs, dst_base.data(), dst_base.size());
+    ctx.tape.append(std::move(node));
+    return record_mrp_out_group(ctx, dests.addrs, dst_base.data(), dst_base.size());
 }
 
-std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
-                                              const hazeModUpParams &p) noexcept {
+std::expected<void, HazeInternalError>
+mod_up(Context &ctx, void *const *dst, const void *const *src, const hazeModUpParams &p) noexcept {
     if (auto v = validate(p); !v) {
         return v;
     }
-    const ConfigSnapshot *cfg = record_prelude();
+    const ConfigSnapshot *cfg = record_prelude(ctx);
     if (cfg == nullptr)
         return std::unexpected(HazeInternalError::NotConfigured);
 
-    auto svids = record_mrp_sources(src, p.src_base, p.src_base_len, cfg->ring_dim);
+    auto svids = record_mrp_sources(ctx, src, p.src_base, p.src_base_len, cfg->ring_dim);
     if (!svids)
         return std::unexpected(svids.error());
 
@@ -233,7 +236,7 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     flat_dst_base.reserve(stride * p.digit_count);
     for (size_t d2 = 0; d2 < p.digit_count; ++d2)
         flat_dst_base.insert(flat_dst_base.end(), digit_dst_base.begin(), digit_dst_base.end());
-    MrpDests dests = record_mrp_dests(dst, flat_dst_base.data(), flat_dst_base.size());
+    MrpDests dests = record_mrp_dests(ctx, dst, flat_dst_base.data(), flat_dst_base.size());
 
     Node node{};
     node.kind = Node::Kind::Compute;
@@ -245,8 +248,8 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     node.thunk = [svids = std::move(*svids), src_base, digit_bases,
                   p_base = std::vector<uint64_t>(p.p_base, p.p_base + p.p_base_len), digit_dst_base,
                   stride, digit_count = p.digit_count,
-                  dv = dests.vids](LowerCtx &ctx) -> std::expected<void, HazeInternalError> {
-        auto src_mrp = build_lowered_mrp(ctx, svids, src_base);
+                  dv = dests.vids](LowerCtx &lower) -> std::expected<void, HazeInternalError> {
+        auto src_mrp = build_lowered_mrp(lower, svids, src_base);
         if (!src_mrp)
             return std::unexpected(src_mrp.error());
         std::vector<fhetch::ModuliBase> db;
@@ -267,17 +270,17 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
                 return std::unexpected(HazeInternalError::BackendShapeMismatch);
             }
             for (size_t i = 0; i < stride; ++i)
-                ctx.bind(dv[(d * stride) + i], result[d][digit_dst_base[i]]);
+                lower.bind(dv[(d * stride) + i], result[d][digit_dst_base[i]]);
         }
         return {};
     };
-    graph().append(std::move(node));
+    ctx.tape.append(std::move(node));
 
     // Register each digit's dst residues as their own MRP output group,
     // matching the eager engine's per-digit store_mrp registration.
     for (size_t d = 0; d < p.digit_count; ++d) {
         const std::span<const DevAddr> digit_addrs(dests.addrs.data() + (d * stride), stride);
-        if (auto registered = record_mrp_out_group(digit_addrs, digit_dst_base.data(), stride);
+        if (auto registered = record_mrp_out_group(ctx, digit_addrs, digit_dst_base.data(), stride);
             !registered)
             return registered;
     }

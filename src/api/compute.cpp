@@ -19,6 +19,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/context.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,8 @@ extern "C" hazeError_t hazeAdd(void *dst, const void *src1, const void *src2, in
     if (dst == nullptr || src1 == nullptr || src2 == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_pp_op<fhetch::sr_addp>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src1), haze::to_dev_addr(src2), mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src1),
+        haze::to_dev_addr(src2), mod_idx));
 }
 
 extern "C" hazeError_t hazeSub(void *dst, const void *src1, const void *src2, int mod_idx,
@@ -41,7 +43,8 @@ extern "C" hazeError_t hazeSub(void *dst, const void *src1, const void *src2, in
     if (dst == nullptr || src1 == nullptr || src2 == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_pp_op<fhetch::sr_subp>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src1), haze::to_dev_addr(src2), mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src1),
+        haze::to_dev_addr(src2), mod_idx));
 }
 
 extern "C" hazeError_t hazeMul(void *dst, const void *src1, const void *src2, int mod_idx,
@@ -49,7 +52,8 @@ extern "C" hazeError_t hazeMul(void *dst, const void *src1, const void *src2, in
     if (dst == nullptr || src1 == nullptr || src2 == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_pp_op<fhetch::sr_mulp>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src1), haze::to_dev_addr(src2), mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src1),
+        haze::to_dev_addr(src2), mod_idx));
 }
 
 extern "C" hazeError_t hazeAddScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
@@ -57,7 +61,7 @@ extern "C" hazeError_t hazeAddScalar(void *dst, const void *src, uint64_t scalar
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_ps_op<fhetch::sr_addps>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
 }
 
 extern "C" hazeError_t hazeSubScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
@@ -65,7 +69,7 @@ extern "C" hazeError_t hazeSubScalar(void *dst, const void *src, uint64_t scalar
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_ps_op<fhetch::sr_subps>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
 }
 
 extern "C" hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
@@ -73,23 +77,23 @@ extern "C" hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_ps_op<fhetch::sr_mulps>(
-        haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
 }
 
 extern "C" hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
                                hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::unary_pq_op<fhetch::sr_ntt>(haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
+    return set_internal_result(haze::unary_pq_op<fhetch::sr_ntt>(
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
 }
 
 extern "C" hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
                                 hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_pq_op<fhetch::sr_intt>(haze::to_dev_addr(dst),
-                                                                  haze::to_dev_addr(src), mod_idx));
+    return set_internal_result(haze::unary_pq_op<fhetch::sr_intt>(
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
 }
 
 extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
@@ -101,8 +105,8 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
     // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores) — read as a template argument below.
     constexpr niobium::fhetch::Polynomial (*kAutomorphEval)(const niobium::fhetch::Polynomial &,
                                                             uint64_t) = fhetch::sr_automorph_eval;
-    return set_internal_result(
-        haze::unary_pi_op<kAutomorphEval>(haze::to_dev_addr(dst), haze::to_dev_addr(src), index));
+    return set_internal_result(haze::unary_pi_op<kAutomorphEval>(
+        haze::default_context(), haze::to_dev_addr(dst), haze::to_dev_addr(src), index));
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +123,8 @@ extern "C" hazeError_t hazeAddMrp(void *const *dst, const void *const *src1,
                                   hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_pp_op_mrp<fhetch::mr_addp>(dst, src1, src2, base, base_len));
+    return set_internal_result(haze::binary_pp_op_mrp<fhetch::mr_addp>(haze::default_context(), dst,
+                                                                       src1, src2, base, base_len));
 }
 
 extern "C" hazeError_t hazeSubMrp(void *const *dst, const void *const *src1,
@@ -128,8 +132,8 @@ extern "C" hazeError_t hazeSubMrp(void *const *dst, const void *const *src1,
                                   hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_pp_op_mrp<fhetch::mr_subp>(dst, src1, src2, base, base_len));
+    return set_internal_result(haze::binary_pp_op_mrp<fhetch::mr_subp>(haze::default_context(), dst,
+                                                                       src1, src2, base, base_len));
 }
 
 extern "C" hazeError_t hazeMulMrp(void *const *dst, const void *const *src1,
@@ -137,8 +141,8 @@ extern "C" hazeError_t hazeMulMrp(void *const *dst, const void *const *src1,
                                   hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src1 == nullptr || src2 == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_pp_op_mrp<fhetch::mr_mulp>(dst, src1, src2, base, base_len));
+    return set_internal_result(haze::binary_pp_op_mrp<fhetch::mr_mulp>(haze::default_context(), dst,
+                                                                       src1, src2, base, base_len));
 }
 
 extern "C" hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src,
@@ -146,8 +150,8 @@ extern "C" hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_ps_op_mrp<fhetch::mr_addps>(dst, src, scalars, base, base_len));
+    return set_internal_result(haze::binary_ps_op_mrp<fhetch::mr_addps>(
+        haze::default_context(), dst, src, scalars, base, base_len));
 }
 
 extern "C" hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src,
@@ -155,8 +159,8 @@ extern "C" hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_ps_op_mrp<fhetch::mr_subps>(dst, src, scalars, base, base_len));
+    return set_internal_result(haze::binary_ps_op_mrp<fhetch::mr_subps>(
+        haze::default_context(), dst, src, scalars, base, base_len));
 }
 
 extern "C" hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
@@ -164,22 +168,24 @@ extern "C" hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src
                                         size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || scalars == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::binary_ps_op_mrp<fhetch::mr_mulps>(dst, src, scalars, base, base_len));
+    return set_internal_result(haze::binary_ps_op_mrp<fhetch::mr_mulps>(
+        haze::default_context(), dst, src, scalars, base, base_len));
 }
 
 extern "C" hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                   size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_ntt>(dst, src, base, base_len));
+    return set_internal_result(
+        haze::unary_p_op_mrp<fhetch::mr_ntt>(haze::default_context(), dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                    size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_intt>(dst, src, base, base_len));
+    return set_internal_result(
+        haze::unary_p_op_mrp<fhetch::mr_intt>(haze::default_context(), dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src, uint64_t index,
@@ -187,8 +193,8 @@ extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src
                                         hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::unary_pi_op_mrp<fhetch::mr_automorph_eval>(dst, src, index, base, base_len));
+    return set_internal_result(haze::unary_pi_op_mrp<fhetch::mr_automorph_eval>(
+        haze::default_context(), dst, src, index, base, base_len));
 }
 
 extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *const *src,
@@ -196,8 +202,8 @@ extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *co
                                                 size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::unary_pi_op_mrp<fhetch::mr_rot_automorph_coeff>(dst, src, offset, base, base_len));
+    return set_internal_result(haze::unary_pi_op_mrp<fhetch::mr_rot_automorph_coeff>(
+        haze::default_context(), dst, src, offset, base, base_len));
 }
 
 // CRT basis conversion (hazeBasisConvert / hazeModDown / hazeModUp) is

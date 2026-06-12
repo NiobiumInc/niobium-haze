@@ -12,10 +12,15 @@
 // from the Product.
 #pragma once
 
+#include "common/errors.hpp"
 #include "core/allocator.hpp"
 #include "core/config.hpp"
+#include "core/context_fwd.hpp" // IWYU pragma: export
 #include "core/graph.hpp"
 #include "core/kernel_cache.hpp"
+
+#include <cstdint>
+#include <expected>
 
 // The haze recording context: one program in flight, with its own
 // parameters, device address space, value bindings, tape, and kernel
@@ -40,11 +45,16 @@ struct haze_context_s {
 
 namespace haze {
 
-using Context = haze_context_s;
-
 // TEMPORARY bridge (de-globalization step C1, removed in C4): the
 // process-default context behind the parameterless C ABI. New code
 // must take a Context& instead of calling this.
 Context &default_context() noexcept;
+
+// Orchestrated ring-dimension set: Config's parameter validation plus
+// the sibling geometry pushes (allocator pool size + binding-table slot
+// geometry) under the Config lock. TEMPORARY — the de-globalization's
+// params-at-create step moves the parameters to hazeContextCreate and
+// deletes this.
+std::expected<void, HazeInternalError> set_ring_dimension(Context &ctx, uint64_t n) noexcept;
 
 } // namespace haze

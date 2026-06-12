@@ -15,7 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
-#include "core/allocator.hpp"
+#include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/kernel_cache.hpp"
 #include "core/lowering_session.hpp"
@@ -287,13 +287,13 @@ std::expected<void, HazeInternalError> fail(LoweringSession &session, HazeIntern
 
 } // namespace
 
-std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
+std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) noexcept {
     HazeLockGuard lock(g_lower_mutex);
 
     // Flushing inside an open hazeKernelBegin bracket would seal (and
     // discard the bindings of) values the bracket still references —
     // refuse loudly instead of memoizing a sub-tape with dangling vids.
-    if (kernel_cache().has_open_frame()) {
+    if (ctx.kernels.has_open_frame()) {
         record_internal_error(HazeInternalError::InvalidArgument,
                               "hazeFlush/hazeWriteProgram inside an open kernel bracket");
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -302,21 +302,21 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     // Flush with nothing ever recorded keeps today's silent no-op —
     // including NOT initializing the backend, so a bare hazeFlush still
     // has no program-dir side effects.
-    if (graph().size() == 0)
+    if (ctx.tape.size() == 0)
         return {};
 
     // One control handle per flush — the seam the planned fhetch
     // context API plugs into (see lowering_session.hpp).
-    LoweringSession session;
+    LoweringSession session(ctx);
 
     // Failed-init parity with the eager engine's recording_=false
     // flush: report success, leave the tape intact for a later retry.
     if (!session.ensure_backend())
         return {};
 
-    const std::vector<Node> tape = graph().seal();
-    bindings().clear();
-    recorded_moduli().clear();
+    const std::vector<Node> tape = ctx.tape.seal();
+    ctx.values.clear();
+    ctx.recorded_moduli.clear();
     DerivedState d = derive(tape);
 
     if (!d.has_outputs()) {
@@ -336,15 +336,15 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     // them, in tape order, exactly as the eager engine interleaved.
     session.begin_epoch();
 
-    LowerCtx ctx;
-    ctx.derived_ = &d;
-    ctx.session_ = &session;
+    LowerCtx lower;
+    lower.derived_ = &d;
+    lower.session_ = &session;
     for (size_t i = 0; i < tape.size(); ++i) {
         const Node &node = tape[i];
-        ctx.node_idx_ = i;
-        ctx.remap_ = node.vid_remap.get();
+        lower.node_idx_ = i;
+        lower.remap_ = node.vid_remap.get();
         if (node.thunk) {
-            if (auto lowered = node.thunk(ctx); !lowered)
+            if (auto lowered = node.thunk(lower); !lowered)
                 return fail(session, lowered.error(), node.entry);
         }
         // Drop values whose final consumer just ran (keeps the lowering
@@ -354,7 +354,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
         const auto evict_if_done = [&](ValueId v) {
             if (auto lu = d.last_use.find(v);
                 lu != d.last_use.end() && lu->second == i && !keep.contains(v))
-                ctx.values_.erase(v);
+                lower.values_.erase(v);
         };
         for (ValueId v : node.src_vids)
             evict_if_done(v);
@@ -374,7 +374,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
                  << to_uintptr(addr) << std::dec << " has no final binding";
             return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
         }
-        const auto poly = ctx.poly(bound->second);
+        const auto poly = lower.poly(bound->second);
         if (!poly)
             return fail(session, poly.error(), "finalize: pending output value missing");
         fhetch::tag_output(name, **poly);
@@ -402,7 +402,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
                      << to_uintptr(g.addrs[i]) << std::dec << " has no final binding";
                 return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
             }
-            const auto poly = ctx.poly(bound->second);
+            const auto poly = lower.poly(bound->second);
             if (!poly)
                 return fail(session, poly.error(), "finalize: MRP group value missing");
             // Polynomial copy is a shared_ptr refcount bump, not a deep clone.
@@ -450,7 +450,7 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
                  << to_uintptr(addr) << std::dec;
             return fail(session, HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
         }
-        if (auto updated = allocator().update_shadow(addr, std::move(values)); !updated) {
+        if (auto updated = ctx.allocator.update_shadow(addr, std::move(values)); !updated) {
             session.clear_captured();
             return std::unexpected(updated.error());
         }

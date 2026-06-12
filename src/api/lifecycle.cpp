@@ -18,12 +18,9 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-#include "core/allocator.hpp"
 #include "core/backend.hpp"
-#include "core/config.hpp"
+#include "core/context.hpp"
 #include "core/device.hpp"
-#include "core/graph.hpp"
-#include "core/kernel_cache.hpp"
 #include "core/record.hpp"
 #include "core/stream.hpp"
 
@@ -34,16 +31,16 @@
 
 namespace haze {
 
-void reset_all() noexcept {
+void reset_all(Context &ctx) noexcept {
     // Clear all internal state first, since we may depend on external object state when clearing
     // otherwise.
-    kernel_cache().reset(); // open bracket + memo entries die first
-    graph().reset();
-    bindings().clear();
-    recorded_moduli().clear();
+    ctx.kernels.reset(ctx); // open bracket + memo entries die first
+    ctx.tape.reset();
+    ctx.values.clear();
+    ctx.recorded_moduli.clear();
     backend().reset();
-    allocator().reset();
-    config().reset();
+    ctx.allocator.reset();
+    ctx.config.reset(ctx.values);
     streams_reset();
     events_reset();
     device_reset();
@@ -56,7 +53,7 @@ void reset_all() noexcept {
 } // namespace haze
 
 extern "C" hazeError_t hazeDeviceReset(void) noexcept {
-    haze::reset_all();
+    haze::reset_all(haze::default_context());
     // Match cudaDeviceReset: also clear the thread-local last-error so
     // callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;
@@ -64,15 +61,15 @@ extern "C" hazeError_t hazeDeviceReset(void) noexcept {
 }
 
 extern "C" hazeError_t hazeWriteProgram(void) noexcept {
-    return set_internal_result(haze::write_program());
+    return set_internal_result(haze::write_program(haze::default_context()));
 }
 
 extern "C" hazeError_t hazeTagOutput(void *ptr) noexcept {
     if (ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::tag_output(haze::to_dev_addr(ptr)));
+    return set_internal_result(haze::tag_output(haze::default_context(), haze::to_dev_addr(ptr)));
 }
 
 extern "C" hazeError_t hazeFlush(void) noexcept {
-    return set_internal_result(haze::flush());
+    return set_internal_result(haze::flush(haze::default_context()));
 }

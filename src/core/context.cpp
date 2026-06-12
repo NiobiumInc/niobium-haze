@@ -12,10 +12,14 @@
 // from the Product.
 #include "core/context.hpp"
 
+#include "common/errors.hpp"
 #include "core/allocator.hpp"
 #include "core/config.hpp"
 #include "core/graph.hpp"
 #include "core/kernel_cache.hpp"
+
+#include <cstdint>
+#include <expected>
 
 namespace haze {
 
@@ -50,6 +54,10 @@ Graph &graph() noexcept {
 
 KernelCache &kernel_cache() noexcept {
     return default_context().kernels;
+}
+
+std::expected<void, HazeInternalError> set_ring_dimension(Context &ctx, uint64_t n) noexcept {
+    return ctx.config.set_ring_dimension(n, ctx.allocator, ctx.values, ctx.recorded_moduli);
 }
 
 } // namespace haze
