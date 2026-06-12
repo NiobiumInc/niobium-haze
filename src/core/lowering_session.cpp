@@ -15,6 +15,7 @@
 #include "core/backend.hpp"
 #include "core/context.hpp"
 
+#include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <niobium/compiler.h>
 
@@ -30,7 +31,15 @@ namespace haze {
 // NOLINTBEGIN(readability-convert-member-functions-to-static)
 
 bool LoweringSession::ensure_backend() noexcept {
+    // Order matters: wipe the engine, forget the backend's
+    // initialized flag, then re-init from the flushing context.
+    niobium::compiler().reset();
+    backend().reset();
     return backend().ensure_initialized(ctx_->config);
+}
+
+bool LoweringSession::rebind_bridge() noexcept {
+    return hazeReplayBridgeReinstallHook() == HAZE_SUCCESS;
 }
 
 void LoweringSession::begin_epoch() noexcept {

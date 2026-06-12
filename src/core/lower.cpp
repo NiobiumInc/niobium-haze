@@ -314,6 +314,15 @@ std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) n
     if (!session.ensure_backend())
         return {};
 
+    // The scrub dropped the bridge's post-recording hook; restore it
+    // before anything records. Failure is loud (BridgeHookFailed), not
+    // a silent template-less flush.
+    if (!session.rebind_bridge()) {
+        record_internal_error(HazeInternalError::BridgeHookFailed,
+                              "finalize: replay-bridge hook reinstall failed");
+        return std::unexpected(HazeInternalError::BridgeHookFailed);
+    }
+
     const std::vector<Node> tape = ctx.tape.seal();
     ctx.values.clear();
     ctx.recorded_moduli.clear();

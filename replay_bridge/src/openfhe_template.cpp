@@ -470,13 +470,22 @@ void on_post_recording(const HookCtx &hctx) {
         });
 }
 
-// Install the post-recording hook, moving `hctx` into the lambda closure;
-// clears the bootstrap-precompute hook haze never uses.
-void install_post_recording_hook(HookCtx hctx) {
+// The bridge's persistent hook state. compiler().reset() (run by the
+// per-flush engine scrub and by hazeDeviceReset) frees the installed
+// hook lambda, so the state it closes over must live HERE for
+// hazeReplayBridgeReinstallHook to rebuild it.
+std::shared_ptr<const HookCtx> &stored_hook_ctx() noexcept {
+    static std::shared_ptr<const HookCtx> ctx;
+    return ctx;
+}
+
+// Install the post-recording hook over shared hook state; clears the
+// bootstrap-precompute hook haze never uses.
+void install_post_recording_hook(std::shared_ptr<const HookCtx> hctx) {
     niobium::compiler().set_auto_capture_at_stop(nullptr);
     niobium::compiler().set_post_recording_hook([hctx = std::move(hctx)]() noexcept {
         try {
-            on_post_recording(hctx);
+            on_post_recording(*hctx);
         } catch (const std::exception &e) {
             log_hook_error(std::string{"post_recording_hook threw: "} + e.what());
         } catch (...) {
@@ -506,13 +515,35 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         niobium::compiler().set_program_info("haze", "", "");
         niobium::compiler().capture_crypto_context(built->cc);
 
-        install_post_recording_hook(HookCtx{
+        auto hctx = std::make_shared<const HookCtx>(HookCtx{
             .ring_dim = ring_dim,
             .primary = std::move(*built),
         });
+        stored_hook_ctx() = hctx;
+        install_post_recording_hook(std::move(hctx));
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
+        return HAZE_ERROR_INTERNAL;
+    } catch (...) {
+        return HAZE_ERROR_INTERNAL;
+    }
+}
+
+extern "C" hazeError_t hazeReplayBridgeReinstallHook() noexcept {
+    const std::shared_ptr<const HookCtx> hctx = stored_hook_ctx();
+    if (hctx == nullptr)
+        return HAZE_SUCCESS; // bridge never initialized: nothing to restore
+    try {
+        // The scrub's compiler().reset() dropped both the hook and the
+        // captured CryptoContext; restore both. Program info is NOT
+        // re-planted here — the flush re-derives it from the flushing
+        // context's Config.
+        niobium::compiler().capture_crypto_context(hctx->primary.cc);
+        install_post_recording_hook(hctx);
+        return HAZE_SUCCESS;
+    } catch (const std::exception &e) {
+        haze::log_error("replay_bridge", std::string{"reinstall threw: "} + e.what());
         return HAZE_ERROR_INTERNAL;
     } catch (...) {
         return HAZE_ERROR_INTERNAL;
@@ -523,6 +554,7 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // Clear first so any early-return below still honors the "prior
     // failures don't leak forward" contract.
     hook_had_error_flag().store(false, std::memory_order_relaxed);
+    stored_hook_ctx().reset();
 
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
