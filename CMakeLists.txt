@@ -480,6 +480,7 @@ add_executable(haze_tests
   test/e2e/test_openfhe_mul_no_relin_e2e.cpp
   test/e2e/test_openfhe_mul_e2e.cpp
   test/e2e/test_openfhe_rotate_e2e.cpp
+  test/e2e/test_kernel_memo_two_keysets_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
   test/e2e/test_ops_ctx_params_e2e.cpp
   # Same compiled code as libhaze.so, linked directly — NOT the shipped
