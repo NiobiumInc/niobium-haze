@@ -187,6 +187,7 @@ add_library(haze_objs OBJECT
   src/core/backend.cpp
   src/core/basis_convert.cpp
   src/core/config.cpp
+  src/api/context.cpp
   src/core/context.cpp
   src/core/device.cpp
   src/core/graph.cpp

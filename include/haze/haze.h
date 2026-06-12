@@ -125,6 +125,24 @@ HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
 // likewise undefined; concurrent hazeFlush calls serialize internally.
 HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
+/* Context management. A hazeContext_t is one recording program: its own
+ * FHE parameters, device address space, value bindings, tape, and kernel
+ * cache. The parameters are immutable for the context's lifetime —
+ * there is no piecewise configure step and nothing to mutate after the
+ * first compute call.
+ *
+ * `moduli[i]` is the modulus the SRP compute calls name via mod_idx == i.
+ * Destroy invalidates every address allocated from the context; using
+ * one afterwards is undefined. Destroying a context with an open
+ * hazeKernelBegin bracket or unflushed recording discards them.
+ * The process-global pieces fhetch still owns (one trace engine, the
+ * replay bridge, streams/events) are scrubbed and re-bound from the
+ * flushing context on every hazeFlush, so contexts cannot observe each
+ * other's leftovers through them. */
+HAZE_API hazeError_t hazeContextCreate(hazeContext_t *ctx, uint64_t ring_dim,
+                                       const uint64_t *moduli, size_t n_moduli) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeContextDestroy(hazeContext_t ctx) HAZE_NOEXCEPT;
+
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,
 // program metadata, target selection, lifecycle reset.
 

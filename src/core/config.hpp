@@ -68,10 +68,24 @@ class Config {
   public:
     Config() = default; // constructed as a haze_context_s member
 
-    // FHE parameters (existing public API). The ring dimension also
-    // fixes the sibling components' geometry (allocator pool, binding
-    // slot tables); they are passed in so the update is atomic under
-    // the Config lock — Config holds no sibling references itself.
+    // Params-at-create (hazeContextCreate): ring dimension + the full
+    // modulus chain land in one shot, immutable for the context's
+    // lifetime, and the snapshot publishes immediately — no freeze
+    // window, no mutate-after-record hazards. The sibling components'
+    // geometry (allocator pool, binding slot tables) is fixed in the
+    // same call. Fails (InvalidArgument) on a non-power-of-two ring
+    // dimension or a zero modulus; fails (NotConfigured) if params
+    // were already set.
+    std::expected<void, HazeInternalError> init_params(uint64_t ring_dim, const uint64_t *moduli,
+                                                       size_t n_moduli, DeviceAllocator &alloc,
+                                                       BindingTable &values,
+                                                       BindingTable &recorded_moduli) noexcept;
+
+    // FHE parameters (legacy piecewise API; deleted with the
+    // parameterless C ABI). The ring dimension also fixes the sibling
+    // components' geometry (allocator pool, binding slot tables); they
+    // are passed in so the update is atomic under the Config lock —
+    // Config holds no sibling references itself.
     std::expected<void, HazeInternalError>
     set_ring_dimension(uint64_t n, DeviceAllocator &alloc, BindingTable &values,
                        BindingTable &recorded_moduli) noexcept;

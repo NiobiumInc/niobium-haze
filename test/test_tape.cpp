@@ -15,6 +15,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <haze/haze.h>
+#include <haze/haze_types.h>
 #include <utility>
 #include <vector>
 
@@ -183,6 +185,34 @@ namespace {
 // Config is a process singleton too; bracket every freeze test with a
 // full reset so the C-ABI test cases (which reset via hazeDeviceReset)
 // never observe a frozen leftover.
+TEST_CASE("hazeContextCreate fixes the parameters at birth", "[tape][context]") {
+    constexpr uint64_t kQ[] = {576460752303415297ULL, 576460752303439873ULL};
+
+    hazeContext_t ctx = nullptr;
+    SECTION("rejects bad arguments loudly") {
+        REQUIRE(hazeContextCreate(nullptr, 4096, kQ, 2) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeContextCreate(&ctx, 4096, nullptr, 2) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeContextCreate(&ctx, 0, kQ, 2) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeContextCreate(&ctx, 4095, kQ, 2) == HAZE_ERROR_INVALID_VALUE);
+        const uint64_t zero_q[] = {kQ[0], 0};
+        REQUIRE(hazeContextCreate(&ctx, 4096, zero_q, 2) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeContextDestroy(nullptr) == HAZE_ERROR_INVALID_VALUE);
+    }
+    SECTION("creates a self-contained engine, params published immediately") {
+        REQUIRE(hazeContextCreate(&ctx, 4096, kQ, 2) == HAZE_SUCCESS);
+        REQUIRE(ctx != nullptr);
+        const haze::ConfigSnapshot *snap = ctx->config.freeze();
+        REQUIRE(snap != nullptr);
+        REQUIRE(snap->ring_dim == 4096);
+        REQUIRE(snap->modulus(0) == kQ[0]);
+        REQUIRE(snap->modulus(1) == kQ[1]);
+        REQUIRE(snap->modulus(2) == 0);
+        // Immutable from birth: the legacy piecewise setters reject it.
+        REQUIRE_FALSE(haze::set_ring_dimension(*ctx, 8192).has_value());
+        REQUIRE(hazeContextDestroy(ctx) == HAZE_SUCCESS);
+    }
+}
+
 struct ConfigResetFixture {
     ConfigResetFixture() { haze::config().reset(haze::bindings()); }
     ~ConfigResetFixture() { haze::config().reset(haze::bindings()); }

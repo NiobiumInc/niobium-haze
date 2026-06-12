@@ -43,6 +43,34 @@ bool env_flag(const char *name, bool fallback) noexcept {
     return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
 }
 
+std::expected<void, HazeInternalError> Config::init_params(uint64_t ring_dim,
+                                                           const uint64_t *moduli, size_t n_moduli,
+                                                           DeviceAllocator &alloc,
+                                                           BindingTable &values,
+                                                           BindingTable &recorded_moduli) noexcept {
+    if (!is_supported_ring_dim(ring_dim))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    for (size_t i = 0; i < n_moduli; ++i)
+        if (moduli[i] == 0)
+            return std::unexpected(HazeInternalError::InvalidArgument);
+    HazeLockGuard lock(mutex_);
+    if (configured_ || ring_dim_ != 0)
+        return std::unexpected(HazeInternalError::NotConfigured);
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) — owned by snapshot_, freed by reset()
+    const auto *snap = new (std::nothrow)
+        ConfigSnapshot{.ring_dim = ring_dim, .moduli = {moduli, moduli + n_moduli}};
+    if (snap == nullptr)
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    ring_dim_ = ring_dim;
+    moduli_.assign(moduli, moduli + n_moduli);
+    configured_ = true;
+    alloc.set_polynomial_size(ring_dim * sizeof(uint64_t));
+    values.set_slot_bytes(ring_dim * sizeof(uint64_t));
+    recorded_moduli.set_slot_bytes(ring_dim * sizeof(uint64_t));
+    snapshot_.store(snap, std::memory_order_release);
+    return {};
+}
+
 std::expected<void, HazeInternalError>
 Config::set_ring_dimension(uint64_t n, DeviceAllocator &alloc, BindingTable &values,
                            BindingTable &recorded_moduli) noexcept {
