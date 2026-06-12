@@ -40,13 +40,15 @@ struct PendingMrpGroup {
     std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
 };
 
-// State derived from one tape scan. BYTE-IDENTITY CONSTRAINT: the
-// emission order of fhetch::tag_output (and the result-population
-// order) is the iteration order of these containers, which for
-// unordered_map depends on the key hashing AND the emplace/erase
-// sequence. They therefore use the exact container types EpochState
-// used, mutated in the same order the eager engine mutated them — do
-// not "clean this up" to std::map/vector without re-baselining traces.
+// State derived from one tape scan. The contract that must hold is
+// REPLAY-OUTPUT identity: every tagged output's simulator-computed
+// values (serialized_probes/<name>.ct) must match what the eager
+// engine produced, byte for byte. Trace byte-identity is NOT required;
+// these containers currently keep the eager engine's exact types and
+// mutation order, which makes the whole trace byte-identical too — a
+// convenient, stronger conformance gate (scripts/trace-diff.sh).
+// Reordering emission is allowed when it pays for itself: re-baseline
+// the traces and re-verify the strict suites' probe payloads.
 struct DerivedState {
     std::unordered_map<DevAddr, std::string> pending_outputs;
     // Pending groups hold NAMES; membership resolves through

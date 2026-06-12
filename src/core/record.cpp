@@ -31,6 +31,21 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
+namespace {
+// THE single definition of "raw bytes become a tagged fhetch input"
+// (format included) — shared by lazy promotion and the H2D eager tag.
+Thunk make_input_thunk(std::vector<uint64_t> &&bytes, uint64_t ring_dim, ValueId vid) {
+    return [bytes = std::move(bytes), ring_dim,
+            vid](LowerCtx &ctx) mutable -> std::expected<void, HazeInternalError> {
+        fhetch::Polynomial poly =
+            fhetch::Polynomial::from_data(std::move(bytes), ring_dim, fhetch::Format::Evaluation);
+        fhetch::tag_input(ctx.node_name(), poly);
+        ctx.bind(vid, std::move(poly));
+        return {};
+    };
+}
+} // namespace
+
 const ConfigSnapshot *record_prelude() noexcept {
     // Init before anything else so first-call side effects (program-dir
     // resolution, probe suppression) keep their eager-engine timing;
@@ -70,14 +85,7 @@ std::expected<ValueId, HazeInternalError> resolve_operand(DevAddr addr,
     node.addr = addr;
     node.dst_vid = fresh;
     node.entry = "haze input promotion";
-    node.thunk = [bytes = std::move(*components), ring_dim,
-                  fresh](LowerCtx &ctx) mutable -> std::expected<void, HazeInternalError> {
-        fhetch::Polynomial poly =
-            fhetch::Polynomial::from_data(std::move(bytes), ring_dim, fhetch::Format::Evaluation);
-        fhetch::tag_input(ctx.node_name(), poly);
-        ctx.bind(fresh, std::move(poly));
-        return {};
-    };
+    node.thunk = make_input_thunk(std::move(*components), ring_dim, fresh);
     graph().append(std::move(node));
     return fresh;
 }
@@ -145,12 +153,12 @@ std::expected<void, HazeInternalError> record_h2d_input(DevAddr addr) noexcept {
     // poly_bytes_); hits are broken-haze internal errors so the input
     // tag is never silently dropped.
     const ConfigSnapshot *cfg = config().freeze();
-    const uint64_t ring_dim = cfg != nullptr ? cfg->ring_dim : 0;
-    if (ring_dim == 0) {
+    if (cfg == nullptr) {
         record_internal_error(HazeInternalError::NotConfigured,
-                              "record_h2d_input: ring_dim == 0 after copy_h2d");
+                              "record_h2d_input: unconfigured after copy_h2d");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
+    const uint64_t ring_dim = cfg->ring_dim;
     // Non-evicting: a subsequent compute-free D2H still reads the
     // original H2D bytes from the shadow.
     auto components = allocator().read_polynomial_components(addr, ring_dim);
@@ -163,14 +171,7 @@ std::expected<void, HazeInternalError> record_h2d_input(DevAddr addr) noexcept {
     node.addr = addr;
     node.dst_vid = fresh;
     node.entry = "hazeMemcpy H2D";
-    node.thunk = [bytes = std::move(*components), ring_dim,
-                  fresh](LowerCtx &ctx) mutable -> std::expected<void, HazeInternalError> {
-        fhetch::Polynomial poly =
-            fhetch::Polynomial::from_data(std::move(bytes), ring_dim, fhetch::Format::Evaluation);
-        fhetch::tag_input(ctx.node_name(), poly);
-        ctx.bind(fresh, std::move(poly));
-        return {};
-    };
+    node.thunk = make_input_thunk(std::move(*components), ring_dim, fresh);
     graph().append(std::move(node));
     // New H2D bytes are the truth at addr: overwrite any binding.
     bindings().store(addr, fresh);
@@ -196,7 +197,9 @@ void record_invalidate(DevAddr addr) noexcept {
     recorded_moduli().erase(addr);
     // Empty tape ⇒ no binding/group can reference addr, and a metadata
     // node would make a compute-free hazeFlush initialize the backend.
-    if (graph().size() == 0)
+    // An installed kernel-frame sink overrides the skip: the node must
+    // reach the frame so the closed-body free/memset ban can see it.
+    if (graph().size() == 0 && !graph().frame_sink_installed())
         return;
     Node node{};
     node.kind = Node::Kind::Invalidate;
@@ -233,7 +236,12 @@ std::expected<void, HazeInternalError> flush() noexcept {
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t /*count*/) noexcept {
     const ConfigSnapshot *cfg = record_prelude();
-    return record_copy(dst, src, cfg != nullptr ? cfg->ring_dim : 0);
+    if (cfg == nullptr) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "hazeMemcpy D2D before hazeSetRingDimension");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    return record_copy(dst, src, cfg->ring_dim);
 }
 
 std::expected<void, HazeInternalError> tag_h2d_input(DevAddr addr) noexcept {

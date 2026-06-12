@@ -32,6 +32,7 @@ namespace haze::cxx::inline v1 {
 namespace detail {
 
 constexpr uint64_t kFnvPrime = 0x100000001b3ULL;
+constexpr uint64_t kFnvOffsetBasis = 0xcbf29ce484222325ULL;
 
 constexpr uint64_t mix_word(uint64_t word, uint64_t seed) noexcept {
     return (seed ^ word) * kFnvPrime;

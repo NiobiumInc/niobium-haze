@@ -210,7 +210,7 @@ class KeyBuilder {
     }
 
     uint64_t hash() const noexcept {
-        uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a basis
+        uint64_t h = detail::kFnvOffsetBasis;
         for (const uint8_t b : bytes_)
             h = mix_word(b, h);
         return h;
@@ -237,7 +237,10 @@ struct CallBuffers {
         outputs.reserve(arity);
         srp_in_ptrs.reserve(arity);
         srp_out_ptrs.reserve(arity);
-        srp_mods.reserve(arity);
+        // An InOut<Srp> pushes a modulus for BOTH its input and output
+        // descriptor; reserve 2x so the back() pointers handed to the
+        // descriptors can never be invalidated by reallocation.
+        srp_mods.reserve(2 * arity);
     }
 };
 
@@ -245,6 +248,7 @@ inline void describe_in(CallBuffers &bufs, KeyBuilder &key, const Srp &srp) {
     bufs.srp_in_ptrs.push_back(srp.addr());
     bufs.srp_mods.push_back(srp.mod().value);
     bufs.inputs.push_back({&bufs.srp_in_ptrs.back(), &bufs.srp_mods.back(), 1});
+    key.word(1); // residue count: keeps the key prefix-free vs Mrp params
     key.word(srp.mod().value);
 }
 
@@ -259,6 +263,7 @@ inline void describe_out(CallBuffers &bufs, KeyBuilder &key, Srp &srp) {
     bufs.srp_out_ptrs.push_back(srp.addr());
     bufs.srp_mods.push_back(srp.mod().value);
     bufs.outputs.push_back({&bufs.srp_out_ptrs.back(), &bufs.srp_mods.back(), 1});
+    key.word(1); // residue count: keeps the key prefix-free vs Mrp params
     key.word(srp.mod().value);
 }
 
@@ -327,7 +332,7 @@ template <class F> class Kernel {
                 }
             } else {
                 key.tag(0x03);
-                key.word(param_hash<D>::mix(actual, 0xcbf29ce484222325ULL));
+                key.word(param_hash<D>::mix(actual, detail::kFnvOffsetBasis));
             }
         };
         (one.template operator()<std::tuple_element_t<I, Formals>>(actuals), ...);

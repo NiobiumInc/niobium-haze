@@ -30,12 +30,15 @@
 //   - Mark accessor methods that hand out a reference to the underlying
 //     capability with HAZE_RETURN_CAPABILITY(field).
 //
-// HAZE's locks never nest: the record path's Graph::append mutex and
-// the DeviceAllocator mutex are both leaves (record helpers complete
-// their allocator call before appending), and lower.cpp's finalize
-// mutex serializes flushes without any haze lock held during lowering.
-// TSAN is the runtime backstop for the lock-free BindingTable, which
-// carries no TSA annotations by design.
+// HAZE lock policy — the permitted nesting edges, in full:
+//   KernelCache::mutex_ -> Graph::mutex_   (frame sink install, clone appends)
+//   Config::mutex_      -> DeviceAllocator::mutex_  (set_ring_dimension)
+// Everything else is a leaf: record helpers complete their allocator
+// call before Graph::append, and lower.cpp's finalize mutex serializes
+// flushes without any haze lock held during lowering. No haze code may
+// add a nesting edge without updating this list; the reverse of either
+// edge above deadlocks. TSAN is the runtime backstop for the lock-free
+// BindingTable, which carries no TSA annotations by design.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names

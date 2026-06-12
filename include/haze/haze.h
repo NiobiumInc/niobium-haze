@@ -361,6 +361,18 @@ HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const v
 //     foreign buffers inside a body are rejected.
 //   - Outputs are caller-pre-allocated and passed to End on BOTH
 //     dispositions; End binds + tags them as recording outputs.
+//   - Bodies may WRITE only declared outputs (an in-place update of an
+//     input means declaring it as both — In + Out positions, or InOut
+//     in the typed layer) and may READ only declared inputs and their
+//     own results; violations fail End with
+//     HAZE_ERROR_SOURCE_UNAVAILABLE, and the body's bindings are rolled
+//     back so continued recording fails loudly rather than silently.
+//   - The recording's recovered per-address moduli are baked into the
+//     template (e.g. an automorph of an input recovers that input's
+//     recorded modulus at RECORD time). Keys must therefore cover the
+//     inputs' moduli — the typed layer always does this.
+//   - hazeFlush/hazeWriteProgram inside an open bracket fail with
+//     HAZE_ERROR_INVALID_VALUE.
 //   - Nesting a Begin inside an open kernel returns
 //     HAZE_ERROR_NOT_SUPPORTED. Begin/End pairs must not interleave
 //     across threads.

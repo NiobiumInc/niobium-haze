@@ -17,6 +17,7 @@
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
 #include "core/graph.hpp"
+#include "core/kernel_cache.hpp"
 #include "core/lowering_session.hpp"
 #include "core/polynomial_io.hpp"
 
@@ -289,6 +290,15 @@ std::expected<void, HazeInternalError> fail(LoweringSession &session, HazeIntern
 std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
     HazeLockGuard lock(g_lower_mutex);
 
+    // Flushing inside an open hazeKernelBegin bracket would seal (and
+    // discard the bindings of) values the bracket still references —
+    // refuse loudly instead of memoizing a sub-tape with dangling vids.
+    if (kernel_cache().has_open_frame()) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeFlush/hazeWriteProgram inside an open kernel bracket");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
+
     // Flush with nothing ever recorded keeps today's silent no-op —
     // including NOT initializing the backend, so a bare hazeFlush still
     // has no program-dir side effects.
@@ -337,11 +347,18 @@ std::expected<void, HazeInternalError> finalize(bool run_replay) noexcept {
         }
         // Drop values whose final consumer just ran (keeps the lowering
         // pass's live set at the eager engine's level: roughly one
-        // polynomial per bound address).
-        for (ValueId v : node.src_vids)
+        // polynomial per bound address). MrpInputTag nodes read their
+        // residues through group_vids, mirroring derive()'s last_use.
+        const auto evict_if_done = [&](ValueId v) {
             if (auto lu = d.last_use.find(v);
                 lu != d.last_use.end() && lu->second == i && !keep.contains(v))
                 ctx.values_.erase(v);
+        };
+        for (ValueId v : node.src_vids)
+            evict_if_done(v);
+        if (node.kind == Node::Kind::MrpInputTag)
+            for (ValueId v : node.group_vids)
+                evict_if_done(v);
     }
 
     // Output tagging (port of tag_pending_outputs_locked). A pending

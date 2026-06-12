@@ -150,4 +150,9 @@ inline Config &config() noexcept {
     return Config::instance();
 }
 
+// Shared truthy env-var read ("1" or "true"; anything else — including
+// unset — yields `fallback`). The single truthiness definition for
+// every HAZE_* boolean toggle.
+bool env_flag(const char *name, bool fallback) noexcept;
+
 } // namespace haze

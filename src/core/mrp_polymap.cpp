@@ -161,7 +161,12 @@ std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *ds
     // group under the real base[i] so it reads back as an MRP, matching the
     // arithmetic MRP ops.
     const ConfigSnapshot *cfg = record_prelude();
-    const uint64_t ring_dim = cfg != nullptr ? cfg->ring_dim : 0;
+    if (cfg == nullptr) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "hazeMemcpyMrp D2D before hazeSetRingDimension");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    const uint64_t ring_dim = cfg->ring_dim;
     std::vector<DevAddr> addrs;
     addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {

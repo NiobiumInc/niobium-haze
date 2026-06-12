@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/config.hpp"
 #include "core/graph.hpp"
 #include "core/record.hpp"
 
@@ -36,13 +37,6 @@ namespace haze {
 
 namespace {
 
-bool env_truthy(const char *var, bool fallback) noexcept {
-    const char *v = std::getenv(var); // NOLINT(concurrency-mt-unsafe) — read-only lookup
-    if (v == nullptr || v[0] == '\0')
-        return fallback;
-    return v[0] != '0';
-}
-
 // Flatten the C-ABI input/output descriptors to residue addr lists.
 std::vector<DevAddr> flatten_inputs(std::span<const hazeKernelInput> inputs) {
     std::vector<DevAddr> addrs;
@@ -60,6 +54,14 @@ std::vector<DevAddr> flatten_outputs(std::span<const hazeKernelOutput> outputs) 
     return addrs;
 }
 
+std::vector<uint64_t> flatten_output_moduli(std::span<const hazeKernelOutput> outputs) {
+    std::vector<uint64_t> moduli;
+    for (const hazeKernelOutput &out : outputs)
+        for (size_t i = 0; i < out.base_len; ++i)
+            moduli.push_back(out.base[i]);
+    return moduli;
+}
+
 } // namespace
 
 KernelCache &KernelCache::instance() noexcept {
@@ -75,13 +77,13 @@ bool KernelCache::has_open_frame() const noexcept {
 bool KernelCache::memo_enabled_locked() const {
     if (memo_override_ >= 0)
         return memo_override_ != 0;
-    return env_truthy("HAZE_KERNEL_MEMO", /*fallback=*/true);
+    return env_flag("HAZE_KERNEL_MEMO", /*fallback=*/true);
 }
 
 bool KernelCache::validate_enabled_locked() const {
     if (validate_override_ >= 0)
         return validate_override_ != 0;
-    return env_truthy("HAZE_KERNEL_VALIDATE", /*fallback=*/false);
+    return env_flag("HAZE_KERNEL_VALIDATE", /*fallback=*/false);
 }
 
 const KernelCache::SubTape *KernelCache::find_locked(uint64_t key_hash,
@@ -159,9 +161,18 @@ KernelCache::begin(const char *name, uint64_t key_hash, std::span<const uint8_t>
 std::expected<void, HazeInternalError>
 KernelCache::check_closed_body_locked(const OpenFrame &frame,
                                       std::span<const DevAddr> out_addrs) const {
+    // Writes must land on declared OUTPUTS only (in-place updates of an
+    // input require declaring it InOut — i.e. listing it as an output):
+    // a replay rebinds exactly the declared outputs, so a write to a
+    // mere input would silently keep its stale pre-kernel binding on
+    // cache hits. Reads must come from declared inputs or values the
+    // body itself produced — an undeclared (but already-recorded)
+    // source would replay as a dangling ValueId.
+    const std::unordered_set<DevAddr> writable(out_addrs.begin(), out_addrs.end());
     std::unordered_set<DevAddr> allowed(frame.in_addrs.begin(), frame.in_addrs.end());
     allowed.insert(out_addrs.begin(), out_addrs.end());
     const auto allowed_addr = [&](DevAddr a) { return allowed.contains(a); };
+    std::unordered_set<ValueId> readable(frame.in_vids.begin(), frame.in_vids.end());
 
     for (const Node &node : *frame.body) {
         switch (node.kind) {
@@ -185,29 +196,78 @@ KernelCache::check_closed_body_locked(const OpenFrame &frame,
         case Node::Kind::MrpRegister:
             break;
         }
-        if (node.group_addrs.empty()) {
-            if (node.dst_vid != kUnbound || node.kind == Node::Kind::TagOutput) {
-                if (!allowed_addr(node.addr)) {
+        for (ValueId v : node.src_vids) {
+            if (!readable.contains(v)) {
+                record_internal_error(HazeInternalError::SourceUnavailable,
+                                      "kernel body read a buffer it did not declare as input");
+                return std::unexpected(HazeInternalError::SourceUnavailable);
+            }
+        }
+        if (node.kind == Node::Kind::MrpInputTag) {
+            for (ValueId v : node.group_vids) {
+                if (!readable.contains(v)) {
                     record_internal_error(HazeInternalError::SourceUnavailable,
-                                          "kernel body wrote a buffer outside its formals");
+                                          "kernel body read a buffer it did not declare as input");
                     return std::unexpected(HazeInternalError::SourceUnavailable);
                 }
             }
+        }
+        if (node.group_addrs.empty()) {
+            if (node.dst_vid != kUnbound) {
+                if (!writable.contains(node.addr)) {
+                    record_internal_error(HazeInternalError::SourceUnavailable,
+                                          "kernel body wrote a buffer it did not declare as "
+                                          "output");
+                    return std::unexpected(HazeInternalError::SourceUnavailable);
+                }
+                readable.insert(node.dst_vid);
+            } else if (node.kind == Node::Kind::TagOutput && !allowed_addr(node.addr)) {
+                record_internal_error(HazeInternalError::SourceUnavailable,
+                                      "kernel body tagged a buffer outside its formals");
+                return std::unexpected(HazeInternalError::SourceUnavailable);
+            }
         } else {
             for (DevAddr a : node.group_addrs) {
-                if (!allowed_addr(a)) {
+                if (node.kind == Node::Kind::Compute || node.kind == Node::Kind::Copy) {
+                    if (!writable.contains(a)) {
+                        record_internal_error(HazeInternalError::SourceUnavailable,
+                                              "kernel body wrote a buffer it did not declare "
+                                              "as output");
+                        return std::unexpected(HazeInternalError::SourceUnavailable);
+                    }
+                } else if (!allowed_addr(a)) {
                     record_internal_error(HazeInternalError::SourceUnavailable,
                                           "kernel body used a buffer outside its formals");
                     return std::unexpected(HazeInternalError::SourceUnavailable);
                 }
             }
+            for (ValueId v : node.group_vids)
+                if (node.kind == Node::Kind::Compute || node.kind == Node::Kind::Copy)
+                    readable.insert(v);
         }
     }
     return {};
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static) — carries HAZE_REQUIRES(mutex_)
+void KernelCache::rollback_body_bindings_locked(const OpenFrame &frame) const {
+    if (frame.body == nullptr)
+        return;
+    for (const Node &node : *frame.body) {
+        if (node.dst_vid != kUnbound) {
+            bindings().erase(node.addr);
+            recorded_moduli().erase(node.addr);
+        }
+        for (DevAddr a : node.group_addrs) {
+            bindings().erase(a);
+            recorded_moduli().erase(a);
+        }
+    }
+}
+
 void KernelCache::instantiate_locked(const SubTape &sub, const OpenFrame &frame,
-                                     std::span<const DevAddr> out_addrs) {
+                                     std::span<const DevAddr> out_addrs,
+                                     std::span<const uint64_t> out_moduli) {
     // Positional formal translation, total under the closed-body rule.
     std::unordered_map<DevAddr, DevAddr> addr_map;
     for (size_t i = 0; i < sub.in_addrs.size(); ++i)
@@ -248,9 +308,13 @@ void KernelCache::instantiate_locked(const SubTape &sub, const OpenFrame &frame,
     }
 
     // Bind the outputs to their instance values so subsequent ops (and
-    // End's tagging) see them exactly as a cold call would have left them.
-    for (size_t i = 0; i < sub.out_addrs.size(); ++i)
+    // End's tagging) see them exactly as a cold call would have left
+    // them — including the recorded modulus a cold bind_result stores,
+    // which post-kernel copies/automorphs recover.
+    for (size_t i = 0; i < sub.out_addrs.size(); ++i) {
         bindings().store(out_addrs[i], fresh_vid(sub.out_vids[i]));
+        recorded_moduli().store(out_addrs[i], out_moduli[i]);
+    }
 }
 // NOLINTEND(readability-convert-member-functions-to-static)
 
@@ -269,21 +333,47 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
             graph().install_frame_sink(nullptr);
 
         if (frame->replay != nullptr) {
-            if (out_addrs.size() != frame->replay->out_addrs.size()) {
+            const SubTape &sub = *frame->replay;
+            // Positional translation requires the call's shape to match
+            // the recording exactly — key_bytes are caller-controlled at
+            // the C ABI, so verify rather than trust (the cxx layer
+            // always keys shapes, raw callers may not).
+            if (out_addrs.size() != sub.out_addrs.size() ||
+                frame->in_addrs.size() != sub.in_addrs.size()) {
                 record_internal_error(HazeInternalError::InvalidArgument,
-                                      "hazeKernelEnd: output shape differs from the recording");
+                                      "hazeKernelEnd: input/output shape differs from the "
+                                      "recording under the same key");
                 return std::unexpected(HazeInternalError::InvalidArgument);
             }
-            instantiate_locked(*frame->replay, *frame, out_addrs);
+            // The recording's input/output aliasing pattern is part of
+            // the template (addr translation is a map): a call whose
+            // buffers alias differently would translate input-side
+            // references onto the wrong actual. Refuse loudly.
+            for (size_t i = 0; i < sub.in_addrs.size(); ++i) {
+                for (size_t j = 0; j < sub.out_addrs.size(); ++j) {
+                    const bool recorded_alias = sub.in_addrs[i] == sub.out_addrs[j];
+                    const bool call_alias = frame->in_addrs[i] == out_addrs[j];
+                    if (recorded_alias != call_alias) {
+                        record_internal_error(
+                            HazeInternalError::InvalidArgument,
+                            "hazeKernelEnd: input/output aliasing differs from the recording");
+                        return std::unexpected(HazeInternalError::InvalidArgument);
+                    }
+                }
+            }
+            instantiate_locked(sub, *frame, out_addrs, flatten_output_moduli(outputs));
         } else if (!frame->passthrough) {
-            if (auto closed = check_closed_body_locked(*frame, out_addrs); !closed)
+            if (auto closed = check_closed_body_locked(*frame, out_addrs); !closed) {
+                rollback_body_bindings_locked(*frame);
                 return closed;
+            }
 
             std::vector<ValueId> out_vids;
             out_vids.reserve(out_addrs.size());
             for (DevAddr a : out_addrs) {
                 const ValueId vid = bindings().load(a);
                 if (vid == kUnbound) {
+                    rollback_body_bindings_locked(*frame);
                     record_internal_error(HazeInternalError::SourceUnavailable,
                                           "hazeKernelEnd: declared output was never written");
                     return std::unexpected(HazeInternalError::SourceUnavailable);
@@ -305,6 +395,7 @@ KernelCache::end(std::span<const hazeKernelOutput> outputs) noexcept {
                            a.group_moduli == b.group_moduli;
                 }
                 if (!same) {
+                    rollback_body_bindings_locked(*frame);
                     record_internal_error(HazeInternalError::KernelValidationFailed,
                                           "kernel re-trace diverged from the cached sub-tape");
                     return std::unexpected(HazeInternalError::KernelValidationFailed);

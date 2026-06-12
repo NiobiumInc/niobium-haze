@@ -117,6 +117,9 @@ class Mrp {
                               std::span<const uint64_t> base) noexcept {
         if (residues.size() != base.size() || residues.empty())
             return Status{HAZE_ERROR_INVALID_VALUE};
+        for (const auto &r : residues)
+            if (r.size() != residues[0].size())
+                return Status{HAZE_ERROR_INVALID_VALUE}; // ragged towers: refuse loudly
         auto mrp = allocate(base, residues[0].size() * sizeof(uint64_t));
         if (!mrp)
             return mrp;

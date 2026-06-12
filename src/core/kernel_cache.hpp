@@ -104,8 +104,14 @@ class KernelCache {
     std::expected<void, HazeInternalError>
     check_closed_body_locked(const OpenFrame &frame, std::span<const DevAddr> out_addrs) const
         HAZE_REQUIRES(mutex_);
+    // Failure unwinding: drop every binding the frame's body created so
+    // a caller that continues recording past a failed End sees a LOUD
+    // SourceUnavailable on next use instead of a stale value resolving
+    // to a node that never reached the tape.
+    void rollback_body_bindings_locked(const OpenFrame &frame) const HAZE_REQUIRES(mutex_);
     void instantiate_locked(const SubTape &sub, const OpenFrame &frame,
-                            std::span<const DevAddr> out_addrs) HAZE_REQUIRES(mutex_);
+                            std::span<const DevAddr> out_addrs,
+                            std::span<const uint64_t> out_moduli) HAZE_REQUIRES(mutex_);
 
     mutable HazeMutex mutex_;
     std::unordered_multimap<uint64_t, std::unique_ptr<SubTape>> cache_ HAZE_GUARDED_BY(mutex_);

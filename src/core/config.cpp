@@ -36,6 +36,13 @@ bool is_supported_ring_dim(uint64_t n) noexcept {
 
 } // namespace
 
+bool env_flag(const char *name, bool fallback) noexcept {
+    const char *v = std::getenv(name); // NOLINT(concurrency-mt-unsafe) — read-only lookup
+    if (v == nullptr)
+        return fallback;
+    return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
+}
+
 Config &Config::instance() noexcept {
     static Config inst;
     return inst;
@@ -227,18 +234,6 @@ std::string Config::target() const noexcept {
     return std::string{kLocalTarget};
 }
 
-namespace {
-
-// Truthy env-var read for the data-format toggles: "1" or "true".
-bool env_flag(const char *name) noexcept {
-    const char *v = std::getenv(name);
-    if (v == nullptr)
-        return false;
-    return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
-}
-
-} // namespace
-
 void Config::set_montgomery(bool enable) noexcept {
     HazeLockGuard lock(mutex_);
     montgomery_ = enable;
@@ -259,7 +254,7 @@ bool Config::montgomery() const noexcept {
     }
     // Env fallback mirrors target(): consulted only when no explicit setter
     // call has been made.
-    return env_flag("HAZE_MONTGOMERY");
+    return env_flag("HAZE_MONTGOMERY", false);
 }
 
 bool Config::bit_reversal() const noexcept {
@@ -268,7 +263,7 @@ bool Config::bit_reversal() const noexcept {
         if (bit_reversal_set_)
             return bit_reversal_;
     }
-    return env_flag("HAZE_BIT_REVERSAL");
+    return env_flag("HAZE_BIT_REVERSAL", false);
 }
 
 void Config::reset() noexcept {

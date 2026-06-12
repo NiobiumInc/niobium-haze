@@ -44,9 +44,17 @@ template <auto OpFn>
 std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2,
                                                     int mod_idx) noexcept {
     const ConfigSnapshot *cfg = record_prelude();
-    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
-    if (q == 0)
+    if (cfg == nullptr) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "compute before hazeSetRingDimension");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    const uint64_t q = cfg->modulus(mod_idx);
+    if (q == 0) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "mod_idx names no configured modulus");
         return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     const auto v1 = resolve_operand(src1, cfg->ring_dim);
     if (!v1)
         return std::unexpected(v1.error());
@@ -80,9 +88,17 @@ template <auto OpFn>
 std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar,
                                                     int mod_idx) noexcept {
     const ConfigSnapshot *cfg = record_prelude();
-    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
-    if (q == 0)
+    if (cfg == nullptr) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "compute before hazeSetRingDimension");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    const uint64_t q = cfg->modulus(mod_idx);
+    if (q == 0) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "mod_idx names no configured modulus");
         return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     const auto v = resolve_operand(src, cfg->ring_dim);
     if (!v)
         return std::unexpected(v.error());
@@ -109,9 +125,17 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
     const ConfigSnapshot *cfg = record_prelude();
-    const uint64_t q = cfg != nullptr ? cfg->modulus(mod_idx) : 0;
-    if (q == 0)
+    if (cfg == nullptr) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "compute before hazeSetRingDimension");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    const uint64_t q = cfg->modulus(mod_idx);
+    if (q == 0) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "mod_idx names no configured modulus");
         return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     const auto v = resolve_operand(src, cfg->ring_dim);
     if (!v)
         return std::unexpected(v.error());
