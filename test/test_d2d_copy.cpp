@@ -23,24 +23,6 @@ namespace {
 constexpr uint64_t kRingDim = 4096;
 constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 
-// Three-prime MRP config for the hazeMemcpyMrp cases; returns the base
-// [picked, q1, q2] with picked the bridge-aligned prime for residue 0.
-std::vector<uint64_t> setup_mrp3_config() {
-    constexpr uint64_t kQ0 = 576460752303415297ULL;
-    constexpr uint64_t kQ1 = 576460752303439873ULL;
-    constexpr uint64_t kQ2 = 576460752303702017ULL;
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
-    return {picked, kQ1, kQ2};
-}
-
 } // namespace
 
 TEST_CASE("hazeMemcpy(D2D) copies a compute-produced polynomial via IR", "[integration]") {
@@ -214,7 +196,7 @@ TEST_CASE("hazeMemcpy(D2D) promotes an H2D'd source through the IR copy", "[inte
 }
 
 TEST_CASE("hazeMemcpyMrp(D2D) copies a compute-produced MRP via per-residue IR", "[integration]") {
-    const auto base = setup_mrp3_config();
+    const auto base = haze::test::setup_integration_mrp3_config();
     const std::vector<std::vector<uint64_t>> res = {
         haze::test::make_residue(base[0], /*seed=*/1, kRingDim),
         haze::test::make_residue(base[1], /*seed=*/2, kRingDim),
@@ -252,7 +234,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) copies a compute-produced MRP via per-residue IR",
 
 TEST_CASE("hazeMemcpyMrp(D2D) promotes H2D'd sources and registers the output group",
           "[integration]") {
-    const auto base = setup_mrp3_config();
+    const auto base = haze::test::setup_integration_mrp3_config();
     const std::vector<std::vector<uint64_t>> res = {
         haze::test::make_residue(base[0], /*seed=*/4, kRingDim),
         haze::test::make_residue(base[1], /*seed=*/5, kRingDim),
@@ -283,7 +265,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) promotes H2D'd sources and registers the output gr
 }
 
 TEST_CASE("hazeMemcpyMrp round-trips H2D then D2H per residue", "[integration]") {
-    const auto base = setup_mrp3_config();
+    const auto base = haze::test::setup_integration_mrp3_config();
     const std::vector<std::vector<uint64_t>> res = {
         haze::test::make_residue(base[0], /*seed=*/7, kRingDim),
         haze::test::make_residue(base[1], /*seed=*/8, kRingDim),
@@ -308,7 +290,7 @@ TEST_CASE("hazeMemcpyMrp round-trips H2D then D2H per residue", "[integration]")
 
 TEST_CASE("hazeMemcpyMrp(D2D) from a never-written source returns SOURCE_UNAVAILABLE",
           "[integration]") {
-    const auto base = setup_mrp3_config();
+    const auto base = haze::test::setup_integration_mrp3_config();
     auto src = haze::test::allocate_dst_residues(3, kBytes); // never written
     auto dst = haze::test::allocate_dst_residues(3, kBytes);
 
@@ -348,7 +330,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) with base_len 1 copies without registering a group
 }
 
 TEST_CASE("hazeMemcpyMrp rejects malformed arguments", "[integration]") {
-    const auto base = setup_mrp3_config();
+    const auto base = haze::test::setup_integration_mrp3_config();
     auto dst = haze::test::allocate_dst_residues(3, kBytes);
     auto src = haze::test::allocate_dst_residues(3, kBytes);
     const auto csrc = haze::test::to_const(src);

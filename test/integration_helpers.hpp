@@ -20,7 +20,8 @@ namespace haze::test {
 // MODULUS CONTRACT (single source of truth): the values passed to
 // hazeSetCiphertextModulus ARE the .fhetch trace moduli, and both replay paths
 // reconstruct under them; hazeReplayBridgeInitCryptoContext's scaffold prime is
-// overwritten at reconstruct and never consulted for results. So tests set the
+// overwritten with the trace primes at synthesis (bridge switch_tower_modulus)
+// and never consulted for results. So tests set the
 // slot to the intended prime and oracle against it (verified by "trace modulus
 // is authoritative ..." in test_hardware_format.cpp). Modulus-less SRP ops are
 // trace-authoritative too — haze recovers and binds the source modulus — except

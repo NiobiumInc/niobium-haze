@@ -181,10 +181,12 @@ std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr ds
         modulus = recorded_modulus_locked(src);
     auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kCopyModulus);
     if (modulus != kCopyModulus) {
-        // Bind the source too: one only ever touched by copies would
-        // otherwise stay sentinel-bound and load under the synthetic prime.
+        // Bind the source too (a node only touched by copies would otherwise
+        // stay sentinel-bound), and record src's modulus to match the binding
+        // so a later copy/automorph of src recovers it.
         fhetch::bind_modulus(*src_poly, modulus);
         fhetch::bind_modulus(copy, modulus);
+        addr_modulus_.insert_or_assign(src, modulus);
     }
     store_compute_result_locked(dst, std::move(copy), modulus);
     return {};
