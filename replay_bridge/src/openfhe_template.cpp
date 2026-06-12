@@ -372,10 +372,8 @@ struct HookCtx {
 
 // Pick the CC for a shape; uses `local_cache` (alive only during one hook
 // call) to dedupe per-shape builds. Heterogeneous arrays log + return nullptr.
-// TODO(niobium-fhetch:mod-map-tracking): the modulus-0 / COPY_MODULUS fallback
-// covers outputs whose address_modulus_map entry is the copy sentinel (an
-// address only ever touched by modulus-less copy ops) rather than a real
-// modulus registered before sync.
+// The modulus-0 / COPY_MODULUS fallback now covers only the residual case: an
+// address never bound to a real modulus (raw H2D, never compute-touched).
 const Context *context_for_shape(const HookCtx &hctx,
                                  std::map<std::vector<uint64_t>, Context> &local_cache,
                                  const niobium::CapturedShape &shape) {

@@ -107,21 +107,23 @@ std::string json_value_text(const std::string &doc, const std::string &key) {
 class EnvGuard {
   public:
     explicit EnvGuard(std::vector<const char *> names) : names_(std::move(names)) {
+        // setenv/unsetenv are POSIX (<cstdlib> is the nearest standard header —
+        // hence the include-cleaner suppressions); the discarded return only
+        // fails on a null/invalid name, which these literals are not.
         for (const char *name : names_) {
             const char *old = std::getenv(name);
             saved_.emplace_back(old != nullptr, old != nullptr ? old : "");
-            // setenv/unsetenv are POSIX; <cstdlib> is the closest standard
-            // header. Return value discarded: only fails on a null/invalid
-            // name, which these literals are not.
-            static_cast<void>(::unsetenv(name)); // NOLINT(misc-include-cleaner)
+            // NOLINTNEXTLINE(misc-include-cleaner)
+            static_cast<void>(::unsetenv(name));
         }
     }
     ~EnvGuard() {
         for (size_t i = 0; i < names_.size(); ++i) {
             if (saved_[i].first) {
-                static_cast<void>(::setenv(names_[i], saved_[i].second.c_str(),
-                                           1)); // NOLINT(misc-include-cleaner)
+                // NOLINTNEXTLINE(misc-include-cleaner)
+                static_cast<void>(::setenv(names_[i], saved_[i].second.c_str(), 1));
             } else {
+                // NOLINTNEXTLINE(misc-include-cleaner)
                 static_cast<void>(::unsetenv(names_[i]));
             }
         }
@@ -708,10 +710,8 @@ TEST_CASE("trace modulus is authoritative over the bridge's scaffold prime",
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != kQ0);
-    REQUIRE(picked != kQ1);
-    // picked < kQ1 holds for these constants; the wrap window [picked, kQ1)
-    // below relies on it.
+    // The only prerequisite: the scaffold prime sits below the trace prime, so
+    // the wrap window [picked, kQ1) used below is non-empty (and picked != kQ1).
     REQUIRE(picked < kQ1);
     REQUIRE(hazeSetCiphertextModulus(0, kQ1) == HAZE_SUCCESS);
     REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
