@@ -85,6 +85,13 @@ class KernelCache {
         std::vector<ValueId> in_vids;
         std::vector<DevAddr> out_addrs; // flattened outputs bound at End
         std::vector<ValueId> out_vids;
+        // The recorded_moduli value the cold body's terminal op left on
+        // each output (real prime, or 0 == sentinel/erased). Restored on
+        // replay so a post-kernel copy/automorph of the output recovers
+        // exactly what a cold trace would — NOT re-derived from the call
+        // descriptor, which carries a real prime even where the body
+        // stored the copy sentinel (SRP automorph / D2D of a raw input).
+        std::vector<uint64_t> out_moduli;
         std::vector<Node> body; // recorded nodes (recording call's vids/addrs)
     };
 
@@ -114,8 +121,7 @@ class KernelCache {
     void rollback_body_bindings_locked(Context &ctx, const OpenFrame &frame) const
         HAZE_REQUIRES(mutex_);
     void instantiate_locked(Context &ctx, const SubTape &sub, const OpenFrame &frame,
-                            std::span<const DevAddr> out_addrs,
-                            std::span<const uint64_t> out_moduli) HAZE_REQUIRES(mutex_);
+                            std::span<const DevAddr> out_addrs) HAZE_REQUIRES(mutex_);
 
     mutable HazeMutex mutex_;
     std::unordered_multimap<uint64_t, std::unique_ptr<SubTape>> cache_ HAZE_GUARDED_BY(mutex_);

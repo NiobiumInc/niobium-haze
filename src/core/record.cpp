@@ -15,7 +15,6 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
-#include "core/backend.hpp"
 #include "core/config.hpp"
 #include "core/context.hpp"
 #include "core/graph.hpp"
@@ -48,10 +47,13 @@ Thunk make_input_thunk(std::vector<uint64_t> &&bytes, uint64_t ring_dim, ValueId
 } // namespace
 
 const ConfigSnapshot *record_prelude(Context &ctx) noexcept {
-    // Init before anything else so first-call side effects (program-dir
-    // resolution, probe suppression) keep their eager-engine timing;
-    // failure surfaces at flush, not here.
-    [[maybe_unused]] const bool initialized = backend().ensure_initialized(ctx.config);
+    // The deferred tape emits NOTHING to the global fhetch engine at
+    // record time — flush's LoweringSession::ensure_backend resets the
+    // engine and re-initializes it from this context, so any record-time
+    // init would be wiped and redone anyway. Touching the global here
+    // would only let a compute on one context race a flush's engine
+    // scrub on another. So the record path stays per-context and
+    // global-free; init failure still surfaces at flush.
     return ctx.config.params();
 }
 
@@ -248,7 +250,7 @@ std::expected<void, HazeInternalError> copy_device_to_device(Context &ctx, DevAd
 }
 
 std::expected<void, HazeInternalError> tag_h2d_input(Context &ctx, DevAddr addr) noexcept {
-    [[maybe_unused]] const bool initialized = backend().ensure_initialized(ctx.config);
+    // No global-engine touch on the record path (see record_prelude).
     return record_h2d_input(ctx, addr);
 }
 

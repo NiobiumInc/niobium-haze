@@ -122,12 +122,22 @@ HAZE_API hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
 // Concurrency contract (CUDA-like). Recording is thread-safe with
 // per-thread program order: operations issued by one thread are
 // recorded in issue order; operations on DISTINCT buffers may proceed
-// concurrently from multiple threads. Reusing the same device address
-// from two threads without your own synchronization is undefined (the
-// recording stays memory-safe, but which value wins is unspecified —
-// exactly like racing CUDA kernels on one buffer without streams or
-// events). hazeFlush racing compute on the addresses being flushed is
-// likewise undefined; concurrent hazeFlush calls serialize internally.
+// concurrently, including across DIFFERENT contexts — recording state
+// is per-context and the record path touches no process-global engine.
+// Reusing the same device address from two threads without your own
+// synchronization is undefined (the recording stays memory-safe, but
+// which value wins is unspecified — exactly like racing CUDA kernels on
+// one buffer without streams or events).
+//
+// hazeFlush is the one globally-serialized step: it emits into and
+// replays through the single process-global FHETCH engine, so every
+// hazeFlush — on the same context OR a different one — serializes on
+// one internal lock and runs to completion one at a time. The slow
+// replay currently runs inside that lock (the engine keeps in-memory
+// per-epoch state that a concurrent flush would clobber); a per-context
+// engine that lets replays overlap is future work, gated on libnbfhetch
+// growing a context object. hazeFlush racing compute on the addresses
+// being flushed (same context) is undefined.
 HAZE_API hazeError_t hazeFlush(hazeContext_t ctx) HAZE_NOEXCEPT;
 
 /* Context management. A hazeContext_t is one recording program: its own

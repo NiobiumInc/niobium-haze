@@ -359,10 +359,13 @@ This is the central design contribution. Every compute API call
 (`hazeAdd`, `hazeMul`, `hazeNTT`, ...) records onto an append-only tape
 (`src/core/graph.hpp`) without calling fhetch at all:
 
-1. `record_prelude(ctx)` brings up `niobium::compiler()` on first
-   compute (idempotent, lock-free fast path) and reads the context's
-   FHE parameters — a lock-free `ConfigSnapshot` published once by
-   `hazeContextCreate` and immutable for the context's lifetime.
+1. `record_prelude(ctx)` only reads the context's FHE parameters — a
+   lock-free `ConfigSnapshot` published once by `hazeContextCreate` and
+   immutable for the context's lifetime. It does NOT touch the global
+   `niobium::compiler()`: nothing is emitted to fhetch until flush, and
+   flush re-initializes the engine from scratch anyway, so the record
+   path stays per-context and global-free (a compute on one context
+   cannot race a flush on another).
 2. Each `void*` operand resolves through the lock-free `BindingTable`
    (addr → `ValueId`, one atomic word per allocation slot). First touch
    snapshots the shadow bytes NOW (evicting) and appends an

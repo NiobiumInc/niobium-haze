@@ -44,14 +44,21 @@ class LoweringSession {
     LoweringSession &operator=(const LoweringSession &) = delete;
 
     // Scrub the process-global fhetch engine and rebuild it from the
-    // flushing context's Config: compiler().reset() wipes every sticky
-    // global (program info/dir, target, data-format flags, recording
-    // registries, captured IO, the bridge hook), then init re-derives
-    // all of it from ctx. The global is re-bound on EVERY flush, so no
-    // context can observe another's leftovers through fhetch — the
-    // closest haze can get to a per-flush engine until libnbfhetch
-    // grows a real context object. False = leave the tape untouched
-    // and report flush success, the documented failed-init behavior.
+    // flushing context: compiler().reset() wipes the sticky globals
+    // (recording registries, captured IO, the bridge hook; reset also
+    // zeroes the data-format flags and ring dim), then ensure_initialized
+    // re-derives program info/dir/target/format from ctx.config and
+    // rebind_bridge re-captures the CryptoContext. Because every flush
+    // re-binds the engine from its own context, SEQUENTIAL flushes from
+    // different contexts don't leak state into one another.
+    //
+    // This is masking, NOT isolation: there is still ONE engine, so the
+    // guarantee holds only because flushes are serialized end-to-end (see
+    // the hazeFlush concurrency contract in haze.h). Two flushes truly
+    // overlapping would corrupt each other through the singleton — real
+    // per-context isolation waits on the libnbfhetch context API this
+    // class is the seam for. False = leave the tape untouched and report
+    // flush success, the documented failed-init behavior.
     [[nodiscard]] bool ensure_backend() noexcept;
 
     // Re-install the replay bridge's post-recording hook (dropped by

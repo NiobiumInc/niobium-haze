@@ -55,14 +55,6 @@ std::vector<DevAddr> flatten_outputs(std::span<const hazeKernelOutput> outputs) 
     return addrs;
 }
 
-std::vector<uint64_t> flatten_output_moduli(std::span<const hazeKernelOutput> outputs) {
-    std::vector<uint64_t> moduli;
-    for (const hazeKernelOutput &out : outputs)
-        for (size_t i = 0; i < out.base_len; ++i)
-            moduli.push_back(out.base[i]);
-    return moduli;
-}
-
 } // namespace
 
 bool KernelCache::has_open_frame() const noexcept {
@@ -263,8 +255,7 @@ void KernelCache::rollback_body_bindings_locked(Context &ctx, const OpenFrame &f
 }
 
 void KernelCache::instantiate_locked(Context &ctx, const SubTape &sub, const OpenFrame &frame,
-                                     std::span<const DevAddr> out_addrs,
-                                     std::span<const uint64_t> out_moduli) {
+                                     std::span<const DevAddr> out_addrs) {
     // Positional formal translation, total under the closed-body rule.
     std::unordered_map<DevAddr, DevAddr> addr_map;
     for (size_t i = 0; i < sub.in_addrs.size(); ++i)
@@ -310,7 +301,9 @@ void KernelCache::instantiate_locked(Context &ctx, const SubTape &sub, const Ope
     // which post-kernel copies/automorphs recover.
     for (size_t i = 0; i < sub.out_addrs.size(); ++i) {
         ctx.values.store(out_addrs[i], fresh_vid(sub.out_vids[i]));
-        ctx.recorded_moduli.store(out_addrs[i], out_moduli[i]);
+        // The body's recorded modulus, captured at cold End — never the
+        // call descriptor's, which would turn a sentinel into a real prime.
+        ctx.recorded_moduli.store(out_addrs[i], sub.out_moduli[i]);
     }
 }
 // NOLINTEND(readability-convert-member-functions-to-static)
@@ -358,7 +351,7 @@ KernelCache::end(Context &ctx, std::span<const hazeKernelOutput> outputs) noexce
                     }
                 }
             }
-            instantiate_locked(ctx, sub, *frame, out_addrs, flatten_output_moduli(outputs));
+            instantiate_locked(ctx, sub, *frame, out_addrs);
         } else if (!frame->passthrough) {
             if (auto closed = check_closed_body_locked(*frame, out_addrs); !closed) {
                 rollback_body_bindings_locked(ctx, *frame);
@@ -366,7 +359,9 @@ KernelCache::end(Context &ctx, std::span<const hazeKernelOutput> outputs) noexce
             }
 
             std::vector<ValueId> out_vids;
+            std::vector<uint64_t> out_moduli;
             out_vids.reserve(out_addrs.size());
+            out_moduli.reserve(out_addrs.size());
             for (DevAddr a : out_addrs) {
                 const ValueId vid = ctx.values.load(a);
                 if (vid == kUnbound) {
@@ -376,6 +371,10 @@ KernelCache::end(Context &ctx, std::span<const hazeKernelOutput> outputs) noexce
                     return std::unexpected(HazeInternalError::SourceUnavailable);
                 }
                 out_vids.push_back(vid);
+                // Capture what the body's terminal op actually left (real
+                // prime, or 0 == sentinel/erased) so replay restores it
+                // verbatim — see SubTape::out_moduli.
+                out_moduli.push_back(ctx.recorded_moduli.load(a));
             }
 
             if (frame->validate_against != nullptr) {
@@ -411,6 +410,7 @@ KernelCache::end(Context &ctx, std::span<const hazeKernelOutput> outputs) noexce
                 sub->in_vids = frame->in_vids;
                 sub->out_addrs = out_addrs;
                 sub->out_vids = out_vids;
+                sub->out_moduli = std::move(out_moduli);
                 sub->body = *frame->body; // copy: the original lands on the tape
                 cache_.emplace(frame->key_hash, std::move(sub));
                 for (Node &node : *frame->body)
@@ -437,6 +437,13 @@ std::expected<void, HazeInternalError> KernelCache::abort_frame(Context &ctx) no
     }
     if (frame_->body != nullptr)
         ctx.tape.install_frame_sink(nullptr);
+    // The body's ops already ran bind_result eagerly (ctx.values/recorded_moduli
+    // stored) before their nodes were routed into the now-discarded sink; undo
+    // those bindings so a caller that keeps recording sees a LOUD
+    // SourceUnavailable on next use, not a dangling vid that fails at flush.
+    // No-op for a body-less frame (passthrough records straight onto the main
+    // tape, where the bindings are real and must stay).
+    rollback_body_bindings_locked(ctx, *frame_);
     frame_.reset(); // recorded nodes die with the frame; nothing reached the tape
     return {};
 }
