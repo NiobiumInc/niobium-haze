@@ -18,7 +18,7 @@ This guide defines how automated and manual PR reviews should be conducted for t
   - `src/common/` — `HazeMutex`, `HazeLockGuard`, error/log utilities.
   - `replay_bridge/` — OpenFHE integration, `cryptocontext.dat`, ciphertext template generation.
   - `include/haze/` — public C ABI (no C++ in interface).
-- **Execution model**: Every compute call appends a node to the FHETCH trace. Outputs are **explicit**: `hazeTagOutput(ptr)` declares a result an output, then `hazeFlush()` is the **flush trigger** — it calls `replay_and_populate()`, dispatches the trace, and writes simulator results into the tagged outputs' shadow buffers. `hazeMemcpy(D2H)` is then a **pure shadow read**; a D2H of an address that was not tagged-and-flushed returns `HAZE_ERROR_NOT_FLUSHED`. `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops (nothing runs asynchronously, so there is nothing to wait for — they do not flush).
+- **Execution model**: Every compute call appends a node to a per-context deferred tape — no fhetch emission yet. Outputs are **explicit**: `hazeTagOutput(ctx, ptr)` declares a result an output, then `hazeFlush(ctx)` is the **flush trigger** — `lower::finalize` seals the tape, lowers it through fhetch, dispatches replay, and writes simulator results into the tagged outputs' shadow buffers. `hazeMemcpy(D2H)` is then a **pure shadow read**; a D2H of an address that was not tagged-and-flushed returns `HAZE_ERROR_NOT_FLUSHED`. `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops (nothing runs asynchronously, so there is nothing to wait for — they do not flush).
 
 ---
 
@@ -39,8 +39,8 @@ Label every issue: **Blocker / High / Medium / Low**.
 ## 2. PR Risk Classification
 
 ### Blocker — must not merge
-- **Lock nesting**: haze locks never nest. The allocator mutex and `Graph::append`'s mutex are both leaves; any new code path that holds one haze lock while acquiring another is a Blocker.
-- **Flush-trigger bypass**: materialization (reading simulator results, writing to shadow storage) must go through `hazeFlush()` → `replay_and_populate()` (or the write-only `hazeWriteProgram()` finalize path). A new `replay_and_populate()` call site — or making `hazeMemcpy(D2H)` flush again instead of being a pure shadow read — breaks the explicit-flush contract.
+- **Lock-order violation**: haze locks form an ordered DAG with `g_lower_mutex` outermost (full hierarchy in `src/common/thread_safety.hpp`). An acquisition that is not a downward path through that DAG — introducing or reversing an edge, or adding a lock without slotting it into the order — is a Blocker.
+- **Flush-trigger bypass**: materialization (reading simulator results, writing to shadow storage) must go through `hazeFlush()` → `lower::finalize(run_replay=true)` (or the write-only `hazeWriteProgram()` → `finalize(false)` path). A new `finalize()` call site — or making `hazeMemcpy(D2H)` flush again instead of being a pure shadow read — breaks the explicit-flush contract.
 - **Exception crossing the C ABI boundary**: any `extern "C"` function that can throw. Every public entry point must be `HAZE_NOEXCEPT`.
 - **ABI break in `include/haze/`**: removing or reordering public API symbols, changing `hazeError_t` enumerator values, changing struct layouts in `haze_types.h`.
 - **`DevAddr` arithmetic outside the C ABI edge**: `DevAddr` is an `enum class : uintptr_t`; it must only be cast to/from `void*` at `src/api/` entry points, never inside core or common.
@@ -49,7 +49,7 @@ Label every issue: **Blocker / High / Medium / Low**.
 - **Raw owning pointers or manual `new`/`delete`** outside of C-API wrappers. libhaze targets C++23 — ownership must be expressed via `std::unique_ptr`, `std::shared_ptr`, or RAII value types. A raw owning pointer is never acceptable in new code.
 
 ### High Risk — deep review required
-- Changes to `src/core/epoch.cpp` (recording state machine, `replay_and_populate`, `EpochSession` RAII guard).
+- Changes to the deferred-tape engine (`src/core/graph.cpp`, `record.cpp`, `lower.cpp`: the record path, `derive()`, and `finalize()`).
 - Changes to `src/core/allocator.*` (shadow storage, `alloc_set_`, `shadow_data_`, `extract_polynomial_components`).
 - Changes to `include/haze/haze.h` or `include/haze/haze_types.h` (public ABI).
 - Changes to `replay_bridge/` (OpenFHE integration, key extraction, `post_recording_hook` registration).
@@ -62,8 +62,8 @@ Label every issue: **Blocker / High / Medium / Low**.
 ### Medium Risk — targeted review
 - New compute API implementations in `src/api/compute.cpp`.
 - New or modified test cases under `test/`.
-- Changes to `hazeSetRingDimension`, `hazeMalloc`, `hazeFree` (single-size invariant enforcement).
-- Changes to the `EpochSession` RAII guard lifecycle (constructor, destructor, `ensure_initialized`).
+- Changes to `hazeContextCreate`, `hazeMalloc`, `hazeFree` (single-size invariant enforcement).
+- Changes to the flush lifecycle (`LoweringSession`, `lower::finalize`, `CompilerBackend::ensure_initialized`).
 
 ### Low Risk — light review
 - Docs, comments, README updates.
@@ -87,7 +87,7 @@ libhaze is authored with Rust-informed preferences: strong ownership, exhaustive
 ### 3.2 Lock Order and Thread Safety
 This is the most subtle correctness area in libhaze.
 
-- **Lock nesting**: no haze lock is held while acquiring another (allocator and tape-append mutexes are leaves; `lower::finalize` holds no haze lock while lowering). Any nesting is a Blocker.
+- **Lock order**: every acquisition must be a downward path through the hierarchy in `src/common/thread_safety.hpp` (`g_lower_mutex` outermost; `finalize` holds it across the flush and takes the subsystem locks under it one at a time; the allocator is the bottom leaf). Introducing or reversing an edge is a Blocker.
 - **TSA annotations**: every new lock usage must carry `HAZE_REQUIRES` or `HAZE_EXCLUDES` on the calling function. Missing annotations defeat clang's `-Wthread-safety` enforcement.
 - **`HazeMutex` / `HazeLockGuard`**: use these, not `std::mutex` / `std::lock_guard`. The standard library types carry no TSA annotations.
 - **Shared data without synchronization**: flag any access to `Graph` or `DeviceAllocator` fields from outside `mutex_`-protected regions, and any record-time construction of fhetch objects (thunk-capture discipline in `core/graph.hpp`) — it silently shifts the global fhetch address counter.
@@ -100,12 +100,12 @@ This is the most subtle correctness area in libhaze.
 - **`hazeFree` eviction**: shadow entries at freed addresses must be cleared; leaking them past `hazeFree` causes ghost data in a subsequent `hazeMalloc` at the same address.
 
 ### 3.4 Record-and-Replay State Machine
-- **Explicit output contract**: the flow is compute → `hazeTagOutput(ptr)` → `hazeFlush()` → `hazeMemcpy(D2H)`. `hazeTagOutput` declares an output (tagging any MRP residue promotes its whole group); `hazeFlush` executes the recording and materializes **only** the tagged outputs; D2H is a pure shadow read. Output-hood is the caller's declared intent — `store_compute_result_locked` must not auto-tag every computed value.
-- **Flush is the sole trigger**: `replay_and_populate()` may only be reached via `hazeFlush()` (and the write-only `hazeWriteProgram()` finalize path). `hazeMemcpy(D2H)` must NOT flush, and no other site may call it. Any new call site is a design violation.
-- **`EpochSession` RAII guard**: every compute call must go through an `EpochSession`. Missing it skips `ensure_initialized` and the recording start/stop lifecycle. `hazeTagOutput` deliberately does NOT use it — tagging is a declaration, not a compute op, and must not start a phantom recording.
+- **Explicit output contract**: the flow is compute → `hazeTagOutput(ptr)` → `hazeFlush()` → `hazeMemcpy(D2H)`. `hazeTagOutput` declares an output (tagging any MRP residue promotes its whole group); `hazeFlush` executes the recording and materializes **only** the tagged outputs; D2H is a pure shadow read. Output-hood is the caller's declared intent — the record path's `bind_result` must not auto-tag every computed value.
+- **Flush is the sole trigger**: `lower::finalize()` may only be reached via `hazeFlush()` (and the write-only `hazeWriteProgram()` path). `hazeMemcpy(D2H)` must NOT flush, and no other site may call it. Any new call site is a design violation.
+- **Record prelude**: every compute call goes through `record_prelude(ctx)` then resolve-operands → `bind_result` → append a Node; it reads the context's frozen params and touches NO global engine (emission is deferred to flush). `hazeTagOutput` appends a metadata-only `TagOutput` node — a declaration, not a compute op — and must not trigger emission.
 - **Input promotion**: `resolve_operand(addr, ring_dim)` snapshots (and evicts) shadow bytes at record time. Calling it on an address whose shadow was already evicted via `extract_polynomial_components` is a silent data hazard.
-- **`tag_output` registration**: only explicitly-tagged outputs (`pending_outputs_` and `pending_mrp_groups_`) are tagged for `fhetch::tag_output` before `stop_epoch()`. An untagged computed value is never materialized; a later D2H of it returns `HAZE_ERROR_NOT_FLUSHED`, not stale zeros.
-- **No-op when idle**: `replay_and_populate()` / `hazeFlush()` must be a no-op when no FHETCH epoch is in flight or no outputs were tagged (plain H2D-then-D2H round-trips, double-flush). Confirm the guard condition is preserved.
+- **`tag_output` registration**: only explicitly-tagged outputs (`DerivedState::pending_outputs` / `pending_mrp_groups`, derived from the sealed tape at flush) are tagged for `fhetch::tag_output` before `stop_epoch()`. An untagged computed value is never materialized; a later D2H of it returns `HAZE_ERROR_NOT_FLUSHED`, not stale zeros.
+- **No-op when idle**: `lower::finalize()` / `hazeFlush()` must be a no-op when the tape is empty or no outputs were tagged (plain H2D-then-D2H round-trips, double-flush). Confirm the guard condition is preserved.
 
 ### 3.5 C ABI Boundary
 - **`HAZE_NOEXCEPT`**: all `extern "C"` entry points must be `HAZE_NOEXCEPT`. Check every new or modified function in `src/api/`.
@@ -116,7 +116,7 @@ This is the most subtle correctness area in libhaze.
 
 ### 3.6 Single-Size Allocation Invariant
 - Every `hazeMalloc` allocation must equal `ring_dim * sizeof(uint64_t)`. Any path that accepts a different size or skips the size check is a Blocker.
-- `hazeSetRingDimension` must be called before the first `hazeMalloc`. New code that calls `hazeMalloc` without a prior ring-dimension set is a contract violation.
+- `hazeContextCreate` fixes the ring dimension at birth; every `hazeMalloc(ctx, …)` must equal the context's polynomial size. There is no separate ring-dimension setter, and no `hazeMalloc` without a context.
 - `hazeHostAlloc` is the correct path for non-polynomial scratch (pointer arrays, twiddle tables, kernel-arg packs) — these must never go through `hazeMalloc`.
 
 ### 3.7 hazeDeviceReset and Bridge Re-init

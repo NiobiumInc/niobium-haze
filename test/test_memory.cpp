@@ -108,7 +108,7 @@ TEST_CASE("hazeMemset fills shadow buffer", "[unit]") {
 }
 
 TEST_CASE("hazeHostAlloc/Free round-trip", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(4096, {}); // host alloc registers against the context
     void *p = nullptr;
     REQUIRE(hazeHostAlloc(haze::test::ctx(), &p, 4096, 0) == HAZE_SUCCESS);
     REQUIRE(p != nullptr);
@@ -213,7 +213,7 @@ TEST_CASE("hazePointerGetAttributes reports device type for hazeMalloc'd pointer
 }
 
 TEST_CASE("hazePointerGetAttributes reports unregistered for foreign pointers", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(4096, {});
     // A stack pointer was never registered with hazeHostAlloc, so it
     // reports UNREGISTERED — matches cudaPointerGetAttributes since CUDA 11.
     int stack_local = 0;
@@ -223,7 +223,7 @@ TEST_CASE("hazePointerGetAttributes reports unregistered for foreign pointers", 
 }
 
 TEST_CASE("hazePointerGetAttributes reports host type for hazeHostAlloc'd pointer", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::recreate_ctx(4096, {});
     void *p = nullptr;
     REQUIRE(hazeHostAlloc(haze::test::ctx(), &p, 4096, 0) == HAZE_SUCCESS);
     hazePointerAttributes attrs{};
