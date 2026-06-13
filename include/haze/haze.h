@@ -132,12 +132,17 @@ HAZE_API hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
 // hazeFlush is the one globally-serialized step: it emits into and
 // replays through the single process-global FHETCH engine, so every
 // hazeFlush — on the same context OR a different one — serializes on
-// one internal lock and runs to completion one at a time. The slow
-// replay currently runs inside that lock (the engine keeps in-memory
-// per-epoch state that a concurrent flush would clobber); a per-context
-// engine that lets replays overlap is future work, gated on libnbfhetch
-// growing a context object. hazeFlush racing compute on the addresses
-// being flushed (same context) is undefined.
+// one internal lock and runs to completion one at a time, the slow
+// replay included. This is NOT because results are heavyweight in
+// memory: the parameters are the caller's (ring dim, moduli live in the
+// context) and the computed values are files (serialized_probes/<name>.ct).
+// It is because replay + result-readback are methods on the ONE engine
+// object — they read/write its mutable program-dir / trace-path fields
+// and run the worker atomically, and only libnbfhetch can decode the
+// result files. Overlapping replays needs the engine to take the program
+// dir + output set per call (a per-context object) — future work in
+// libnbfhetch. hazeFlush racing compute on the addresses being flushed
+// (same context) is undefined.
 HAZE_API hazeError_t hazeFlush(hazeContext_t ctx) HAZE_NOEXCEPT;
 
 /* Context management. A hazeContext_t is one recording program: its own
