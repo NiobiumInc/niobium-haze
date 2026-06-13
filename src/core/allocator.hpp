@@ -72,10 +72,11 @@ class AllocatorTestAccess;
 //    or materialization update — creates the shadow entry.
 //
 // Thread-safety: all public methods take mutex_ themselves (annotated
-// HAZE_EXCLUDES). mutex_ is a LEAF lock: allocator code never calls
-// into the recording layer, and the record path completes its
-// allocator call before touching the Graph's append mutex, so haze
-// locks never nest.
+// HAZE_EXCLUDES). mutex_ is the BOTTOM of the lock hierarchy (see
+// src/common/thread_safety.hpp): allocator code never calls into any
+// other haze subsystem, so nothing is acquired while it is held.
+// Config::mutex_ (init_params) and g_lower_mutex (flush shadow
+// population) acquire it; it acquires nothing in turn.
 class DeviceAllocator {
   public:
     DeviceAllocator() = default; // constructed as a haze_context_s member

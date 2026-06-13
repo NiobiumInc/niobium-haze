@@ -436,12 +436,18 @@ addresses above FHETCH's synthetic address range (< `0x1000000000`).
 
 ### Locking
 
-Haze locks never nest. The record path takes only `Graph::append`'s
-internal mutex (a short push) and the `DeviceAllocator` mutex (leaf;
-the allocator call completes before the append). `lower::finalize`
-serializes flushes against each other with a file-local mutex and holds
-no haze lock while lowering, so fhetch's own internal locks are reached
-only by the single flush thread. The `BindingTable` and `LowerCtx` are
+Haze locks form a hierarchy (the full ordered edge set lives in
+`src/common/thread_safety.hpp`), with `lower.cpp`'s file-local
+`g_lower_mutex` outermost. The record path is shallow: it takes only
+`Graph::append`'s internal mutex (a short push) and the
+`DeviceAllocator` mutex (leaf; the allocator call completes before the
+append). `lower::finalize` serializes flushes against each other by
+holding `g_lower_mutex` across the whole flush, and under it momentarily
+acquires the other subsystems' locks one at a time (the open-bracket
+check, backend bring-up, `seal()`, shadow population). During lowering
+proper — thunk execution, output tagging, replay — only `g_lower_mutex`
+is held, so fhetch's own internal locks are reached only by the single
+flush thread. The `BindingTable` and `LowerCtx` are
 deliberately annotation-free (single-word atomics / single-threaded at
 flush); everything mutex-guarded carries `HAZE_GUARDED_BY` /
 `HAZE_EXCLUDES`, and clang TSA checks the contracts at compile time.

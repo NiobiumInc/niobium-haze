@@ -41,8 +41,8 @@ namespace haze {
 // shared vid_remap for the (immutable, reused) thunks.
 //
 // Lock order: cache mutex_ -> Graph append mutex (sink install / clone
-// appends). The one-way edge is the single permitted haze lock nesting;
-// Graph never calls back into the cache.
+// appends) — the KernelCache->Graph edge of the lock hierarchy (see
+// src/common/thread_safety.hpp); Graph never calls back into the cache.
 class KernelCache {
   public:
     KernelCache() = default; // constructed as a haze_context_s member

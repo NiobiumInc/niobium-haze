@@ -30,15 +30,31 @@
 //   - Mark accessor methods that hand out a reference to the underlying
 //     capability with HAZE_RETURN_CAPABILITY(field).
 //
-// HAZE lock policy — the permitted nesting edges, in full:
-//   KernelCache::mutex_ -> Graph::mutex_   (frame sink install, clone appends)
-//   Config::mutex_      -> DeviceAllocator::mutex_  (set_ring_dimension)
-// Everything else is a leaf: record helpers complete their allocator
-// call before Graph::append, and lower.cpp's finalize mutex serializes
-// flushes without any haze lock held during lowering. No haze code may
-// add a nesting edge without updating this list; the reverse of either
-// edge above deadlocks. TSAN is the runtime backstop for the lock-free
-// BindingTable, which carries no TSA annotations by design.
+// HAZE lock hierarchy — every HazeMutex, outermost first. A holder of a
+// lock may acquire only locks strictly below it; the reverse of any edge
+// deadlocks. The edges form a DAG (no cycle), which is what lets the
+// flush path legitimately reach almost every subsystem under one lock:
+//
+//   g_lower_mutex (lower.cpp)              flush serialization; outermost.
+//     │  Held across all of finalize(), which momentarily acquires, in turn:
+//     ├─→ KernelCache::mutex_              open-bracket check (has_open_frame)
+//     ├─→ CompilerBackend::init_mutex_     backend bring-up (ensure_backend)
+//     ├─→ Graph::mutex_                    tape size() / seal()
+//     └─→ DeviceAllocator::mutex_          shadow population (update_shadow)
+//   KernelCache::mutex_
+//     └─→ Graph::mutex_                    frame-sink install, clone appends
+//   CompilerBackend::init_mutex_
+//     └─→ Config::mutex_                   ensure_initialized reads the params
+//   Config::mutex_
+//     └─→ DeviceAllocator::mutex_          init_params fixes the pool geometry
+//
+// During lowering proper (thunk execution, output tagging, replay) only
+// g_lower_mutex is held — the four edges under it are momentary pre/post
+// steps, each released before the next. Everything not shown is a leaf
+// (record helpers finish their allocator call before Graph::append). No
+// haze code may add or reorder an edge without updating this hierarchy.
+// TSAN is the runtime backstop for the lock-free BindingTable, which
+// carries no TSA annotations by design.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names
