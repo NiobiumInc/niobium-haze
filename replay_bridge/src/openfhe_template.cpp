@@ -27,6 +27,7 @@
 #include <functional>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <haze/replay_bridge.hpp> // declares the result_from this TU defines
 #include <map>
 #include <memory>
 #include <niobium/compiler.h>
@@ -699,9 +700,10 @@ bool result(const std::string &name, MRP &m) {
     return result_from(niobium::compiler().get_program_directory(), name, m);
 }
 
-// NOTE: there is no result_from(dir, name, MRPArray&) — fhetch_api.h declares
-// the dir-explicit family for Polynomial and MRP only. So this overload is the
-// singleton-dir path with no isolated-mode counterpart: in isolated replay it
+// NOTE: there is no result_from(dir, name, MRPArray&) — the consumer-side
+// dir-explicit family (replay_bridge.hpp) covers Polynomial and MRP only. So
+// this overload is the singleton-dir path with no isolated-mode counterpart: in
+// isolated replay it
 // would read whatever dir the shared Compiler last pointed at, not a specific
 // flush's. That is not a live hazard here because haze's flush never collects
 // MRPArray outputs — finalize() reads every output as a per-residue Polynomial

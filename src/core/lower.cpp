@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <haze/replay_bridge.hpp> // niobium::fhetch::result_from (consumer-side)
 #include <ios>
 #include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
