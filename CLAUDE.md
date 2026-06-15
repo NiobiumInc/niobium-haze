@@ -448,9 +448,17 @@ append). `lower::finalize` serializes flushes against each other by
 holding `g_lower_mutex` across the whole flush, and under it momentarily
 acquires the other subsystems' locks one at a time (the open-bracket
 check, backend bring-up, `seal()`, shadow population). During lowering
-proper — thunk execution, output tagging, replay — only `g_lower_mutex`
-is held, so fhetch's own internal locks are reached only by the single
-flush thread. The `BindingTable` and `LowerCtx` are
+proper — thunk execution, output tagging — only `g_lower_mutex` is held,
+so fhetch's own internal locks are reached only by the single flush
+thread. Replay itself depends on the mode: the default in-process replay
+runs under `g_lower_mutex` (flushes serialize end to end); isolated mode
+(`HAZE_REPLAY_ISOLATED=1`, `core/config.cpp::replay_isolated`) releases
+the lock after emit and runs the replay in a per-flush worker process
+(`Compiler::replay_project` → `fhetch_sim`/`nbcc_fhetch_replay`) plus
+`result_from` + `update_shadow` off-lock, so concurrent flushes on
+distinct-program-dir contexts overlap their replays — each worker owns
+its own OpenFHE state, so there is nothing shared to race. The
+`BindingTable` and `LowerCtx` are
 deliberately annotation-free (single-word atomics / single-threaded at
 flush); everything mutex-guarded carries `HAZE_GUARDED_BY` /
 `HAZE_EXCLUDES`, and clang TSA checks the contracts at compile time.

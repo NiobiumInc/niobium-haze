@@ -36,11 +36,11 @@
 // flush path legitimately reach almost every subsystem under one lock:
 //
 //   g_lower_mutex (lower.cpp)              flush serialization; outermost.
-//     │  Held across all of finalize(), which momentarily acquires, in turn:
+//     │  Held across finalize()'s EMIT phase, which momentarily acquires:
 //     ├─→ KernelCache::mutex_              open-bracket check (has_open_frame)
 //     ├─→ CompilerBackend::init_mutex_     backend bring-up (ensure_backend)
 //     ├─→ Graph::mutex_                    tape size() / seal()
-//     └─→ DeviceAllocator::mutex_          shadow population (update_shadow)
+//     └─→ DeviceAllocator::mutex_          shadow population (default replay)
 //   KernelCache::mutex_
 //     └─→ Graph::mutex_                    frame-sink install, clone appends
 //   CompilerBackend::init_mutex_
@@ -48,13 +48,19 @@
 //   Config::mutex_
 //     └─→ DeviceAllocator::mutex_          init_params fixes the pool geometry
 //
-// During lowering proper (thunk execution, output tagging, replay) only
-// g_lower_mutex is held — the four edges under it are momentary pre/post
-// steps, each released before the next. Everything not shown is a leaf
-// (record helpers finish their allocator call before Graph::append). No
-// haze code may add or reorder an edge without updating this hierarchy.
-// TSAN is the runtime backstop for the lock-free BindingTable, which
-// carries no TSA annotations by design.
+// During lowering proper (thunk execution, output tagging) only
+// g_lower_mutex is held — the edges under it are momentary, each released
+// before the next. The REPLAY + shadow-population step depends on the
+// mode: the default in-process replay runs under g_lower_mutex (hence the
+// g_lower→Allocator edge above); isolated mode (replay_isolated()) RELEASES
+// g_lower_mutex first and runs the worker + result_from + update_shadow
+// off-lock, taking only the per-context DeviceAllocator::mutex_ (a bottom
+// leaf — safe to acquire without g_lower held) and no other haze lock.
+// Everything not shown is a leaf (record helpers finish their allocator
+// call before Graph::append). No haze code may add or reorder an edge
+// without updating this hierarchy. TSAN is the runtime backstop for the
+// lock-free BindingTable (and the off-lock isolated-replay coordination),
+// which carry no TSA annotations by design.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names

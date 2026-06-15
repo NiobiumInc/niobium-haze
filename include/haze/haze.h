@@ -129,20 +129,28 @@ HAZE_API hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
 // which value wins is unspecified — exactly like racing CUDA kernels on
 // one buffer without streams or events).
 //
-// hazeFlush is the one globally-serialized step: it emits into and
-// replays through the single process-global FHETCH engine, so every
-// hazeFlush — on the same context OR a different one — serializes on
-// one internal lock and runs to completion one at a time, the slow
-// replay included. This is NOT because results are heavyweight in
-// memory: the parameters are the caller's (ring dim, moduli live in the
-// context) and the computed values are files (serialized_probes/<name>.ct).
-// It is because replay + result-readback are methods on the ONE engine
-// object — they read/write its mutable program-dir / trace-path fields
-// and run the worker atomically, and only libnbfhetch can decode the
-// result files. Overlapping replays needs the engine to take the program
-// dir + output set per call (a per-context object) — future work in
-// libnbfhetch. hazeFlush racing compute on the addresses being flushed
-// (same context) is undefined.
+// hazeFlush has two phases. The EMIT phase (sealing the tape and writing
+// the .fhetch project) goes through the single process-global FHETCH
+// engine and is serialized on one internal lock, so the emits of
+// concurrent flushes — same context or different — run one at a time
+// (each is ~hundreds of ms). The REPLAY phase (running the recorded
+// program and reading results back) is the long pole.
+//
+// Default: replay runs in-process under that same lock, so flushes
+// serialize end to end — simplest and fastest for single-threaded use.
+//
+// Isolated mode (env HAZE_REPLAY_ISOLATED=1): replay runs in a fresh
+// worker PROCESS off the lock (fhetch_sim for the local target,
+// nbcc_fhetch_replay for transport), so concurrent flushes overlap their
+// (potentially minutes-long) replays. Each worker has its own address
+// space — and thus its own OpenFHE transform caches — so concurrent
+// replays cannot race shared engine state. This is safe with NO
+// qualifiers, with ONE caller requirement: concurrently-flushed contexts
+// MUST use DISTINCT program directories (hazeSetProgramDirectory) so
+// their on-disk projects don't collide.
+//
+// In either mode, hazeFlush racing compute on the addresses being
+// flushed (same context) is undefined.
 HAZE_API hazeError_t hazeFlush(hazeContext_t ctx) HAZE_NOEXCEPT;
 
 /* Context management. A hazeContext_t is one recording program: its own
