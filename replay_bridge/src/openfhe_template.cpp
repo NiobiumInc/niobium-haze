@@ -699,6 +699,15 @@ bool result(const std::string &name, MRP &m) {
     return result_from(niobium::compiler().get_program_directory(), name, m);
 }
 
+// NOTE: there is no result_from(dir, name, MRPArray&) — fhetch_api.h declares
+// the dir-explicit family for Polynomial and MRP only. So this overload is the
+// singleton-dir path with no isolated-mode counterpart: in isolated replay it
+// would read whatever dir the shared Compiler last pointed at, not a specific
+// flush's. That is not a live hazard here because haze's flush never collects
+// MRPArray outputs — finalize() reads every output as a per-residue Polynomial
+// via result_from(<captured dir>, ...). An isolated caller needing the MRPArray
+// view must collect its residues the same way, or fhetch must grow the
+// dir-explicit overload first.
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, MRPArray &arr) {
     auto ct = load_serialized_probe(niobium::compiler().get_program_directory(), name);

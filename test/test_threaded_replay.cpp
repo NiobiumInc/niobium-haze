@@ -4,9 +4,10 @@
 // each with its own program directory and inputs, flush SIMULTANEOUSLY from N
 // threads. In isolated mode each flush's replay runs in a fresh worker process
 // (fhetch_sim --project), so the workers share no OpenFHE static state — the
-// thing that made concurrent in-process replay unsafe. This test shows (1) the
-// flushes genuinely overlap (an in-flight counter reaches N), and (2) each
-// context decrypts to ITS OWN result with no cross-talk. Run under
+// thing that made concurrent in-process replay unsafe. This test shows (1) N
+// threads enter their flushes together (a two-phase barrier proves all N are at
+// the flush entry at once) and run their worker replays concurrently, and
+// (2) each context decrypts to ITS OWN result with no cross-talk. Run under
 // -DHAZE_TSAN=ON it additionally checks haze's own off-lock bookkeeping (spec
 // capture, shadow writes) is race-free. The OpenFHE-cache race is gone by
 // construction (separate processes), so a green run here earns the unqualified
@@ -38,7 +39,10 @@
 namespace {
 
 constexpr std::size_t kN = 4096;
-constexpr std::size_t kCtxCount = 2; // contexts == threads
+// contexts == threads. Two is the minimum that exercises a concurrent flush
+// and proves no cross-talk; kept low because each flush spawns a worker
+// process (fhetch_sim + OpenFHE startup), so wall-clock scales with the count.
+constexpr std::size_t kCtxCount = 2;
 constexpr uint64_t kQ = 576460752303415297ULL;
 
 // Restore env on scope exit so isolated mode + the worker path don't leak
@@ -173,8 +177,12 @@ TEST_CASE("isolated replay: N contexts flush concurrently, no cross-talk",
         INFO("context " << i);
         REQUIRE(ok[i]); // correct result, no cross-talk
     }
-    // The flushes genuinely overlapped (both were inside hazeFlush at once),
-    // not merely serialized one-after-another.
+    // Liveness/simultaneity sanity check: the two-phase barrier guarantees all
+    // N threads reached the flush entry together (in_flight == N), so this is
+    // true by construction — it confirms the rendezvous fired, not that the
+    // flush bodies overlapped in wall-clock. The genuine concurrency proof is
+    // structural: N threads call hazeFlush with nothing serializing them, the
+    // off-lock worker replays run at once, and TSAN reports no race.
     REQUIRE(max_in_flight.load() >= 2);
 
     for (hazeContext_t c : ctxs)

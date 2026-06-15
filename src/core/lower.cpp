@@ -506,9 +506,16 @@ std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) n
 
     // OFF-LOCK isolated replay: a fresh worker process per flush
     // (replay_project spawns fhetch_sim for local / nbcc_fhetch_replay for
-    // transport, reading nothing from the engine), then dir-explicit
-    // readback. Failures surface directly — the engine's captured state was
-    // already cleared under the lock, so there is nothing to unwind here.
+    // transport, reading nothing from the engine), then dir-explicit readback.
+    // Safe to call concurrently without g_lower_mutex: the dir-explicit
+    // replay_project overload is parameter-driven and touches NO Compiler
+    // singleton state (impl_) — contrast dispatch_to_compiler_target(), which
+    // reads impl_->target/opt_level/montgomery. Per call, the child pid,
+    // posix_spawn argv, and (critically) the program dir are all distinct, so
+    // two concurrent calls share nothing mutable; the caller contract requires
+    // distinct per-context dirs. result_from() likewise reads only <dir>.
+    // Failures surface directly — the captured state was cleared under the
+    // lock, so there is nothing to unwind here.
     if (!niobium::compiler().replay_project(iso_target, iso_dir, "O0", iso_niobium_hw)) {
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "finalize: replay_project (isolated worker)");
