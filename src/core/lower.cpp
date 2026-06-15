@@ -505,23 +505,33 @@ std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) n
         }
     } // flush lock released here — only the isolated path reaches past this.
 
-    // OFF-LOCK isolated replay: a fresh worker process per flush
-    // (replay_project spawns fhetch_sim for local / nbcc_fhetch_replay for
-    // transport, reading nothing from the engine), then dir-explicit readback.
-    // Safe to call concurrently without g_lower_mutex: the dir-explicit
-    // replay_project overload is parameter-driven and touches NO Compiler
-    // singleton state (impl_) — contrast dispatch_to_compiler_target(), which
-    // reads impl_->target/opt_level/montgomery. Per call, the child pid,
-    // posix_spawn argv, and (critically) the program dir are all distinct, so
-    // two concurrent calls share nothing mutable; the caller contract requires
-    // distinct per-context dirs. result_from() likewise reads only <dir>.
-    // Failures surface directly — the captured state was cleared under the
-    // lock, so there is nothing to unwind here.
+    // OFF-LOCK worker replay: a fresh process per flush (replay_project spawns
+    // fhetch_sim for local / nbcc_fhetch_replay for transport) runs the
+    // minutes-long polynomial execution in its OWN address space, so distinct
+    // contexts' replays overlap — this is the one phase that runs without
+    // g_lower_mutex. Safe to call concurrently: the dir-explicit replay_project
+    // overload is parameter-driven and touches NO Compiler singleton state
+    // (impl_) — contrast dispatch_to_compiler_target(), which reads
+    // impl_->target/opt_level/montgomery. Per call the child pid, posix_spawn
+    // argv, and program dir are all distinct (the caller contract requires
+    // distinct per-context dirs), so two concurrent calls share nothing mutable.
     if (!niobium::compiler().replay_project(iso_target, iso_dir, "O0", iso_niobium_hw)) {
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "finalize: replay_project (isolated worker)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
+
+    // Readback RE-TAKES the flush lock. result_from() deserializes a ciphertext
+    // through OpenFHE (DeserializeFromFile -> DCRTPoly), which lazily fills
+    // process-global static caches (ILDCRTParams, CRT roots-of-unity) — the
+    // same state EMIT touches. Left off-lock it would race two concurrent
+    // isolated flushes on those caches: precisely the hazard process isolation
+    // removed from replay, reappearing in readback. It is cheap (file read +
+    // deserialize, no polynomial math), so serializing it costs nothing against
+    // the minutes-long worker replay that already overlapped. update_shadow
+    // then writes the per-context allocator (g_lower -> allocator, exactly as
+    // the default in-process path does).
+    HazeLockGuard readback_lock(g_lower_mutex);
     for (const auto &[addr, name] : iso_outputs) {
         fhetch::Polynomial result_poly;
         if (!fhetch::result_from(iso_dir, name, result_poly)) {

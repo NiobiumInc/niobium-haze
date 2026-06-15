@@ -139,15 +139,18 @@ HAZE_API hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
 // Default: replay runs in-process under that same lock, so flushes
 // serialize end to end — simplest and fastest for single-threaded use.
 //
-// Isolated mode (env HAZE_REPLAY_ISOLATED=1): replay runs in a fresh
-// worker PROCESS off the lock (fhetch_sim for the local target,
+// Isolated mode (env HAZE_REPLAY_ISOLATED=1): the long replay runs in a
+// fresh worker PROCESS off the lock (fhetch_sim for the local target,
 // nbcc_fhetch_replay for transport), so concurrent flushes overlap their
 // (potentially minutes-long) replays. Each worker has its own address
 // space — and thus its own OpenFHE transform caches — so concurrent
-// replays cannot race shared engine state. This is safe with NO
-// qualifiers, with ONE caller requirement: concurrently-flushed contexts
-// MUST use DISTINCT program directories (hazeSetProgramDirectory) so
-// their on-disk projects don't collide.
+// replays cannot race shared engine state. Reading the workers' results
+// back DOES re-take the engine lock (deserializing a ciphertext touches
+// OpenFHE's process-global caches), but that is a cheap file read, not
+// the long pole. This is safe with NO qualifiers, with ONE caller
+// requirement: concurrently-flushed contexts MUST use DISTINCT program
+// directories (hazeSetProgramDirectory) so their on-disk projects don't
+// collide.
 //
 // In either mode, hazeFlush racing compute on the addresses being
 // flushed (same context) is undefined.

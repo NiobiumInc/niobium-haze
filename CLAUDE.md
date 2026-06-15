@@ -453,11 +453,16 @@ so fhetch's own internal locks are reached only by the single flush
 thread. Replay itself depends on the mode: the default in-process replay
 runs under `g_lower_mutex` (flushes serialize end to end); isolated mode
 (`HAZE_REPLAY_ISOLATED=1`, `core/config.cpp::replay_isolated`) releases
-the lock after emit and runs the replay in a per-flush worker process
-(`Compiler::replay_project` → `fhetch_sim`/`nbcc_fhetch_replay`) plus
-`result_from` + `update_shadow` off-lock, so concurrent flushes on
-distinct-program-dir contexts overlap their replays — each worker owns
-its own OpenFHE state, so there is nothing shared to race. The
+the lock for ONE phase only — the per-flush worker-process replay
+(`Compiler::replay_project` → `fhetch_sim`/`nbcc_fhetch_replay`), which
+runs in its own address space and owns its own OpenFHE state — so
+concurrent flushes on distinct-program-dir contexts overlap those
+minutes-long replays. Readback (`result_from` + `update_shadow`) then
+RE-TAKES `g_lower_mutex`: `result_from` deserializes a ciphertext through
+OpenFHE's process-global static caches (the state EMIT also touches), so
+running it off-lock would just move the cross-thread OpenFHE race from
+replay into readback. It is a cheap file read, so serializing it costs
+nothing against the replay that already overlapped. The
 `BindingTable` and `LowerCtx` are
 deliberately annotation-free (single-word atomics / single-threaded at
 flush); everything mutex-guarded carries `HAZE_GUARDED_BY` /
