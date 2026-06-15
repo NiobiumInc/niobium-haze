@@ -607,9 +607,11 @@ inline Format openfhe_to_fhetch_format(::Format fmt) {
     return fmt == ::Format::COEFFICIENT ? Format::Coefficient : Format::Evaluation;
 }
 
-// Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error.
-lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) {
-    auto dir = niobium::compiler().get_program_directory();
+// Deserialize <dir>/serialized_probes/<name>.ct; nullptr on error. `dir` is
+// passed explicitly (not read from the compiler singleton) so concurrent,
+// isolated replays each read their own project dir without racing.
+lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::filesystem::path &dir,
+                                                     const std::string &name) {
     auto ct_path = dir / "serialized_probes" / (name + ".ct");
     if (!std::filesystem::exists(ct_path)) {
         haze::log_error("fhetch::result", "'" + name + "' not found at " + ct_path.string());
@@ -638,8 +640,8 @@ std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly &np) {
 } // namespace
 
 NIOBIUM_FHETCH_RESULT_API
-bool result(const std::string &name, Polynomial &p) {
-    auto ct = load_serialized_probe(name);
+bool result_from(const std::filesystem::path &dir, const std::string &name, Polynomial &p) {
+    auto ct = load_serialized_probe(dir, name);
     if (!ct)
         return false;
 
@@ -660,8 +662,8 @@ bool result(const std::string &name, Polynomial &p) {
 }
 
 NIOBIUM_FHETCH_RESULT_API
-bool result(const std::string &name, MRP &m) {
-    auto ct = load_serialized_probe(name);
+bool result_from(const std::filesystem::path &dir, const std::string &name, MRP &m) {
+    auto ct = load_serialized_probe(dir, name);
     if (!ct)
         return false;
 
@@ -684,9 +686,22 @@ bool result(const std::string &name, MRP &m) {
     return true;
 }
 
+// Singleton-program-dir convenience wrappers (the historical API). Equivalent
+// to result_from(get_program_directory(), name, ...); the concurrent flush
+// path uses result_from with the per-flush captured dir instead.
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string &name, Polynomial &p) {
+    return result_from(niobium::compiler().get_program_directory(), name, p);
+}
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string &name, MRP &m) {
+    return result_from(niobium::compiler().get_program_directory(), name, m);
+}
+
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, MRPArray &arr) {
-    auto ct = load_serialized_probe(name);
+    auto ct = load_serialized_probe(niobium::compiler().get_program_directory(), name);
     if (!ct)
         return false;
 

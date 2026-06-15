@@ -42,6 +42,10 @@ bool env_flag(const char *name, bool fallback) noexcept {
     return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
 }
 
+bool replay_isolated() noexcept {
+    return env_flag("HAZE_REPLAY_ISOLATED", /*fallback=*/false);
+}
+
 std::expected<void, HazeInternalError> Config::init_params(uint64_t ring_dim,
                                                            const uint64_t *moduli, size_t n_moduli,
                                                            DeviceAllocator &alloc,

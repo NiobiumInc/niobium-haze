@@ -155,4 +155,15 @@ class Config {
 // every HAZE_* boolean toggle.
 bool env_flag(const char *name, bool fallback) noexcept;
 
+// Opt-in: run each flush's replay in an isolated worker PROCESS
+// (fhetch_sim --project for local, nbcc_fhetch_replay for transport),
+// off the flush lock, instead of the in-process under-lock replay. This
+// is what makes concurrent multi-context flush safe — the worker owns
+// its OpenFHE static caches, so concurrent replays can't race them.
+// Default off (env HAZE_REPLAY_ISOLATED="1"/"true"): the in-process path
+// is faster for the single-threaded common case. Process-global toggle.
+// Concurrent isolated flushes MUST use distinct per-context program
+// directories (hazeSetProgramDirectory) or they collide on disk.
+bool replay_isolated() noexcept;
+
 } // namespace haze

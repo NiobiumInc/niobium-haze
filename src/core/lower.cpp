@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/config.hpp"
 #include "core/context.hpp"
 #include "core/graph.hpp"
 #include "core/kernel_cache.hpp"
@@ -24,7 +25,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <ios>
+#include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <sstream>
@@ -288,184 +291,249 @@ std::expected<void, HazeInternalError> fail(LoweringSession &session, HazeIntern
 } // namespace
 
 std::expected<void, HazeInternalError> finalize(Context &ctx, bool run_replay) noexcept {
-    HazeLockGuard lock(g_lower_mutex);
+    // Captured under the flush lock for the off-lock isolated-replay path
+    // (replay_isolated()): once the lock is released the worker + result
+    // readback run touching only these values, disk, and the per-context
+    // allocator — no haze lock, no fhetch singleton state — so flushes on
+    // distinct contexts overlap their (minutes-long) replays.
+    std::string iso_target;
+    std::filesystem::path iso_dir;
+    bool iso_niobium_hw = false;
+    std::vector<std::pair<DevAddr, std::string>> iso_outputs;
+    {
+        HazeLockGuard lock(g_lower_mutex);
 
-    // Flushing inside an open hazeKernelBegin bracket would seal (and
-    // discard the bindings of) values the bracket still references —
-    // refuse loudly instead of memoizing a sub-tape with dangling vids.
-    if (ctx.kernels.has_open_frame()) {
-        record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeFlush/hazeWriteProgram inside an open kernel bracket");
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    }
-
-    // Flush with nothing ever recorded keeps today's silent no-op —
-    // including NOT initializing the backend, so a bare hazeFlush still
-    // has no program-dir side effects.
-    if (ctx.tape.size() == 0)
-        return {};
-
-    // One control handle per flush — the seam the planned fhetch
-    // context API plugs into (see lowering_session.hpp).
-    LoweringSession session(ctx);
-
-    // Failed-init parity with the eager engine's recording_=false
-    // flush: report success, leave the tape intact for a later retry.
-    if (!session.ensure_backend())
-        return {};
-
-    // The scrub dropped the bridge's post-recording hook; restore it
-    // before anything records. Failure is loud (BridgeHookFailed), not
-    // a silent template-less flush.
-    if (!session.rebind_bridge()) {
-        record_internal_error(HazeInternalError::BridgeHookFailed,
-                              "finalize: replay-bridge hook reinstall failed");
-        return std::unexpected(HazeInternalError::BridgeHookFailed);
-    }
-
-    const std::vector<Node> tape = ctx.tape.seal();
-    ctx.values.clear();
-    ctx.recorded_moduli.clear();
-    DerivedState d = derive(tape);
-
-    if (!d.has_outputs()) {
-        // Recording happened (e.g. H2D eager-tag) but nothing was
-        // declared an output: skip the write/replay entirely so the
-        // bridge crypto context isn't a prerequisite for compute-free
-        // D2H reads. Mirrors clear_state_locked's captured-state clear.
-        session.clear_captured();
-        return {};
-    }
-
-    const std::unordered_set<ValueId> keep = values_needed_at_end(d);
-
-    // start_epoch() before start() memorizes the polynomial-ID base so
-    // post-materialize resets snap back to it; both moved here from
-    // first-compute time — every fhetch emission still happens after
-    // them, in tape order, exactly as the eager engine interleaved.
-    session.begin_epoch();
-
-    LowerCtx lower;
-    lower.derived_ = &d;
-    lower.session_ = &session;
-    for (size_t i = 0; i < tape.size(); ++i) {
-        const Node &node = tape[i];
-        lower.node_idx_ = i;
-        lower.remap_ = node.vid_remap.get();
-        if (node.thunk) {
-            if (auto lowered = node.thunk(lower); !lowered)
-                return fail(session, lowered.error(), node.entry);
+        // Flushing inside an open hazeKernelBegin bracket would seal (and
+        // discard the bindings of) values the bracket still references —
+        // refuse loudly instead of memoizing a sub-tape with dangling vids.
+        if (ctx.kernels.has_open_frame()) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "hazeFlush/hazeWriteProgram inside an open kernel bracket");
+            return std::unexpected(HazeInternalError::InvalidArgument);
         }
-        // Drop values whose final consumer just ran (keeps the lowering
-        // pass's live set at the eager engine's level: roughly one
-        // polynomial per bound address). MrpInputTag nodes read their
-        // residues through group_vids, mirroring derive()'s last_use.
-        const auto evict_if_done = [&](ValueId v) {
-            if (auto lu = d.last_use.find(v);
-                lu != d.last_use.end() && lu->second == i && !keep.contains(v))
-                lower.values_.erase(v);
-        };
-        for (ValueId v : node.src_vids)
-            evict_if_done(v);
-        if (node.kind == Node::Kind::MrpInputTag)
-            for (ValueId v : node.group_vids)
+
+        // Flush with nothing ever recorded keeps today's silent no-op —
+        // including NOT initializing the backend, so a bare hazeFlush still
+        // has no program-dir side effects.
+        if (ctx.tape.size() == 0)
+            return {};
+
+        // One control handle per flush — the seam the planned fhetch
+        // context API plugs into (see lowering_session.hpp).
+        LoweringSession session(ctx);
+
+        // Failed-init parity with the eager engine's recording_=false
+        // flush: report success, leave the tape intact for a later retry.
+        if (!session.ensure_backend())
+            return {};
+
+        // The scrub dropped the bridge's post-recording hook; restore it
+        // before anything records. Failure is loud (BridgeHookFailed), not
+        // a silent template-less flush.
+        if (!session.rebind_bridge()) {
+            record_internal_error(HazeInternalError::BridgeHookFailed,
+                                  "finalize: replay-bridge hook reinstall failed");
+            return std::unexpected(HazeInternalError::BridgeHookFailed);
+        }
+
+        const std::vector<Node> tape = ctx.tape.seal();
+        ctx.values.clear();
+        ctx.recorded_moduli.clear();
+        DerivedState d = derive(tape);
+
+        if (!d.has_outputs()) {
+            // Recording happened (e.g. H2D eager-tag) but nothing was
+            // declared an output: skip the write/replay entirely so the
+            // bridge crypto context isn't a prerequisite for compute-free
+            // D2H reads. Mirrors clear_state_locked's captured-state clear.
+            session.clear_captured();
+            return {};
+        }
+
+        const std::unordered_set<ValueId> keep = values_needed_at_end(d);
+
+        // start_epoch() before start() memorizes the polynomial-ID base so
+        // post-materialize resets snap back to it; both moved here from
+        // first-compute time — every fhetch emission still happens after
+        // them, in tape order, exactly as the eager engine interleaved.
+        session.begin_epoch();
+
+        LowerCtx lower;
+        lower.derived_ = &d;
+        lower.session_ = &session;
+        for (size_t i = 0; i < tape.size(); ++i) {
+            const Node &node = tape[i];
+            lower.node_idx_ = i;
+            lower.remap_ = node.vid_remap.get();
+            if (node.thunk) {
+                if (auto lowered = node.thunk(lower); !lowered)
+                    return fail(session, lowered.error(), node.entry);
+            }
+            // Drop values whose final consumer just ran (keeps the lowering
+            // pass's live set at the eager engine's level: roughly one
+            // polynomial per bound address). MrpInputTag nodes read their
+            // residues through group_vids, mirroring derive()'s last_use.
+            const auto evict_if_done = [&](ValueId v) {
+                if (auto lu = d.last_use.find(v);
+                    lu != d.last_use.end() && lu->second == i && !keep.contains(v))
+                    lower.values_.erase(v);
+            };
+            for (ValueId v : node.src_vids)
                 evict_if_done(v);
-    }
-
-    // Output tagging (port of tag_pending_outputs_locked). A pending
-    // output without a final binding is a state-keeping bug, not
-    // recoverable.
-    for (const auto &[addr, name] : d.pending_outputs) {
-        const auto bound = d.final_bindings.find(addr);
-        if (bound == d.final_bindings.end()) {
-            std::ostringstream body;
-            body << "finalize: pending output '" << name << "' addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec << " has no final binding";
-            return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            if (node.kind == Node::Kind::MrpInputTag)
+                for (ValueId v : node.group_vids)
+                    evict_if_done(v);
         }
-        const auto poly = lower.poly(bound->second);
-        if (!poly)
-            return fail(session, poly.error(), "finalize: pending output value missing");
-        fhetch::tag_output(name, **poly);
-    }
 
-    // Also tag each MRP group as a fhetch MRP output so external
-    // callers can pull the multi-residue view via result(name, MRP&).
-    // Pending holds names; resolve through known_mrp_groups so the
-    // membership exported is the latest registration for that name.
-    for (const auto &name : d.pending_mrp_groups) {
-        const auto g_it = d.known_mrp_groups.find(name);
-        if (g_it == d.known_mrp_groups.end()) {
-            std::ostringstream body;
-            body << "finalize: pending MRP group '" << name << "' missing from known groups";
-            return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
-        }
-        const PendingMrpGroup &g = g_it->second;
-        std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-        pairs.reserve(g.addrs.size());
-        for (size_t i = 0; i < g.addrs.size(); ++i) {
-            const auto bound = d.final_bindings.find(g.addrs[i]);
+        // Output tagging (port of tag_pending_outputs_locked). A pending
+        // output without a final binding is a state-keeping bug, not
+        // recoverable.
+        for (const auto &[addr, name] : d.pending_outputs) {
+            const auto bound = d.final_bindings.find(addr);
             if (bound == d.final_bindings.end()) {
                 std::ostringstream body;
-                body << "finalize: MRP group '" << name << "' addr 0x" << std::hex
-                     << to_uintptr(g.addrs[i]) << std::dec << " has no final binding";
+                body << "finalize: pending output '" << name << "' addr 0x" << std::hex
+                     << to_uintptr(addr) << std::dec << " has no final binding";
                 return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
             }
             const auto poly = lower.poly(bound->second);
             if (!poly)
-                return fail(session, poly.error(), "finalize: MRP group value missing");
-            // Polynomial copy is a shared_ptr refcount bump, not a deep clone.
-            pairs.emplace_back(**poly, g.moduli[i]);
+                return fail(session, poly.error(), "finalize: pending output value missing");
+            fhetch::tag_output(name, **poly);
         }
-        fhetch::tag_output(name, fhetch::MRP::from_pairs(pairs));
+
+        // Also tag each MRP group as a fhetch MRP output so external
+        // callers can pull the multi-residue view via result(name, MRP&).
+        // Pending holds names; resolve through known_mrp_groups so the
+        // membership exported is the latest registration for that name.
+        for (const auto &name : d.pending_mrp_groups) {
+            const auto g_it = d.known_mrp_groups.find(name);
+            if (g_it == d.known_mrp_groups.end()) {
+                std::ostringstream body;
+                body << "finalize: pending MRP group '" << name << "' missing from known groups";
+                return fail(session, HazeInternalError::MissingPolyMapBinding, body.str().c_str());
+            }
+            const PendingMrpGroup &g = g_it->second;
+            std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+            pairs.reserve(g.addrs.size());
+            for (size_t i = 0; i < g.addrs.size(); ++i) {
+                const auto bound = d.final_bindings.find(g.addrs[i]);
+                if (bound == d.final_bindings.end()) {
+                    std::ostringstream body;
+                    body << "finalize: MRP group '" << name << "' addr 0x" << std::hex
+                         << to_uintptr(g.addrs[i]) << std::dec << " has no final binding";
+                    return fail(session, HazeInternalError::MissingPolyMapBinding,
+                                body.str().c_str());
+                }
+                const auto poly = lower.poly(bound->second);
+                if (!poly)
+                    return fail(session, poly.error(), "finalize: MRP group value missing");
+                // Polynomial copy is a shared_ptr refcount bump, not a deep clone.
+                pairs.emplace_back(**poly, g.moduli[i]);
+            }
+            fhetch::tag_output(name, fhetch::MRP::from_pairs(pairs));
+        }
+
+        // Step 1: write the trace. The replay_bridge post-recording hook
+        // runs inside the trace write; drain its failure flag right after.
+        if (!session.write_trace())
+            return fail(session, HazeInternalError::BackendReplayFailed,
+                        "haze::finalize (stop_epoch)");
+        if (session.bridge_hook_failed())
+            return fail(session, HazeInternalError::BridgeHookFailed,
+                        "post_recording_hook reported per-input/output failures (see prior log "
+                        "entries)");
+
+        // hazeWriteProgram() stops here: the full project dir is written,
+        // ready to ship for out-of-process replay. No in-process result to
+        // read back, so skip replay + shadow population.
+        if (!run_replay) {
+            session.clear_captured();
+            return {};
+        }
+
+        // Isolated mode: capture this flush's replay inputs and run the
+        // (minutes-long) replay + readback OFF the lock so concurrent
+        // flushes overlap. Everything captured here is read-only data +
+        // the per-context dir; the off-lock work touches no singleton
+        // state. Concurrent isolated flushes MUST use distinct per-context
+        // program dirs (hazeSetProgramDirectory) or they collide on disk.
+        if (replay_isolated()) {
+            iso_target = ctx.config.target();
+            iso_dir = niobium::compiler().get_program_directory();
+            iso_niobium_hw = ctx.config.montgomery() && ctx.config.bit_reversal();
+            iso_outputs.reserve(d.pending_outputs.size());
+            for (const auto &[addr, name] : d.pending_outputs)
+                iso_outputs.emplace_back(addr, name);
+            // The trace + project are on disk; the worker reads them, not the
+            // engine's in-memory captured state — clear it now, under the lock.
+            session.clear_captured();
+            // fall out of the lock scope; replay runs below.
+        } else {
+            // Default: in-process replay + shadow population, still under the
+            // lock. The engine keeps per-epoch state a concurrent flush would
+            // clobber, so this path serializes; isolated mode is the way to
+            // overlap.
+            if (!session.replay())
+                return fail(session, HazeInternalError::BackendReplayFailed,
+                            "haze::finalize (replay)");
+            for (const auto &[addr, name] : d.pending_outputs) {
+                fhetch::Polynomial result_poly;
+                if (!fhetch::result(name, result_poly)) {
+                    std::ostringstream body;
+                    body << "result('" << name << "') unavailable for addr 0x" << std::hex
+                         << to_uintptr(addr) << std::dec;
+                    return fail(session, HazeInternalError::BackendOutputMissing,
+                                body.str().c_str());
+                }
+                std::vector<uint64_t> values;
+                if (!extract_polynomial_values(result_poly, name, values)) {
+                    std::ostringstream body;
+                    body << "failed to extract values for output '" << name << "' at addr 0x"
+                         << std::hex << to_uintptr(addr) << std::dec;
+                    return fail(session, HazeInternalError::BackendOutputDecodeFailed,
+                                body.str().c_str());
+                }
+                if (auto updated = ctx.allocator.update_shadow(addr, std::move(values)); !updated) {
+                    session.clear_captured();
+                    return std::unexpected(updated.error());
+                }
+            }
+            session.clear_captured();
+            return {};
+        }
+    } // flush lock released here — only the isolated path reaches past this.
+
+    // OFF-LOCK isolated replay: a fresh worker process per flush
+    // (replay_project spawns fhetch_sim for local / nbcc_fhetch_replay for
+    // transport, reading nothing from the engine), then dir-explicit
+    // readback. Failures surface directly — the engine's captured state was
+    // already cleared under the lock, so there is nothing to unwind here.
+    if (!niobium::compiler().replay_project(iso_target, iso_dir, "O0", iso_niobium_hw)) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "finalize: replay_project (isolated worker)");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
-
-    // Step 1: write the trace. The replay_bridge post-recording hook
-    // runs inside the trace write; drain its failure flag right after.
-    if (!session.write_trace())
-        return fail(session, HazeInternalError::BackendReplayFailed, "haze::finalize (stop_epoch)");
-    if (session.bridge_hook_failed())
-        return fail(session, HazeInternalError::BridgeHookFailed,
-                    "post_recording_hook reported per-input/output failures (see prior log "
-                    "entries)");
-
-    // hazeWriteProgram() stops here: the full project dir is written,
-    // ready to ship for out-of-process replay. No in-process result to
-    // read back, so skip replay + shadow population.
-    if (!run_replay) {
-        session.clear_captured();
-        return {};
-    }
-
-    // Step 2: dispatch replay (kLocalTarget = in-process simulator;
-    // anything else = nbcc_fhetch_replay over HTTP).
-    if (!session.replay())
-        return fail(session, HazeInternalError::BackendReplayFailed, "haze::finalize (replay)");
-
-    // Step 3: per-output shadow population. Any failure aborts the
-    // epoch so a stale shadow can't surface as a silent wrong-value D2H.
-    for (const auto &[addr, name] : d.pending_outputs) {
+    for (const auto &[addr, name] : iso_outputs) {
         fhetch::Polynomial result_poly;
-        if (!fhetch::result(name, result_poly)) {
+        if (!fhetch::result_from(iso_dir, name, result_poly)) {
             std::ostringstream body;
-            body << "result('" << name << "') unavailable for addr 0x" << std::hex
+            body << "result_from('" << name << "') unavailable for addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
-            return fail(session, HazeInternalError::BackendOutputMissing, body.str().c_str());
+            record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputMissing);
         }
         std::vector<uint64_t> values;
         if (!extract_polynomial_values(result_poly, name, values)) {
             std::ostringstream body;
             body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
-            return fail(session, HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
+            record_internal_error(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
         }
-        if (auto updated = ctx.allocator.update_shadow(addr, std::move(values)); !updated) {
-            session.clear_captured();
+        if (auto updated = ctx.allocator.update_shadow(addr, std::move(values)); !updated)
             return std::unexpected(updated.error());
-        }
     }
-
-    session.clear_captured();
     return {};
 }
 
