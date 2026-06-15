@@ -468,6 +468,7 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_hardware_format.cpp
   test/test_threaded_record.cpp
+  test/test_threaded_replay.cpp
   test/test_kernel_memo.cpp
   test/cxx/test_kernel_guards.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
@@ -527,6 +528,15 @@ target_link_options(haze_tests PRIVATE ${_haze_absorb_fhe})
 # in-tree fhetch build-order edge explicit (matches the haze target above).
 if(TARGET niobium_fhetch)
   add_dependencies(haze_tests niobium_fhetch)
+endif()
+
+# test_threaded_replay spawns the fhetch_sim worker for isolated replay; bake
+# its built path in so the test is self-contained (else it SKIPs). fhetch_sim
+# is an in-tree target from the niobium-fhetch subdir.
+if(TARGET fhetch_sim)
+  add_dependencies(haze_tests fhetch_sim)
+  target_compile_definitions(haze_tests PRIVATE
+    HAZE_FHETCH_SIM_PATH="$<TARGET_FILE:fhetch_sim>")
 endif()
 
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
