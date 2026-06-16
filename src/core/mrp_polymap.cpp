@@ -32,6 +32,19 @@ namespace fhetch = niobium::fhetch;
 
 std::expected<fhetch::MRP, HazeInternalError>
 build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len) {
+    // Is the source a value the trace PRODUCES (leading residue already a compute
+    // result), as opposed to a live-in input (H2D upload or fresh shadow read)?
+    // is_computed_locked reads computed_addrs_, which the read loop below does NOT
+    // touch (only store_compute_result does), so the classification is stable.
+    //
+    // The leading residue stands in for the whole group: every haze MRP op writes
+    // all its residues together (store_mrp_locked), so a group is uniformly either
+    // live-in (all H2D'd / fresh) or computed. A MIXED group — one residue H2D'd,
+    // another overwritten by a per-residue SRP op — would mis-tag here; that does
+    // not arise in CKKS use (a ciphertext's residues move as a unit) and would be
+    // an API misuse, not a case this path is expected to handle.
+    const bool leading_is_computed = len > 0 && epoch().is_computed_locked(to_dev_addr(polys[0]));
+
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
     std::vector<DevAddr> addrs;
     pairs.reserve(len);
@@ -51,7 +64,17 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
     // input CT and readers pull via fhetch::result(name, MRP&). The name is
     // stable per leading addr, so the EpochState dedup collapses redundant
     // tags when the same source MRP feeds multiple ops.
-    if (len > 1) {
+    //
+    // Tag genuine live-in inputs (H2D uploads, fresh shadow reads), but NOT a
+    // COMPUTED source: a value the trace itself produces is reproduced by
+    // replaying the recorded ops, so tagging it as an input is redundant on every
+    // backend (single-program-per-context: no compute-after-readback, so a
+    // computed value is always available without a live-in load). The redundant
+    // tag otherwise dominates the working set at CKKS depth (NID/MINI replay
+    // ~1780 MiB -> ~25 MiB; FULL OOM(>36 GB) -> ~105 MiB). Classifying on
+    // "computed" rather than "bound in poly_map_" is what keeps real H2D inputs
+    // (also bound) tagged, so a transport target can still synthesize their CTs.
+    if (len > 1 && !leading_is_computed) {
         auto group_name = epoch().mrp_group_name_locked(/*output=*/false, addrs.front());
         epoch().tag_mrp_input_if_new_locked(group_name, mrp);
     }
