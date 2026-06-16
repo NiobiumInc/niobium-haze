@@ -11,6 +11,7 @@
 
 #include "ciphertext-ser.h"
 #include "common/log.hpp"
+#include "core/config.hpp" // haze::config() — honor a caller-pinned program directory
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "openfhe.h"
@@ -502,8 +503,24 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 
         // Plant program_name so cryptocontext.dat lands under haze/ rather
         // than the compiler's default program name; libhaze's later init is
-        // idempotent.
+        // idempotent. set_program_info() also resets the project directory to
+        // cwd/<name>.
         niobium::compiler().set_program_info("haze", "", "");
+
+        // Honor a caller-pinned program directory. hazeSetProgramDirectory()
+        // stores the directory in haze::config(); the backend only forwards it to
+        // the compiler at first-compute bring-up (core/backend.cpp), which happens
+        // AFTER this init writes cryptocontext.dat. Without re-applying it here,
+        // set_program_info()'s cwd/<name> reset orphans cryptocontext.dat under
+        // cwd/haze/ while the .fhetch trace lands in the pinned directory — so
+        // nbcc_fhetch_replay --project=<pinned> reports "Cannot load crypto context
+        // — skipping probe serialization" and returns no probes. The haze suites
+        // never pin a directory (cwd/<name> default), so the divergence stayed
+        // hidden until a library integrator (FIDESlib's HazeEngine) pinned a custom
+        // run directory.
+        if (haze::config().has_program_directory())
+            niobium::compiler().set_program_directory(haze::config().program_directory());
+
         niobium::compiler().capture_crypto_context(built->cc);
 
         install_post_recording_hook(HookCtx{
