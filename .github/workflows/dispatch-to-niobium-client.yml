@@ -13,17 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Dispatch haze_main_push to niobium-client
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           HAZE_SHA: ${{ github.sha }}
         run: |
           jq -n \

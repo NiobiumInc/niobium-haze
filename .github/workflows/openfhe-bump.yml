@@ -20,7 +20,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read # writes happen via the App token below, not GITHUB_TOKEN
+  contents: write
+  pull-requests: write
 
 concurrency:
   group: openfhe-bump-${{ github.repository }}
@@ -30,22 +31,10 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      # Same App-token pattern as build-test.yml; used here to push the bump
-      # branch and open the PR (GITHUB_TOKEN can't trigger downstream CI).
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
-          # vendor/openfhe is public; the private niobium-fhetch submodule isn't
-          # needed for a bump, so don't recurse.
+          token: ${{ github.token }}
           submodules: false
           fetch-depth: 0
 
@@ -57,7 +46,7 @@ jobs:
       - name: Resolve latest upstream release vs vendored rev
         id: cmp
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag=$(gh api repos/openfheorg/openfhe-development/releases/latest --jq '.tag_name')
@@ -100,7 +89,7 @@ jobs:
       - name: Bump submodule + flake input, open/update PR
         if: steps.cmp.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.cmp.outputs.tag }}
           NEW_REV: ${{ steps.cmp.outputs.new_rev }}
         run: |
