@@ -46,8 +46,9 @@ class EpochState {
 
     // ---- Public methods (take mutex_ internally) ----
 
-    // Drop any polymap binding for `addr`. Called by allocator paths
-    // (H2D, D2D, memset, free) so the next compute rebuilds from shadow.
+    // Drop any binding for `addr` so the next read rebuilds from shadow. Called
+    // on memset and free; H2D replaces the binding in place via tag_h2d_input_locked
+    // and D2D binds via copy_result_locked, so neither routes through here.
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Finalize the epoch: tag outputs, write the trace, dispatch replay,
@@ -76,6 +77,14 @@ class EpochState {
     // the source. On first reference, builds from shadow and tags as input.
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
+
+    // True if `addr` holds a value the trace PRODUCES itself (a prior compute
+    // result or D2D copy), as opposed to a live-in the replay must load (a fresh
+    // shadow read or an H2D upload). Note this is NOT "bound in poly_map_": an
+    // H2D-uploaded input is also bound there but IS a live-in. Lets MRP-input
+    // tagging skip only computed sources (which the simulator reproduces by
+    // replay), while still tagging genuine inputs the bridge must synthesize.
+    bool is_computed_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
     // Bind `addr` to `poly`. Output-hood is declared explicitly via
     // tag_output_locked, not inferred from being computed. `modulus` records
@@ -169,6 +178,12 @@ class EpochState {
     // pending_outputs_ is the addr-keyed subset that names the outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
+    // Subset of poly_map_ addrs whose value the trace PRODUCES (compute result /
+    // D2D copy), distinct from live-in inputs (H2D upload / fresh shadow read).
+    // Populated by store_compute_result_locked, cleared by an H2D re-upload of the
+    // same addr; lockstep with poly_map_ on invalidate/clear. Backs
+    // is_computed_locked so MRP-input tagging skips only reproducible sources.
+    std::unordered_set<DevAddr> computed_addrs_ HAZE_GUARDED_BY(mutex_);
     // addr -> real modulus from the last modulus-carrying op that wrote it.
     // Kept in lockstep with poly_map_; cleared per epoch, dropped on invalidate.
     std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);
