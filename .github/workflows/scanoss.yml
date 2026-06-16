@@ -100,7 +100,7 @@ jobs:
   trigger-ort:
     name: Trigger ORT Scan
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Check if ORT scan needed
         id: check

@@ -25,11 +25,6 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    # Skip on fork PRs: the org App token needed for the private niobium-fhetch
-    # submodule isn't available there.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -43,18 +38,9 @@ jobs:
             # macOS-only: build the Catch2 suite and run unit + sim tests here.
             run_tests: true
     steps:
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Checkout (with private niobium-fhetch submodule)
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
           fetch-depth: 1
 
