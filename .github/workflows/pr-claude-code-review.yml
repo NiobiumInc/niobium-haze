@@ -16,16 +16,16 @@ jobs:
   full-review:
     name: PR - Full Code Review
     runs-on: ubuntu-latest
-    if: |
+    if: >-
       (github.event_name == 'pull_request' &&
-       (github.event.action == 'opened' || github.event.action == 'reopened') &&
-       (github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'OWNER')) ||
+      (github.event.action == 'opened' || github.event.action == 'reopened') &&
+      (github.event.pull_request.author_association == 'MEMBER' ||
+      github.event.pull_request.author_association == 'OWNER')) ||
       (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '@claude') &&
-       (github.event.comment.author_association == 'MEMBER' ||
-        github.event.comment.author_association == 'OWNER'))
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude') &&
+      (github.event.comment.author_association == 'MEMBER' ||
+      github.event.comment.author_association == 'OWNER'))
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -110,11 +110,11 @@ jobs:
   partial-review:
     name: PR - Partial Code Review
     runs-on: ubuntu-latest
-    if: |
+    if: >-
       github.event_name == 'pull_request' &&
       github.event.action == 'synchronize' &&
       (github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'OWNER')
+      github.event.pull_request.author_association == 'OWNER')
     steps:
       - name: Checkout
         uses: actions/checkout@v6
