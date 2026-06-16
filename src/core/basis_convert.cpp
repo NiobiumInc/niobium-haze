@@ -14,6 +14,7 @@
 #include "core/basis_convert.hpp"
 
 #include "common/errors.hpp"
+#include "core/config.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
 
@@ -30,6 +31,19 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 namespace {
+
+// FBC center lowering shape (fhetch's 3-op vs 4-op SwitchModulus gadget). Haze
+// requests the lean 3-op form by default — local-sim replay never does the
+// hardware SwitchModulus substitution, so the recognizable 4-op quadruple's
+// leading identity multiply is dead weight (it is ~half of all sr_mulps in a deep
+// CKKS trace). Hardware-bound recordings (Montgomery / --niobium_hw) request the
+// 4-op form so the hardware replay driver can recognize and substitute it.
+// Montgomery is rejected for the local-sim target upstream, so this resolves to
+// ThreeOp there.
+fhetch::FbcCenterShape fbc_center_shape() noexcept {
+    return config().montgomery() ? fhetch::FbcCenterShape::FourOp
+                                 : fhetch::FbcCenterShape::ThreeOp;
+}
 
 // Validation helpers; each returns InvalidArgument with a debug-log
 // breadcrumb on the first failure, keeping the C ABI shim thin.
@@ -128,7 +142,8 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base);
+    fhetch::MRP result =
+        fhetch::rescale_fbc(*src_mrp, rescale_base, fhetch::FbcVariant::ReducedNoise, fbc_center_shape());
     // result.base() == src_base \ rescale_base in src_base's original
     // order. Use it directly so HAZE-side and backend-side never disagree
     // on the dst layout.
@@ -159,7 +174,7 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     }
 
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
-    fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base);
+    fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base, fbc_center_shape());
     if (result.length() != p.digit_count) {
         record_internal_error(HazeInternalError::BackendShapeMismatch,
                               "hazeModUp: dig_decomp returned wrong length");
