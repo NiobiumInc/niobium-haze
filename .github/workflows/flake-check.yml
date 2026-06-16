@@ -21,22 +21,10 @@ jobs:
   lint:
     name: clang-tidy
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Checkout (with private niobium-fhetch submodule)
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
           fetch-depth: 1
 
@@ -81,21 +69,6 @@ jobs:
             echo "Run scripts/sync-openfhe-stock-rev.sh and commit flake.lock."
             exit 1
           fi
-
-      - name: Configure git to use App token for github.com fetches
-        # The runner has no SSH key, so rewrite ssh://git@github.com/ ->
-        # https with the App token; nix's libgit2 fetcher honors insteadOf
-        # for the niobium-fhetch input and its ?submodules=1 sub-fetches.
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          # --add: insteadOf is multivalued, both forms must coexist.
-          git config --global --add \
-            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
-            "ssh://git@github.com/"
-          git config --global --add \
-            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
-            "git@github.com:"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
@@ -167,22 +140,10 @@ jobs:
   flake-check:
     name: pure-nix build
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Checkout (with private niobium-fhetch submodule)
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
           fetch-depth: 1
 
@@ -228,20 +189,6 @@ jobs:
             echo "Run scripts/sync-openfhe-stock-rev.sh and commit flake.lock."
             exit 1
           fi
-
-      - name: Configure git to use App token for github.com fetches
-        # See lint job: rewrites SSH github.com URLs to HTTPS with the
-        # App token so libgit2 (used by nix's git fetcher) can pull
-        # the niobium-fhetch flake input and its sub-submodules.
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          git config --global --add \
-            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
-            "ssh://git@github.com/"
-          git config --global --add \
-            "url.https://x-access-token:${APP_TOKEN}@github.com/.insteadOf" \
-            "git@github.com:"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22

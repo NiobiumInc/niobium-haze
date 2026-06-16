@@ -18,27 +18,10 @@ jobs:
   build-test:
     name: Build + sim tests (nix devshell)
     runs-on: ubuntu-latest
-    # Skip on fork PRs: org App token is not available, so private
-    # submodules cannot be cloned.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      # Same App-token pattern as niobium-client/.github/workflows/ci.yml,
-      # bumped to the current major. Lets us read the private
-      # niobium-fhetch submodule that GITHUB_TOKEN cannot reach.
-      - name: Generate token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Checkout (with private niobium-fhetch submodule)
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
           submodules: recursive
           fetch-depth: 1
 
@@ -87,21 +70,6 @@ jobs:
           key: ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-${{ steps.openfhe_rev.outputs.rev }}-${{ steps.openfhe_rev.outputs.stock_rev }}
           restore-keys: |
             ubuntu-latest-openfhe-haze-${{ hashFiles('flake.lock') }}-
-
-      - name: Rewrite niobium-fhetch submodule URL for token auth
-        # nix issue #13324: with `inputs.self.submodules = true` in
-        # flake.nix, nix's flake source ingestion re-fetches the
-        # submodule from its declared URL. .gitmodules registers it
-        # via SSH and the runner has no SSH key. actions/checkout's
-        # transient HTTPS rewrite does not carry into nix's git
-        # fetcher. Rewriting .gitmodules + .git/config to HTTPS with
-        # the App token covers nix. Same step in flake-check.yml.
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          git config -f .gitmodules submodule.vendor/niobium-fhetch.url \
-            "https://x-access-token:${APP_TOKEN}@github.com/NiobiumInc/niobium-fhetch.git"
-          git submodule sync vendor/niobium-fhetch
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
