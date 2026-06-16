@@ -26,12 +26,12 @@
         "revCount": 108,
         "submodules": true,
         "type": "git",
-        "url": "ssh://git@github.com/NiobiumInc/niobium-fhetch.git"
+        "url": "https://github.com/NiobiumInc/niobium-fhetch.git"
       },
       "original": {
         "submodules": true,
         "type": "git",
-        "url": "ssh://git@github.com/NiobiumInc/niobium-fhetch.git"
+        "url": "https://github.com/NiobiumInc/niobium-fhetch.git"
       }
     },
     "nixpkgs": {
