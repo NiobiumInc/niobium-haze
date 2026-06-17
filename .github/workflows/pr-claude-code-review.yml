@@ -23,41 +23,18 @@ jobs:
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '@claude'))
     steps:
-      - name: Check org membership via REST API
-        id: membership
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ASSOC=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" \
-              --jq '.author_association' 2>/dev/null || echo "NONE")
-          else
-            ASSOC=$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/${{ github.event.comment.id }}" \
-              --jq '.author_association' 2>/dev/null || echo "NONE")
-          fi
-          echo "author_association=$ASSOC"
-          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ] || [ "$ASSOC" = "CONTRIBUTOR" ]; then
-            echo "allowed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER, OWNER, or CONTRIBUTOR)"
-          fi
-
       - name: Checkout
-        if: steps.membership.outputs.allowed == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Get changed files
-        if: steps.membership.outputs.allowed == 'true'
         id: changed-files
         uses: tj-actions/changed-files@v47
         with:
           separator: " "
 
       - name: Claude Full Review
-        if: steps.membership.outputs.allowed == 'true'
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
@@ -103,7 +80,7 @@ jobs:
             - Label each issue: Blocker / High / Medium / Low
 
       - name: Usage Summary
-        if: always() && steps.membership.outputs.allowed == 'true'
+        if: always()
         run: |
           EXECUTION_FILE="${{ steps.claude-review.outputs.execution_file }}"
 
@@ -133,29 +110,12 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.action == 'synchronize'
     steps:
-      - name: Check org membership via REST API
-        id: membership
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ASSOC=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" \
-            --jq '.author_association' 2>/dev/null || echo "NONE")
-          echo "author_association=$ASSOC"
-          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ] || [ "$ASSOC" = "CONTRIBUTOR" ]; then
-            echo "allowed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER, OWNER, or CONTRIBUTOR)"
-          fi
-
       - name: Checkout
-        if: steps.membership.outputs.allowed == 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
       - name: Get files changed in latest push
-        if: steps.membership.outputs.allowed == 'true'
         id: changed-files
         uses: tj-actions/changed-files@v47
         with:
@@ -163,7 +123,6 @@ jobs:
           since_last_remote_commit: true
 
       - name: Claude Partial Review
-        if: steps.membership.outputs.allowed == 'true'
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
@@ -207,7 +166,7 @@ jobs:
             - If no blockers or high risks found, post only: "✅ No blockers or high risks in this commit."
 
       - name: Usage Summary
-        if: always() && steps.membership.outputs.allowed == 'true'
+        if: always()
         run: |
           EXECUTION_FILE="${{ steps.claude-review.outputs.execution_file }}"
 
