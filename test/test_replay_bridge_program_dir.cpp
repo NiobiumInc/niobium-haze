@@ -31,10 +31,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
-#include <haze/haze.h>            // IWYU pragma: keep
-#include <haze/haze_types.h>      // IWYU pragma: keep
-#include <haze/replay_bridge.h>   // IWYU pragma: keep
-#include <niobium/compiler.h>     // IWYU pragma: keep
+#include <haze/haze.h>          // IWYU pragma: keep
+#include <haze/haze_types.h>    // IWYU pragma: keep
+#include <haze/replay_bridge.h> // IWYU pragma: keep
+#include <niobium/compiler.h>   // IWYU pragma: keep
 
 namespace fs = std::filesystem;
 
