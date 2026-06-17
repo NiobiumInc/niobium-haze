@@ -72,14 +72,27 @@ bool CompilerBackend::ensure_initialized() noexcept {
         std::string target_arg_storage = "--target=" + target;
         std::string montgomery_arg_storage = "--montgomery";
         std::string bitrev_arg_storage = "--bit_reversal";
-        // 5 = prog + --target + the two optional format flags + NULL terminator
-        // (grow this if another optional flag is added).
-        char *argv[5] = {prog_storage.data(), target_arg_storage.data(), nullptr, nullptr, nullptr};
+        std::string no_ring_check_storage = "--no-ring-dim-check";
+        std::string no_prime_check_storage = "--no-prime-check";
+        // 7 = prog + --target + montgomery + bit_reversal + the two local-sim
+        // hardware-check opt-outs + NULL terminator (grow if another flag is added).
+        char *argv[7] = {prog_storage.data(), target_arg_storage.data(),
+                         nullptr,              nullptr,
+                         nullptr,              nullptr,
+                         nullptr};
         int argc = 2;
         if (montgomery)
             argv[argc++] = montgomery_arg_storage.data();
         if (bit_reversal)
             argv[argc++] = bitrev_arg_storage.data();
+        // The in-process simulator is not Niobium hardware, so the compiler's
+        // hardware ring-dimension / prime compatibility checks don't apply. Skip
+        // them for the local target so local replay accepts any valid CKKS context
+        // (e.g. N=4096); transport/hardware targets keep the checks.
+        if (target == kLocalTarget) {
+            argv[argc++] = no_ring_check_storage.data();
+            argv[argc++] = no_prime_check_storage.data();
+        }
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
         // Optional explicit output dir: when set via hazeSetProgramDirectory,
