@@ -36,11 +36,11 @@ jobs:
               --jq '.author_association' 2>/dev/null || echo "NONE")
           fi
           echo "author_association=$ASSOC"
-          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ]; then
+          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ] || [ "$ASSOC" = "CONTRIBUTOR" ]; then
             echo "allowed=true" >> "$GITHUB_OUTPUT"
           else
             echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER or OWNER)"
+            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER, OWNER, or CONTRIBUTOR)"
           fi
 
       - name: Checkout
@@ -141,11 +141,11 @@ jobs:
           ASSOC=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" \
             --jq '.author_association' 2>/dev/null || echo "NONE")
           echo "author_association=$ASSOC"
-          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ]; then
+          if [ "$ASSOC" = "MEMBER" ] || [ "$ASSOC" = "OWNER" ] || [ "$ASSOC" = "CONTRIBUTOR" ]; then
             echo "allowed=true" >> "$GITHUB_OUTPUT"
           else
             echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER or OWNER)"
+            echo "::notice::Skipping review: author_association='$ASSOC' (need MEMBER, OWNER, or CONTRIBUTOR)"
           fi
 
       - name: Checkout
