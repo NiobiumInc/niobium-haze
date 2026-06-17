@@ -233,6 +233,23 @@ bool Config::bit_reversal() const noexcept {
     return env_flag("HAZE_BIT_REVERSAL");
 }
 
+void Config::set_reduced_noise(bool enable) noexcept {
+    HazeLockGuard lock(mutex_);
+    reduced_noise_ = enable;
+    reduced_noise_set_ = true;
+}
+
+bool Config::reduced_noise() const noexcept {
+    {
+        HazeLockGuard lock(mutex_);
+        if (reduced_noise_set_)
+            return reduced_noise_;
+    }
+    // Env fallback mirrors montgomery(): consulted only when no explicit
+    // setter call has been made.
+    return env_flag("HAZE_REDUCED_NOISE");
+}
+
 void Config::reset() noexcept {
     HazeLockGuard lock(mutex_);
     ring_dim_ = 0;
@@ -251,6 +268,8 @@ void Config::reset() noexcept {
     bit_reversal_ = false;
     montgomery_set_ = false;
     bit_reversal_set_ = false;
+    reduced_noise_ = false;
+    reduced_noise_set_ = false;
 }
 
 } // namespace haze

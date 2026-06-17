@@ -56,3 +56,8 @@ extern "C" hazeError_t hazeSetBitReversal(int enable) noexcept {
     haze::config().set_bit_reversal(enable != 0);
     return set_error(HAZE_SUCCESS);
 }
+
+extern "C" hazeError_t hazeSetReducedNoise(int enable) noexcept {
+    haze::config().set_reduced_noise(enable != 0);
+    return set_error(HAZE_SUCCESS);
+}

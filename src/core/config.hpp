@@ -79,6 +79,14 @@ class Config {
     bool montgomery() const noexcept;
     bool bit_reversal() const noexcept;
 
+    // Reduced-noise FBC variant (centered base conversion, matching OpenFHE's
+    // WITH_REDUCED_NOISE). Independent of the data-format toggles above; same
+    // precedence: explicit setter > env (HAZE_REDUCED_NOISE, "1"/"true") > off.
+    // Off by default; bit-exact parity with a WITH_REDUCED_NOISE OpenFHE
+    // reference requires turning it on (the HazeEngine constructor / tests do).
+    void set_reduced_noise(bool enable) noexcept;
+    bool reduced_noise() const noexcept;
+
     // Optional output-directory override. When set, the backend forwards it to
     // niobium::compiler().set_program_directory() at init, so the project dir
     // (.fhetch + inputs + templates + cryptocontext) lands at this exact path
@@ -114,6 +122,8 @@ class Config {
     bool bit_reversal_ = false;
     bool montgomery_set_ = false;
     bool bit_reversal_set_ = false;
+    bool reduced_noise_ = false;
+    bool reduced_noise_set_ = false;
 };
 
 inline Config &config() noexcept {

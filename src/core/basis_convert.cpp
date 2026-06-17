@@ -32,14 +32,17 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// FBC center lowering shape (fhetch's 3-op vs 4-op SwitchModulus gadget). Haze
-// requests the lean 3-op form by default — local-sim replay never does the
-// hardware SwitchModulus substitution, so the recognizable 4-op quadruple's
-// leading identity multiply is dead weight (it is ~half of all sr_mulps in a deep
-// CKKS trace). Hardware-bound recordings (Montgomery / --niobium_hw) request the
-// 4-op form so the hardware replay driver can recognize and substitute it.
-// Montgomery is rejected for the local-sim target upstream, so this resolves to
-// ThreeOp there.
+// FBC mode for the base-conversion ops, selected from engine config (set via
+// the HazeEngine constructor / hazeSetReducedNoise / hazeSetMontgomery):
+//   - reduced_noise -> centered (ReducedNoise) vs plain (Standard) FBC, matching
+//     OpenFHE's WITH_REDUCED_NOISE. Off by default.
+//   - montgomery    -> the 4-op center quadruple the hardware data format
+//     recognizes as a SwitchModulus; the local simulator uses the lean 3-op shape.
+fhetch::FbcVariant fbc_variant() noexcept {
+    return config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
+                                    : fhetch::FbcVariant::Standard;
+}
+
 fhetch::FbcCenterShape fbc_center_shape() noexcept {
     return config().montgomery() ? fhetch::FbcCenterShape::FourOp
                                  : fhetch::FbcCenterShape::ThreeOp;
@@ -142,8 +145,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result =
-        fhetch::rescale_fbc(*src_mrp, rescale_base, fhetch::FbcVariant::ReducedNoise, fbc_center_shape());
+    fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant(), fbc_center_shape());
     // result.base() == src_base \ rescale_base in src_base's original
     // order. Use it directly so HAZE-side and backend-side never disagree
     // on the dst layout.
@@ -174,6 +176,9 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     }
 
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
+    // Key-switch ModUp uses fhetch's centered (ReducedNoise) lift unconditionally
+    // — that is what a WITH_REDUCED_NOISE OpenFHE reference does and what the
+    // reduced-noise parity gate exercises; only the center shape is config-driven.
     fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base, fbc_center_shape());
     if (result.length() != p.digit_count) {
         record_internal_error(HazeInternalError::BackendShapeMismatch,

@@ -192,6 +192,13 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
 
+/* Reduced-noise FBC variant (centered base conversion, matching OpenFHE's
+ * WITH_REDUCED_NOISE). Independent of the data-format toggles above. Off by
+ * default; enable for bit-exact parity with a WITH_REDUCED_NOISE OpenFHE
+ * reference. Precedence: explicit setter > HAZE_REDUCED_NOISE env ("1"/"true")
+ * > off. Call before the first H2D or compute. */
+HAZE_API hazeError_t hazeSetReducedNoise(int enable) HAZE_NOEXCEPT;
+
 /* Finalize the recording and write the project directory (.fhetch trace,
  * inputs, ciphertext templates, cryptocontext) WITHOUT running replay; only
  * hazeTagOutput()-declared outputs are emitted, so tag them first. Use it to
