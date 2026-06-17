@@ -56,6 +56,7 @@
 // Opaque handle types (distinct pointer types, not void*)
 // ---------------------------------------------------------------------------
 
+typedef struct haze_context_s *hazeContext_t;
 typedef struct haze_stream_s *hazeStream_t;
 typedef struct haze_event_s *hazeEvent_t;
 typedef struct haze_graph_s *hazeGraph_t;
@@ -90,6 +91,8 @@ typedef enum {
     HAZE_ERROR_ALLOC_TOO_SMALL = 7,    // allocation size < polynomial size
     HAZE_ERROR_SOURCE_UNAVAILABLE = 8, // compute / D2D source has no shadow + no poly_map_
     HAZE_ERROR_NOT_FLUSHED = 9, // D2H of an untagged / unflushed address: tag output + hazeFlush
+    HAZE_ERROR_KERNEL_VALIDATION = 10, // memoized kernel body diverged on re-trace (stateful /
+                                       // nondeterministic body); see HAZE_DEBUG log
     // Catch-all sits last as a single high bit (2^10). User-actionable codes are
     // added sequentially above and must stay below it, so `err & HAZE_ERROR_INTERNAL`
     // detects an internal error without enumerating every code.
@@ -142,6 +145,36 @@ typedef struct {
     void *devicePointer;
     void *hostPointer;
 } hazePointerAttributes;
+
+// ---------------------------------------------------------------------------
+// Kernel memoization (hazeKernelBegin / hazeKernelEnd)
+// ---------------------------------------------------------------------------
+
+// What the caller must do after hazeKernelBegin.
+// NOLINTBEGIN(cppcoreguidelines-use-enum-class,performance-enum-size) — C ABI
+typedef enum {
+    HAZE_KERNEL_RECORD = 0, // cache miss: run the body now (its ops record the sub-tape)
+    HAZE_KERNEL_REPLAY = 1, // cache hit: the body MUST be skipped; the cached
+                            // sub-tape was instantiated against the actuals
+} hazeKernelDisposition;
+// NOLINTEND(cppcoreguidelines-use-enum-class,performance-enum-size)
+
+// One traced kernel input. Single-residue values use base_len == 1 with
+// the modulus value in base[0]; multi-residue values pass all residue
+// pointers plus the prime base, exactly as the *Mrp ops do.
+typedef struct {
+    const void *const *residues; // length base_len
+    const uint64_t *base;        // primes, length base_len
+    size_t base_len;
+} hazeKernelInput;
+
+// One traced kernel output. Caller-pre-allocated via hazeMalloc on BOTH
+// dispositions (a replayed body never runs, so it can never allocate).
+typedef struct {
+    void *const *residues;
+    const uint64_t *base;
+    size_t base_len;
+} hazeKernelOutput;
 
 // CRT basis-conversion parameter structs.
 //

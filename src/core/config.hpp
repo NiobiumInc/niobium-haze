@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
@@ -23,6 +24,9 @@
 #include <vector>
 
 namespace haze {
+
+class BindingTable;
+class DeviceAllocator;
 
 // Canonical target string dispatched through libnbfhetch's compiler.
 // kLocalTarget runs the in-process FHETCH instruction-set simulator:
@@ -38,6 +42,22 @@ namespace haze {
 // through every comparison site in haze.
 constexpr std::string_view kLocalTarget = "local";
 
+// Immutable snapshot of the FHE parameters the record path reads on
+// every compute call. Published once by Config::freeze() and then read
+// lock-free; valid until Config::reset() (hazeDeviceReset concurrent
+// with compute is documented-undefined, so readers never outlive it).
+struct ConfigSnapshot {
+    uint64_t ring_dim = 0;
+    std::vector<uint64_t> moduli;
+
+    // 0 = unset / out of range, mirroring Config::modulus().
+    uint64_t modulus(int idx) const noexcept {
+        if (idx < 0 || static_cast<size_t>(idx) >= moduli.size())
+            return 0;
+        return moduli[static_cast<size_t>(idx)];
+    }
+};
+
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
 // twiddle generators. Plus the program/target metadata fed to the
 // compiler at recording-init time.
@@ -46,17 +66,31 @@ constexpr std::string_view kLocalTarget = "local";
 // taken under the same lock for consistency with vector resizes.
 class Config {
   public:
-    static Config &instance() noexcept;
+    Config() = default; // constructed as a haze_context_s member
 
-    // FHE parameters (existing public API).
-    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept;
-    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept;
-    std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
-                                                                 uint64_t generator) noexcept;
-    std::expected<void, HazeInternalError> configure_device() noexcept;
+    // Params-at-create (hazeContextCreate): ring dimension + the full
+    // modulus chain land in one shot, immutable for the context's
+    // lifetime, and the snapshot publishes immediately — no freeze
+    // window, no mutate-after-record hazards. The sibling components'
+    // geometry (allocator pool, binding slot tables) is fixed in the
+    // same call. Fails (InvalidArgument) on a non-power-of-two ring
+    // dimension or a zero modulus; fails (NotConfigured) if params
+    // were already set.
+    std::expected<void, HazeInternalError> init_params(uint64_t ring_dim, const uint64_t *moduli,
+                                                       size_t n_moduli, DeviceAllocator &alloc,
+                                                       BindingTable &values,
+                                                       BindingTable &recorded_moduli) noexcept;
 
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
+
+    // The parameter snapshot published by init_params: lock-free, one
+    // acquire load, valid for the Config's lifetime. nullptr only on a
+    // default-constructed Config that was never init_params'd (a
+    // hazeContextCreate'd context always has one).
+    const ConfigSnapshot *params() const noexcept {
+        return snapshot_.load(std::memory_order_acquire);
+    }
 
     // Program / target metadata fed to the compiler during init.
     // Defaults: name="haze", version="0.1", description="HAZE runtime",
@@ -87,18 +121,18 @@ class Config {
     bool has_program_directory() const noexcept;
     std::string program_directory() const noexcept;
 
-    void reset() noexcept;
+    ~Config() { delete snapshot_.exchange(nullptr, std::memory_order_acq_rel); }
 
     Config(const Config &) = delete;
     Config &operator=(const Config &) = delete;
 
   private:
-    Config() = default;
+    // Published-once snapshot; written under mutex_, read lock-free.
+    std::atomic<const ConfigSnapshot *> snapshot_{nullptr};
 
     mutable HazeMutex mutex_;
     uint64_t ring_dim_ = 0;
     std::vector<uint64_t> moduli_;
-    std::vector<uint64_t> twiddle_generators_;
     bool configured_ = false;
 
     // Defaults applied lazily on first read.
@@ -116,8 +150,20 @@ class Config {
     bool bit_reversal_set_ = false;
 };
 
-inline Config &config() noexcept {
-    return Config::instance();
-}
+// Shared truthy env-var read ("1" or "true"; anything else — including
+// unset — yields `fallback`). The single truthiness definition for
+// every HAZE_* boolean toggle.
+bool env_flag(const char *name, bool fallback) noexcept;
+
+// Opt-in: run each flush's replay in an isolated worker PROCESS
+// (fhetch_sim --project for local, nbcc_fhetch_replay for transport),
+// off the flush lock, instead of the in-process under-lock replay. This
+// is what makes concurrent multi-context flush safe — the worker owns
+// its OpenFHE static caches, so concurrent replays can't race them.
+// Default off (env HAZE_REPLAY_ISOLATED="1"/"true"): the in-process path
+// is faster for the single-threaded common case. Process-global toggle.
+// Concurrent isolated flushes MUST use distinct per-context program
+// directories (hazeSetProgramDirectory) or they collide on disk.
+bool replay_isolated() noexcept;
 
 } // namespace haze

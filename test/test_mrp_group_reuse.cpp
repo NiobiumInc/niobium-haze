@@ -83,7 +83,7 @@ void clear_serialized_probes() {
 // TC1: identical in-place re-registration is a dedup no-op.
 //
 // Same dst[0] → same group name (mrp_signature_name derives from dst[0]).
-// Running hazeAddMrp(acc ← acc + x) three times re-registers the same addr
+// Running hazeAddMrp(haze::test::ctx(), acc ← acc + x) three times re-registers the same addr
 // set and moduli on every call; the second and third are no-ops. Exactly one
 // haze_mrp_out_* probe file must exist at flush.
 // ===========================================================================
@@ -120,20 +120,21 @@ TEST_CASE("MRP group reuse: identical in-place re-registration is a dedup no-op"
     // src1 = acc (aliased), src2 = x.  Identical dst[0] → same group name
     // → second and third calls hit the no-op dedup branch.
     for (int iter = 0; iter < 3; ++iter) {
-        REQUIRE(hazeAddMrp(acc.data(), haze::test::to_const(acc).data(),
+        REQUIRE(hazeAddMrp(haze::test::ctx(), acc.data(), haze::test::to_const(acc).data(),
                            haze::test::to_const(x).data(), base.data(), base.size(),
                            nullptr) == HAZE_SUCCESS);
     }
 
     // Tag acc[0]; this promotes the MRP group so all residues are exported.
-    REQUIRE(hazeTagOutput(acc[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), acc[0]) == HAZE_SUCCESS);
     clear_serialized_probes();
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // --- Value check per residue ---
     for (std::size_t i = 0; i < len; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), acc[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), acc[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("residue " << i << " (mod " << base[i] << ") slot " << k);
             REQUIRE(got[k] == expected[i][k]);
@@ -162,8 +163,8 @@ TEST_CASE("MRP group reuse: identical in-place re-registration is a dedup no-op"
 // group.
 //
 // Sequence:
-//   op1: hazeAddMrp([a0,a1,a2] ← x1+x1, base3) — 3-residue group
-//   op2: hazeAddMrp([a0,a1]    ← y1+y1, base2) — 2-residue group, same dst[0]
+//   op1: hazeAddMrp(haze::test::ctx(), [a0,a1,a2] ← x1+x1, base3) — 3-residue group
+//   op2: hazeAddMrp(haze::test::ctx(), [a0,a1]    ← y1+y1, base2) — 2-residue group, same dst[0]
 //   tag a0 (promotes group); tag a2 (standalone SRP); flush.
 //
 // Assertions:
@@ -210,20 +211,22 @@ TEST_CASE("MRP group reuse: same dst[0] re-registered with fewer residues export
     auto y1 = haze::test::allocate_and_h2d_residues(y1_data);
 
     // op1: write [a0,a1,a2] with 3-residue group.
-    REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(x1).data(), haze::test::to_const(x1).data(),
-                       base3.data(), base3.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a.data(), haze::test::to_const(x1).data(),
+                       haze::test::to_const(x1).data(), base3.data(), base3.size(),
+                       nullptr) == HAZE_SUCCESS);
 
     // op2: write [a0,a1] only using base2; same dst[0] → same group name.
     // This should REPLACE the 3-residue group with a 2-residue group.
     const std::vector<void *> a01 = {a[0], a[1]};
-    REQUIRE(hazeAddMrp(a01.data(), haze::test::to_const(y1).data(), haze::test::to_const(y1).data(),
-                       base2.data(), base2.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a01.data(), haze::test::to_const(y1).data(),
+                       haze::test::to_const(y1).data(), base2.data(), base2.size(),
+                       nullptr) == HAZE_SUCCESS);
 
     // Tag a[0] (promotes the 2-residue group) and a[2] (standalone — latest
     // binding is op1's result for that residue).
-    REQUIRE(hazeTagOutput(a[0]) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(a[2]) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[2]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // (a) MRP readback: the exported group must be 2-residue (op2 shape).
     //     On broken code, the 3-residue stale group is exported → FAIL here.
@@ -232,7 +235,8 @@ TEST_CASE("MRP group reuse: same dst[0] re-registered with fewer residues export
     // (b) D2H of a0/a1 == op2 results.
     for (std::size_t i = 0; i < 2; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[" << i << "] (op2) slot " << k);
             REQUIRE(got[k] == exp_op2[i][k]);
@@ -242,7 +246,8 @@ TEST_CASE("MRP group reuse: same dst[0] re-registered with fewer residues export
     // (c) D2H of a2 == op1's residue[2] (latest write to a[2] was op1).
     {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[2], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[2], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[2] (op1 residue[2]) slot " << k);
             REQUIRE(got[k] == exp_op1[2][k]);
@@ -295,17 +300,19 @@ TEST_CASE("MRP group reuse: a tagged group replaced by a smaller shape exports t
     auto y1 = haze::test::allocate_and_h2d_residues(y1_data);
 
     // op1 registers the 3-residue group; TAG IT NOW (before the replacement).
-    REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(x1).data(), haze::test::to_const(x1).data(),
-                       base3.data(), base3.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(a[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a.data(), haze::test::to_const(x1).data(),
+                       haze::test::to_const(x1).data(), base3.data(), base3.size(),
+                       nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[0]) == HAZE_SUCCESS);
 
     // op2 replaces the group (same dst[0], 2 residues) AFTER the tag.
     const std::vector<void *> a01 = {a[0], a[1]};
-    REQUIRE(hazeAddMrp(a01.data(), haze::test::to_const(y1).data(), haze::test::to_const(y1).data(),
-                       base2.data(), base2.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a01.data(), haze::test::to_const(y1).data(),
+                       haze::test::to_const(y1).data(), base2.data(), base2.size(),
+                       nullptr) == HAZE_SUCCESS);
 
     clear_serialized_probes();
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // (a) The exported group is the replacement: one 2-residue MRP, op2 values.
     const std::size_t mrp_files = count_mrp_out_probe_files();
@@ -316,7 +323,8 @@ TEST_CASE("MRP group reuse: a tagged group replaced by a smaller shape exports t
     // (b) a0/a1: op2 values.
     for (std::size_t i = 0; i < 2; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[" << i << "] (op2) slot " << k);
             REQUIRE(got[k] == exp_op2[i][k]);
@@ -327,7 +335,8 @@ TEST_CASE("MRP group reuse: a tagged group replaced by a smaller shape exports t
     //     exports its latest binding: op1's residue[2].
     {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[2], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[2], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[2] (op1 residue[2], standalone after replacement) slot " << k);
             REQUIRE(got[k] == exp_op1[2][k]);
@@ -393,23 +402,24 @@ TEST_CASE("MRP group reuse: addr migrating to a new group evicts the old group w
     auto xb = haze::test::allocate_and_h2d_residues(xb_data);
 
     // op_A: [a0,a1,a2] ← xa + xa; registers group A with dst[0]=a[0].
-    REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
-                       base.data(), base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a.data(), haze::test::to_const(xa).data(),
+                       haze::test::to_const(xa).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
 
     // op_B: [b0,b1,a2] ← xb + xb; dst[0]=b[0] → new group name (B).
     // a[2] was A's residue[2]; it now belongs to B, which evicts A.
     const std::vector<void *> b_dst = {b[0], b[1], a[2]};
-    REQUIRE(hazeAddMrp(b_dst.data(), haze::test::to_const(xb).data(),
+    REQUIRE(hazeAddMrp(haze::test::ctx(), b_dst.data(), haze::test::to_const(xb).data(),
                        haze::test::to_const(xb).data(), base.data(), base.size(),
                        nullptr) == HAZE_SUCCESS);
 
     // Tag b[0] → promotes group B (exports b[0], b[1], a[2]).
     // Tag a[0] and a[1] as standalone SRP outputs.
-    REQUIRE(hazeTagOutput(b[0]) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(a[0]) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(a[1]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), b[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[1]) == HAZE_SUCCESS);
     clear_serialized_probes();
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // (a) MRP group B exports the correct 3-residue values.
     haze::test::check_mrp_against_per_residue(base, exp_b);
@@ -422,7 +432,8 @@ TEST_CASE("MRP group reuse: addr migrating to a new group evicts the old group w
     // (c) D2H a0/a1: standalone SRP values from op_A (poly_map_ kept).
     for (std::size_t i = 0; i < 2; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[" << i << "] (standalone SRP from op_A) slot " << k);
             REQUIRE(got[k] == exp_a[i][k]);
@@ -432,7 +443,8 @@ TEST_CASE("MRP group reuse: addr migrating to a new group evicts the old group w
     // (d) D2H a2 == op_B's value at residue[2]; a2 was overwritten by op_B.
     {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[2], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[2], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[2] (op_B residue[2]) slot " << k);
             REQUIRE(got[k] == exp_b[2][k]);
@@ -448,7 +460,7 @@ TEST_CASE("MRP group reuse: addr migrating to a new group evicts the old group w
 // ===========================================================================
 // TC3b: tag BEFORE the migration — the evicted group's MRP view is dropped.
 //
-// hazeTagOutput(a0) promotes group A while A still owns [a0,a1,a2]. A later
+// hazeTagOutput(haze::test::ctx(), a0) promotes group A while A still owns [a0,a1,a2]. A later
 // op then claims a2 into a differently-named group B, which evicts A — known
 // AND pending. Pinned semantics (latest-write-wins, documented at
 // hazeTagOutput in haze.h): the flush succeeds, NO MRP is exported (B was
@@ -486,19 +498,20 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
     auto xb = haze::test::allocate_and_h2d_residues(xb_data);
 
     // op_A registers group A; TAG IT NOW, before the migration.
-    REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
-                       base.data(), base.size(), nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(a[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a.data(), haze::test::to_const(xa).data(),
+                       haze::test::to_const(xa).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a[0]) == HAZE_SUCCESS);
 
     // op_B claims a[2] under a different dst[0] → evicts A (and A's pending
     // promotion). B itself is never tagged.
     const std::vector<void *> b_dst = {b[0], b[1], a[2]};
-    REQUIRE(hazeAddMrp(b_dst.data(), haze::test::to_const(xb).data(),
+    REQUIRE(hazeAddMrp(haze::test::ctx(), b_dst.data(), haze::test::to_const(xb).data(),
                        haze::test::to_const(xb).data(), base.data(), base.size(),
                        nullptr) == HAZE_SUCCESS);
 
     clear_serialized_probes();
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // (a) No MRP export at all: A was evicted after its promotion, B untagged.
     const std::size_t mrp_files = count_mrp_out_probe_files();
@@ -508,7 +521,8 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
     // (b) A's per-residue tags survive: a0/a1 export op_A's values...
     for (std::size_t i = 0; i < 2; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[" << i << "] (op_A, standalone SRP) slot " << k);
             REQUIRE(got[k] == exp_a[i][k]);
@@ -518,7 +532,8 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
     // ...and a2 exports its latest binding (op_B's residue[2]).
     {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), a[2], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), a[2], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("a[2] (op_B residue[2]) slot " << k);
             REQUIRE(got[k] == exp_b[2][k]);
@@ -527,8 +542,8 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
 
     // (c) b0/b1 were never tagged by anyone: D2H must refuse.
     std::vector<uint64_t> scratch(kRingDim, 0);
-    REQUIRE(hazeMemcpy(scratch.data(), b[0], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-            HAZE_ERROR_NOT_FLUSHED);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), scratch.data(), b[0], kBytes,
+                       HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_ERROR_NOT_FLUSHED);
 
     haze::test::free_all_residues(a);
     haze::test::free_all_residues(b);
@@ -547,9 +562,9 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
 // Sequence:
 //   src1, src2, src3 ← distinct known H2D residues.
 //   dst ← src1 + src2     (compute)
-//   hazeTagOutput(dst)     (tag while dst = src1+src2)
+//   hazeTagOutput(haze::test::ctx(), dst)     (tag while dst = src1+src2)
 //   dst ← dst + src3       (second compute, overwrites binding)
-//   hazeFlush()
+//   hazeFlush(haze::test::ctx())
 //   D2H dst == src1+src2+src3 mod q  (final value wins)
 // ===========================================================================
 
@@ -571,52 +586,56 @@ TEST_CASE("SRP tag-then-overwrite: the tag exports the final value at flush", "[
     void *src2 = nullptr;
     void *src3 = nullptr;
     void *dst = nullptr;
-    REQUIRE(hazeMalloc(&src1, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&src2, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&src3, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src2, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &src3, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &dst, kBytes) == HAZE_SUCCESS);
 
-    REQUIRE(hazeMemcpy(src1, v1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(src2, v2.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(src3, v3.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src1, v1.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src2, v2.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), src3, v3.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
 
     // First compute: dst = src1 + src2.
-    REQUIRE(hazeAdd(dst, src1, src2, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), dst, src1, src2, 0, nullptr) == HAZE_SUCCESS);
 
     // Tag while binding is (src1+src2) — contract: tag pins the ADDR not the poly.
-    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), dst) == HAZE_SUCCESS);
 
     // Second compute AFTER the tag: dst = dst + src3.
-    REQUIRE(hazeAdd(dst, dst, src3, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(haze::test::ctx(), dst, dst, src3, 0, nullptr) == HAZE_SUCCESS);
 
     // Flush: final binding (src1+src2+src3) must be what gets materialized.
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-    REQUIRE(hazeMemcpy(got.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
     for (uint64_t k = 0; k < kRingDim; ++k) {
         INFO("slot " << k);
         REQUIRE(got[k] == expected[k]);
     }
 
-    REQUIRE(hazeFree(src1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(src2) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(src3) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), src1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), src2) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), src3) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), dst) == HAZE_SUCCESS);
 }
 
 // ===========================================================================
 // TC5: freed and recycled dst[0] starts clean — eviction on free + fresh op.
 //
-// hazeFree(a[0]) calls EpochState::invalidate which evicts any MRP group that
+// hazeFree(haze::test::ctx(), a[0]) calls EpochState::invalidate which evicts any MRP group that
 // included a[0]. The next hazeMalloc with an equal poly_bytes_ must recycle
 // the same DevAddr (LIFO pool). An MRP op on the recycled slot with a new
 // shape must register a fresh group and export it.
 //
 // Sequence:
 //   op1: [a0,a1,a2] ← base3 group  (registered group A)
-//   hazeFree(a[0])                  (evicts group A; a1/a2 keep poly_map_)
-//   hazeMalloc(a0_recycled)         (REQUIRE same address as a[0])
+//   hazeFree(haze::test::ctx(), a[0])                  (evicts group A; a1/a2 keep poly_map_)
+//   hazeMalloc(haze::test::ctx(), a0_recycled)         (REQUIRE same address as a[0])
 //   H2D fresh data into recycled buffer
 //   op2: [a0_recycled, c1] ← base2  (fresh 2-residue group, same device addr)
 //   tag + flush + verify via check_mrp_against_per_residue(base2, expected)
@@ -648,12 +667,13 @@ TEST_CASE("MRP group reuse: freed and recycled dst[0] starts clean", "[integrati
     auto a = haze::test::allocate_dst_residues(3, kBytes);
     auto xa = haze::test::allocate_and_h2d_residues(xa_data);
 
-    REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
-                       base3.data(), base3.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeAddMrp(haze::test::ctx(), a.data(), haze::test::to_const(xa).data(),
+                       haze::test::to_const(xa).data(), base3.data(), base3.size(),
+                       nullptr) == HAZE_SUCCESS);
 
     // Free a[0]: invalidates group A. The LIFO pool recycles this address next.
     void *const a0_addr = a[0];
-    REQUIRE(hazeFree(a[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), a[0]) == HAZE_SUCCESS);
     a[0] = nullptr; // prevent double-free at cleanup
 
     // Recycle: hazeMalloc must return the same DevAddr (the allocator pool is
@@ -662,31 +682,31 @@ TEST_CASE("MRP group reuse: freed and recycled dst[0] starts clean", "[integrati
     // semantics; if the pool strategy ever changes, rework the setup, don't
     // weaken the group assertions below.
     void *a0_recycled = nullptr;
-    REQUIRE(hazeMalloc(&a0_recycled, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &a0_recycled, kBytes) == HAZE_SUCCESS);
     REQUIRE(a0_recycled == a0_addr);
 
     // Allocate c[1] for op2's second residue slot.
     void *c1 = nullptr;
-    REQUIRE(hazeMalloc(&c1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(haze::test::ctx(), &c1, kBytes) == HAZE_SUCCESS);
 
     // H2D fresh op2 inputs (reuse existing xb_data).
     auto xb = haze::test::allocate_and_h2d_residues(xb_data);
 
     // op2: [a0_recycled, c1] ← xb + xb; fresh 2-residue group.
     const std::vector<void *> dst2 = {a0_recycled, c1};
-    REQUIRE(hazeAddMrp(dst2.data(), haze::test::to_const(xb).data(),
+    REQUIRE(hazeAddMrp(haze::test::ctx(), dst2.data(), haze::test::to_const(xb).data(),
                        haze::test::to_const(xb).data(), base2.data(), base2.size(),
                        nullptr) == HAZE_SUCCESS);
 
-    REQUIRE(hazeTagOutput(a0_recycled) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(haze::test::ctx(), a0_recycled) == HAZE_SUCCESS);
     clear_serialized_probes();
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush(haze::test::ctx()) == HAZE_SUCCESS);
 
     // --- Value check ---
     for (std::size_t i = 0; i < 2; ++i) {
         std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-        REQUIRE(hazeMemcpy(got.data(), dst2[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
-                HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(haze::test::ctx(), got.data(), dst2[i], kBytes,
+                           HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
         for (uint64_t k = 0; k < kRingDim; ++k) {
             INFO("op2 residue " << i << " slot " << k);
             REQUIRE(got[k] == exp_op2[i][k]);
@@ -700,10 +720,10 @@ TEST_CASE("MRP group reuse: freed and recycled dst[0] starts clean", "[integrati
     haze::test::check_mrp_against_per_residue(base2, exp_op2);
 
     // Cleanup (a[0] already freed; a[1] and a[2] still allocated).
-    REQUIRE(hazeFree(a0_recycled) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(c1) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(a[1]) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(a[2]) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), a0_recycled) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), c1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), a[1]) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(haze::test::ctx(), a[2]) == HAZE_SUCCESS);
     haze::test::free_all_residues(xa);
     haze::test::free_all_residues(xb);
 }

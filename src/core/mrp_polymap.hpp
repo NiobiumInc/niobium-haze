@@ -13,48 +13,76 @@
 #pragma once
 
 #include "common/errors.hpp"
-#include "common/thread_safety.hpp"
-#include "core/epoch.hpp"
+#include "common/handle.hpp"
+#include "core/context_fwd.hpp"
+#include "core/graph.hpp"
+#include "core/lower.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <niobium/fhetch_api.h>
+#include <span>
 #include <utility>
 #include <vector>
 
 namespace haze {
 
-// MRP polymap glue: build_mrp_locked assembles K per-addr residues into an
-// MRP; store_mrp_locked decomposes one back into per-addr stores. Both run
-// under the EpochSession lock (HAZE_REQUIRES enforces it via clang TSA).
+// MRP record-path glue: record_mrp_sources resolves K per-addr residues
+// to tape values (appending the dedup'd MRP-input-tag node);
+// record_mrp_dests binds K result residues; record_mrp_out_group
+// appends the output-group registration that the flush-time derivation
+// expands when any residue is tagged.
 
+// Resolve each residue (first touch promotes shadow bytes to an input
+// node) and, for multi-residue groups, append the MrpInputTag node so
+// the bridge can synthesize a multi-tower input ciphertext. Returns the
+// residues' values in base order.
+std::expected<std::vector<ValueId>, HazeInternalError>
+record_mrp_sources(Context &ctx, const void *const *polys, const uint64_t *base, std::size_t len,
+                   uint64_t ring_dim) noexcept;
+
+// Fresh result bindings for the K dst residues. Call AFTER every
+// record_mrp_sources of the op (in-place safety).
+struct MrpDests {
+    std::vector<DevAddr> addrs;
+    std::vector<ValueId> vids;
+};
+MrpDests record_mrp_dests(Context &ctx, void *const *dst_polys, const uint64_t *base,
+                          std::size_t len) noexcept;
+
+// Register the dst residues as an MRP output group (no-op for len == 1;
+// the addr-derived name dedups re-registration of the same op).
+std::expected<void, HazeInternalError> record_mrp_out_group(Context &ctx,
+                                                            std::span<const DevAddr> addrs,
+                                                            const uint64_t *base,
+                                                            std::size_t len) noexcept;
+
+// Lowering-side helper for thunks: assemble the residues' materialized
+// polynomials into an fhetch MRP (the from_pairs the eager build_mrp
+// did at record time).
 std::expected<niobium::fhetch::MRP, HazeInternalError>
-build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len)
-    HAZE_REQUIRES(epoch().mutex());
+build_lowered_mrp(const LowerCtx &lower, const std::vector<ValueId> &vids,
+                  const std::vector<uint64_t> &base);
 
-std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
-                                                        const niobium::fhetch::MRP &mrp,
-                                                        const uint64_t *base, std::size_t len)
-    HAZE_REQUIRES(epoch().mutex());
+// Per-residue fan-out backing hazeMemcpyMrp; signatures unchanged from
+// the eager engine.
+std::expected<void, HazeInternalError> copy_h2d_mrp(Context &ctx, void *const *dst,
+                                                    const void *const *src, std::size_t count,
+                                                    std::size_t len) noexcept;
 
-// Per-residue fan-out backing hazeMemcpyMrp. Each manages its own
-// EpochSession (call without the lock held), so they mirror the single-ptr
-// copy_* free functions in epoch.hpp rather than the *_locked glue above.
-std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
-                                                    std::size_t count, std::size_t len) noexcept;
-
-std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
-                                                        std::size_t count,
+std::expected<void, HazeInternalError> copy_to_host_mrp(Context &ctx, void *const *dst,
+                                                        const void *const *src, std::size_t count,
                                                         std::size_t len) noexcept;
 
-std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
+std::expected<void, HazeInternalError> copy_device_to_device_mrp(Context &ctx, void *const *dst,
                                                                  const void *const *src,
                                                                  const uint64_t *base,
                                                                  std::size_t len) noexcept;
 
-// Build an MRS from per-modulus uint64_t scalars + their primes. Pure-data
-// helper: does not touch the polymap, so no lock contract.
+// Build an MRS from per-modulus uint64_t scalars + their primes.
+// Pure-data helper used INSIDE thunks at lowering time (fhetch Scalar
+// construction must never happen at record time).
 inline niobium::fhetch::MRS build_mrs(const uint64_t *scalars, const uint64_t *base,
                                       std::size_t len) {
     std::vector<std::pair<niobium::fhetch::Scalar, uint64_t>> pairs;

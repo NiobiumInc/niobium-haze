@@ -27,9 +27,11 @@ extern "C" {
 // in the background, so there is nothing to wait for. It does NOT execute the
 // recording — run it explicitly with hazeFlush() before reading results back.
 //
-// hazeDeviceReset clears all process-global HAZE state (allocator pool,
-// epoch, compiler backend, configuration, streams, events, active
-// device) AND the thread-local last-error flag. Mirrors cudaDeviceReset.
+// hazeDeviceReset clears the state that is still process-global (the
+// compiler backend, the fhetch engine, the replay bridge, streams,
+// events, active device) AND the thread-local last-error flag. Engine
+// state lives in hazeContext_t objects — destroy those individually.
+// Mirrors cudaDeviceReset in shape.
 
 HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
@@ -42,10 +44,9 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 
 // Device memory: allocation, free, host-pinned buffers, pointer attributes.
 //
-// hazeMalloc returns one FHETCH-addressable polynomial. `size` must equal
-// the configured polynomial size (= ring_dim * sizeof(uint64_t)). Calls
-// before hazeSetRingDimension return HAZE_ERROR_CONFIGERR; calls with a
-// size that does not match the configured polynomial size return
+// hazeMalloc returns one FHETCH-addressable polynomial from the
+// context's address space. `size` must equal the context's polynomial
+// size (= ring_dim * sizeof(uint64_t)); a mismatch returns
 // HAZE_ERROR_INVALID_VALUE. Non-polynomial host-side scratch should use
 // hazeHostAlloc (or ordinary host allocation).
 //
@@ -64,13 +65,15 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // allocator, etc.) reports HAZE_MEMORY_TYPE_UNREGISTERED — matches
 // cudaPointerGetAttributes' behaviour from CUDA 11 onward.
 
-HAZE_API hazeError_t hazeMalloc(void **ptr, size_t size) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFree(void *ptr) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFreeAsync(void *ptr, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int flags) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeFreeHost(void *ptr) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
+HAZE_API hazeError_t hazeMalloc(hazeContext_t ctx, void **ptr, size_t size) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFree(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMallocAsync(hazeContext_t ctx, void **ptr, size_t size,
+                                     hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFreeAsync(hazeContext_t ctx, void *ptr, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeHostAlloc(hazeContext_t ctx, void **ptr, size_t size,
+                                   unsigned int flags) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeFreeHost(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazePointerGetAttributes(hazeContext_t ctx, hazePointerAttributes *attrs,
                                               const void *ptr) HAZE_NOEXCEPT;
 
 // Data transfer: H2D, D2H, D2D, memset, peer copies.
@@ -82,23 +85,25 @@ HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
 // plain H2D-then-D2H round-trip needs no tag/flush — the uploaded bytes are
 // returned as-is.
 
-HAZE_API hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
+HAZE_API hazeError_t hazeMemcpy(hazeContext_t ctx, void *dst, const void *src, size_t count,
                                 hazeMemcpyKind kind) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count, hazeMemcpyKind kind,
+HAZE_API hazeError_t hazeMemcpyAsync(hazeContext_t ctx, void *dst, const void *src, size_t count,
+                                     hazeMemcpyKind kind, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemset(hazeContext_t ctx, void *dev_ptr, int value,
+                                size_t count) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemsetAsync(hazeContext_t ctx, void *dev_ptr, int value, size_t count,
                                      hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemsetAsync(void *dev_ptr, int value, size_t count,
-                                     hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *src, int src_device,
-                                         size_t count, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMemcpyPeerAsync(hazeContext_t ctx, void *dst, int dst_device,
+                                         const void *src, int src_device, size_t count,
+                                         hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Per-residue (MRP) variant of hazeMemcpy: `dst`/`src` are arrays of
 // `base_len` poly pointers and `count` is bytes-per-residue, applied to every
 // residue under `kind`. `base` (the per-residue primes, see the MRP block
 // below) is consulted only by D2D, which records a per-residue pass-through
 // copy under base[i] and registers the dst as an MRP output group.
-HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
-                                   hazeMemcpyKind kind, const uint64_t *base,
+HAZE_API hazeError_t hazeMemcpyMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                   size_t count, hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
 // Declare `ptr` an output of the in-flight recording (tagging any one residue
@@ -109,31 +114,80 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
 // readback reflects that latest registration, and if a later op claims a tagged
 // residue into a different value entirely, the original group's multi-residue
 // view is dropped (its residues still materialize individually).
-HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) HAZE_NOEXCEPT;
 
 // Run the recorded program and populate the tagged outputs' shadow buffers;
 // no-op when nothing is recorded or tagged.
-HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
+//
+// Concurrency contract (CUDA-like). Recording is thread-safe with
+// per-thread program order: operations issued by one thread are
+// recorded in issue order; operations on DISTINCT buffers may proceed
+// concurrently, including across DIFFERENT contexts — recording state
+// is per-context and the record path touches no process-global engine.
+// Reusing the same device address from two threads without your own
+// synchronization is undefined (the recording stays memory-safe, but
+// which value wins is unspecified — exactly like racing CUDA kernels on
+// one buffer without streams or events).
+//
+// hazeFlush has two phases. The EMIT phase (sealing the tape and writing
+// the .fhetch project) goes through the single process-global FHETCH
+// engine and is serialized on one internal lock, so the emits of
+// concurrent flushes — same context or different — run one at a time
+// (each is ~hundreds of ms). The REPLAY phase (running the recorded
+// program and reading results back) is the long pole.
+//
+// Default: replay runs in-process under that same lock, so flushes
+// serialize end to end — simplest and fastest for single-threaded use.
+//
+// Isolated mode (env HAZE_REPLAY_ISOLATED=1): the long replay runs in a
+// fresh worker PROCESS off the lock (fhetch_sim for the local target,
+// nbcc_fhetch_replay for transport), so concurrent flushes overlap their
+// (potentially minutes-long) replays. Each worker has its own address
+// space — and thus its own OpenFHE transform caches — so concurrent
+// replays cannot race shared engine state. Reading the workers' results
+// back DOES re-take the engine lock (deserializing a ciphertext touches
+// OpenFHE's process-global caches), but that is a cheap file read, not
+// the long pole. This is safe with NO qualifiers, with ONE caller
+// requirement: concurrently-flushed contexts MUST use DISTINCT program
+// directories (hazeSetProgramDirectory) so their on-disk projects don't
+// collide.
+//
+// In either mode, hazeFlush racing compute on the addresses being
+// flushed (same context) is undefined.
+HAZE_API hazeError_t hazeFlush(hazeContext_t ctx) HAZE_NOEXCEPT;
 
-// Device configuration: ring dimension, ciphertext moduli, twiddle factors,
-// program metadata, target selection, lifecycle reset.
+/* Context management. A hazeContext_t is one recording program: its own
+ * FHE parameters, device address space, value bindings, tape, and kernel
+ * cache. The parameters are immutable for the context's lifetime —
+ * there is no piecewise configure step and nothing to mutate after the
+ * first compute call.
+ *
+ * `moduli[i]` is the modulus the SRP compute calls name via mod_idx == i.
+ * Destroy invalidates every address allocated from the context; using
+ * one afterwards is undefined. Destroying a context with an open
+ * hazeKernelBegin bracket or unflushed recording discards them.
+ * The process-global pieces fhetch still owns (one trace engine, the
+ * replay bridge, streams/events) are scrubbed and re-bound from the
+ * flushing context on every hazeFlush, so contexts cannot observe each
+ * other's leftovers through them. */
+HAZE_API hazeError_t hazeContextCreate(hazeContext_t *ctx, uint64_t ring_dim,
+                                       const uint64_t *moduli, size_t n_moduli) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeContextDestroy(hazeContext_t ctx) HAZE_NOEXCEPT;
 
-HAZE_API hazeError_t hazeSetRingDimension(uint64_t n) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSetCiphertextModulus(int index, uint64_t modulus) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSetTwiddleFactors(int index, uint64_t generator) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeConfigureDevice(void) HAZE_NOEXCEPT;
+// Per-context program metadata and target selection. FHE parameters
+// (ring dimension, modulus chain) are fixed by hazeContextCreate.
 
 /* Set program metadata recorded in the FHETCH trace produced by HAZE.
  * Defaults: name="haze", version="0.1", description="HAZE runtime".
  * Must be called before the first H2D or compute call to take effect (the
  * first of either brings up the compiler backend). */
-HAZE_API hazeError_t hazeSetProgramInfo(const char *name, const char *version,
+HAZE_API hazeError_t hazeSetProgramInfo(hazeContext_t ctx, const char *name, const char *version,
                                         const char *description) HAZE_NOEXCEPT;
 
 /* Override where the recorded project is written (default <cwd>/<program_name>/);
  * `dir` is used verbatim. Must be called before the first H2D or compute call
  * (which brings up the compiler backend). */
-HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetProgramDirectory(hazeContext_t ctx, const char *dir) HAZE_NOEXCEPT;
 
 /* Select the niobium-compiler target for replay.
  *
@@ -168,7 +222,7 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  * Behaviour-by-target dispatch happens inside hazeFlush(), which finalises the
  * recording, runs the replay, and populates the tagged outputs' shadow buffers;
  * a subsequent hazeMemcpy(D2H) then reads them. */
-HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetTarget(hazeContext_t ctx, const char *target) HAZE_NOEXCEPT;
 
 /* Data-representation toggles for recorded traces: Montgomery-form RNS
  * residues and bit-reversed coefficient order. Independent opt-ins.
@@ -189,8 +243,8 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
  *
  * Per flag: explicit setter > HAZE_MONTGOMERY / HAZE_BIT_REVERSAL env
  * ("1"/"true") > off. Call before the first H2D or compute. */
-HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetMontgomery(hazeContext_t ctx, int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetBitReversal(hazeContext_t ctx, int enable) HAZE_NOEXCEPT;
 
 /* Finalize the recording and write the project directory (.fhetch trace,
  * inputs, ciphertext templates, cryptocontext) WITHOUT running replay; only
@@ -199,7 +253,7 @@ HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
  * `nbcc_fhetch_replay --project=<dir> --target=<device>` on a remote host).
  * No-op when not recording; nothing is materialized in-process, so a later
  * in-process D2H of an output returns HAZE_ERROR_NOT_FLUSHED. */
-HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeWriteProgram(hazeContext_t ctx) HAZE_NOEXCEPT;
 
 // Streams: lifecycle and ordering primitives. HAZE is a recording layer
 // that emits FHETCH IR; nothing executes until hazeFlush() dispatches
@@ -230,24 +284,24 @@ HAZE_NODISCARD HAZE_API const char *hazeGetErrorString(hazeError_t error) HAZE_N
 
 // Point-wise polynomial arithmetic and scalar variants.
 
-HAZE_API hazeError_t hazeAdd(void *dst, const void *src1, const void *src2, int mod_idx,
-                             hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSub(void *dst, const void *src1, const void *src2, int mod_idx,
-                             hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMul(void *dst, const void *src1, const void *src2, int mod_idx,
-                             hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeAddScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
-                                   hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSubScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
-                                   hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
-                                   hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAdd(hazeContext_t ctx, void *dst, const void *src1, const void *src2,
+                             int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSub(hazeContext_t ctx, void *dst, const void *src1, const void *src2,
+                             int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMul(hazeContext_t ctx, void *dst, const void *src1, const void *src2,
+                             int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAddScalar(hazeContext_t ctx, void *dst, const void *src, uint64_t scalar,
+                                   int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSubScalar(hazeContext_t ctx, void *dst, const void *src, uint64_t scalar,
+                                   int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeMulScalar(hazeContext_t ctx, void *dst, const void *src, uint64_t scalar,
+                                   int mod_idx, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Number-theoretic transform (NTT) and its inverse.
 
-HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
+HAZE_API hazeError_t hazeNTT(hazeContext_t ctx, void *dst, const void *src, int mod_idx,
                              hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
+HAZE_API hazeError_t hazeINTT(hazeContext_t ctx, void *dst, const void *src, int mod_idx,
                               hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Automorphism / rotation. hazeAutomorph(_, k) records the eval-form
@@ -261,7 +315,7 @@ HAZE_API hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
 // the identity, so to invert the action — i.e. permute in the opposite
 // direction — pass the multiplicative inverse of k modulo 2N as `index`.
 
-HAZE_API hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
+HAZE_API hazeError_t hazeAutomorph(hazeContext_t ctx, void *dst, const void *src, uint64_t index,
                                    hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Multi-residue polynomial (MRP) variants of the pointwise / scalar / NTT /
@@ -287,34 +341,37 @@ HAZE_API hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
 // Each call records a single `mr_*` IR op that fans out to per-residue
 // `sr_*` instructions inside niobium-fhetch.
 
-HAZE_API hazeError_t hazeAddMrp(void *const *dst, const void *const *src1, const void *const *src2,
-                                const uint64_t *base, size_t base_len,
+HAZE_API hazeError_t hazeAddMrp(hazeContext_t ctx, void *const *dst, const void *const *src1,
+                                const void *const *src2, const uint64_t *base, size_t base_len,
                                 hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSubMrp(void *const *dst, const void *const *src1, const void *const *src2,
-                                const uint64_t *base, size_t base_len,
+HAZE_API hazeError_t hazeSubMrp(hazeContext_t ctx, void *const *dst, const void *const *src1,
+                                const void *const *src2, const uint64_t *base, size_t base_len,
                                 hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMulMrp(void *const *dst, const void *const *src1, const void *const *src2,
-                                const uint64_t *base, size_t base_len,
+HAZE_API hazeError_t hazeMulMrp(hazeContext_t ctx, void *const *dst, const void *const *src1,
+                                const void *const *src2, const uint64_t *base, size_t base_len,
                                 hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeAddScalarMrp(void *const *dst, const void *const *src,
+HAZE_API hazeError_t hazeAddScalarMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
                                       const uint64_t *scalars, const uint64_t *base,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src,
+HAZE_API hazeError_t hazeSubScalarMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
                                       const uint64_t *scalars, const uint64_t *base,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
+HAZE_API hazeError_t hazeMulScalarMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
                                       const uint64_t *scalars, const uint64_t *base,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
-                                size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
-                                 size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src, uint64_t index,
-                                      const uint64_t *base, size_t base_len,
+HAZE_API hazeError_t hazeNTTMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                const uint64_t *base, size_t base_len,
+                                hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeINTTMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                 const uint64_t *base, size_t base_len,
+                                 hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeAutomorphMrp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                      uint64_t index, const uint64_t *base, size_t base_len,
                                       hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *const *src,
-                                              uint64_t offset, const uint64_t *base,
-                                              size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeRotAutomorphCoeffMrp(hazeContext_t ctx, void *const *dst,
+                                              const void *const *src, uint64_t offset,
+                                              const uint64_t *base, size_t base_len,
+                                              hazeStream_t stream) HAZE_NOEXCEPT;
 
 // CRT basis conversion (composite operations: ModUp, ModDown,
 // generalised basis convert).
@@ -327,12 +384,62 @@ HAZE_API hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *cons
 // doc). `params` carries the moduli bases and other scalar metadata
 // only — never polynomial pointers.
 
-HAZE_API hazeError_t hazeBasisConvert(void *const *dst, const void *const *src, const void *params,
-                                      hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
-                                 hazeStream_t stream) HAZE_NOEXCEPT;
-HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
-                               hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeBasisConvert(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                      const void *params, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeModDown(hazeContext_t ctx, void *const *dst, const void *const *src,
+                                 const void *params, hazeStream_t stream) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeModUp(hazeContext_t ctx, void *const *dst, const void *const *src,
+                               const void *params, hazeStream_t stream) HAZE_NOEXCEPT;
+
+// Kernel memoization. A kernel is a record-time template: bracket a
+// deterministic sequence of compute calls with hazeKernelBegin /
+// hazeKernelEnd and the bracketed sub-tape is cached under
+// (name, key). A later Begin with the same key returns
+// HAZE_KERNEL_REPLAY and instantiates the cached sub-tape against the
+// new inputs/outputs WITHOUT running the body — O(1) user code per
+// repeat call. Rules:
+//   - key_hash/key_bytes cover everything the body's recording depends
+//     on besides buffer identities (scalars, moduli, shapes). Full key
+//     bytes are stored and compared — a hash collision can never alias
+//     two kernels.
+//   - Closed body: between Begin and End the body may touch ONLY the
+//     residues passed as inputs (all of which must already be recorded
+//     values) and the declared outputs. Allocation, H2D/D2H, free, and
+//     foreign buffers inside a body are rejected.
+//   - Outputs are caller-pre-allocated and passed to End on BOTH
+//     dispositions; End binds + tags them as recording outputs.
+//   - Bodies may WRITE only declared outputs (an in-place update of an
+//     input means declaring it as both — In + Out positions, or InOut
+//     in the typed layer) and may READ only declared inputs and their
+//     own results; violations fail End with
+//     HAZE_ERROR_SOURCE_UNAVAILABLE, and the body's bindings are rolled
+//     back so continued recording fails loudly rather than silently.
+//   - The recording's recovered per-address moduli are baked into the
+//     template (e.g. an automorph of an input recovers that input's
+//     recorded modulus at RECORD time). Keys must therefore cover the
+//     inputs' moduli — the typed layer always does this.
+//   - hazeFlush/hazeWriteProgram inside an open bracket fail with
+//     HAZE_ERROR_INVALID_VALUE.
+//   - Nesting a Begin inside an open kernel returns
+//     HAZE_ERROR_NOT_SUPPORTED. Begin/End pairs must not interleave
+//     across threads.
+//   - hazeSetKernelMemo(0) (or env HAZE_KERNEL_MEMO=0) disables the
+//     cache: Begin always records, End only tags — the cold-recording
+//     control. hazeSetKernelValidate(1) (or HAZE_KERNEL_VALIDATE=1)
+//     re-runs cache-hit bodies and structurally compares against the
+//     cached sub-tape, failing End with HAZE_ERROR_KERNEL_VALIDATION on
+//     divergence (catches stateful / nondeterministic bodies).
+//   - The cache and any open bracket die with their context.
+
+HAZE_API hazeError_t hazeKernelBegin(hazeContext_t ctx, const char *name, uint64_t key_hash,
+                                     const uint8_t *key_bytes, size_t key_bytes_len,
+                                     const hazeKernelInput *inputs, size_t n_inputs,
+                                     hazeKernelDisposition *disposition) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeKernelEnd(hazeContext_t ctx, const hazeKernelOutput *outputs,
+                                   size_t n_outputs) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeKernelAbort(hazeContext_t ctx) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetKernelMemo(hazeContext_t ctx, int enable) HAZE_NOEXCEPT;
+HAZE_API hazeError_t hazeSetKernelValidate(hazeContext_t ctx, int enable) HAZE_NOEXCEPT;
 
 // Graph recording and execution. Names mirror CUDA's graph API. All
 // entries currently return HAZE_ERROR_NOT_SUPPORTED — graph capture is

@@ -25,11 +25,6 @@
 
 namespace haze {
 
-DeviceAllocator &DeviceAllocator::instance() noexcept {
-    static DeviceAllocator inst;
-    return inst;
-}
-
 void DeviceAllocator::clear_pool_locked() noexcept {
     for (DevAddr addr : pool_free_) {
         alloc_set_.erase(addr);
@@ -138,7 +133,7 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
     }
     auto node = shadow_data_.extract(addr);
     if (!node) {
-        // Address allocated but never written. epoch::lookup_or_create_locked
+        // Address allocated but never written. record.cpp's resolve_operand
         // translates this to SourceUnavailable — compute / D2D on an
         // uninitialized buffer is a contract violation.
         record_internal_error(HazeInternalError::NoData,

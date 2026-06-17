@@ -28,6 +28,7 @@
 #include <functional>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <haze/replay_bridge.hpp> // declares the result_from this TU defines
 #include <map>
 #include <memory>
 #include <niobium/compiler.h>
@@ -471,13 +472,22 @@ void on_post_recording(const HookCtx &hctx) {
         });
 }
 
-// Install the post-recording hook, moving `hctx` into the lambda closure;
-// clears the bootstrap-precompute hook haze never uses.
-void install_post_recording_hook(HookCtx hctx) {
+// The bridge's persistent hook state. compiler().reset() (run by the
+// per-flush engine scrub and by hazeDeviceReset) frees the installed
+// hook lambda, so the state it closes over must live HERE for
+// hazeReplayBridgeReinstallHook to rebuild it.
+std::shared_ptr<const HookCtx> &stored_hook_ctx() noexcept {
+    static std::shared_ptr<const HookCtx> ctx;
+    return ctx;
+}
+
+// Install the post-recording hook over shared hook state; clears the
+// bootstrap-precompute hook haze never uses.
+void install_post_recording_hook(std::shared_ptr<const HookCtx> hctx) {
     niobium::compiler().set_auto_capture_at_stop(nullptr);
     niobium::compiler().set_post_recording_hook([hctx = std::move(hctx)]() noexcept {
         try {
-            on_post_recording(hctx);
+            on_post_recording(*hctx);
         } catch (const std::exception &e) {
             log_hook_error(std::string{"post_recording_hook threw: "} + e.what());
         } catch (...) {
@@ -523,13 +533,35 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 
         niobium::compiler().capture_crypto_context(built->cc);
 
-        install_post_recording_hook(HookCtx{
+        auto hctx = std::make_shared<const HookCtx>(HookCtx{
             .ring_dim = ring_dim,
             .primary = std::move(*built),
         });
+        stored_hook_ctx() = hctx;
+        install_post_recording_hook(std::move(hctx));
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
+        return HAZE_ERROR_INTERNAL;
+    } catch (...) {
+        return HAZE_ERROR_INTERNAL;
+    }
+}
+
+extern "C" hazeError_t hazeReplayBridgeReinstallHook() noexcept {
+    const std::shared_ptr<const HookCtx> hctx = stored_hook_ctx();
+    if (hctx == nullptr)
+        return HAZE_SUCCESS; // bridge never initialized: nothing to restore
+    try {
+        // The scrub's compiler().reset() dropped both the hook and the
+        // captured CryptoContext; restore both. Program info is NOT
+        // re-planted here — the flush re-derives it from the flushing
+        // context's Config.
+        niobium::compiler().capture_crypto_context(hctx->primary.cc);
+        install_post_recording_hook(hctx);
+        return HAZE_SUCCESS;
+    } catch (const std::exception &e) {
+        haze::log_error("replay_bridge", std::string{"reinstall threw: "} + e.what());
         return HAZE_ERROR_INTERNAL;
     } catch (...) {
         return HAZE_ERROR_INTERNAL;
@@ -540,6 +572,7 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // Clear first so any early-return below still honors the "prior
     // failures don't leak forward" contract.
     hook_had_error_flag().store(false, std::memory_order_relaxed);
+    stored_hook_ctx().reset();
 
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
@@ -592,9 +625,11 @@ inline Format openfhe_to_fhetch_format(::Format fmt) {
     return fmt == ::Format::COEFFICIENT ? Format::Coefficient : Format::Evaluation;
 }
 
-// Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error.
-lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) {
-    auto dir = niobium::compiler().get_program_directory();
+// Deserialize <dir>/serialized_probes/<name>.ct; nullptr on error. `dir` is
+// passed explicitly (not read from the compiler singleton) so concurrent,
+// isolated replays each read their own project dir without racing.
+lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::filesystem::path &dir,
+                                                     const std::string &name) {
     auto ct_path = dir / "serialized_probes" / (name + ".ct");
     if (!std::filesystem::exists(ct_path)) {
         haze::log_error("fhetch::result", "'" + name + "' not found at " + ct_path.string());
@@ -623,8 +658,8 @@ std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly &np) {
 } // namespace
 
 NIOBIUM_FHETCH_RESULT_API
-bool result(const std::string &name, Polynomial &p) {
-    auto ct = load_serialized_probe(name);
+bool result_from(const std::filesystem::path &dir, const std::string &name, Polynomial &p) {
+    auto ct = load_serialized_probe(dir, name);
     if (!ct)
         return false;
 
@@ -645,8 +680,8 @@ bool result(const std::string &name, Polynomial &p) {
 }
 
 NIOBIUM_FHETCH_RESULT_API
-bool result(const std::string &name, MRP &m) {
-    auto ct = load_serialized_probe(name);
+bool result_from(const std::filesystem::path &dir, const std::string &name, MRP &m) {
+    auto ct = load_serialized_probe(dir, name);
     if (!ct)
         return false;
 
@@ -669,9 +704,32 @@ bool result(const std::string &name, MRP &m) {
     return true;
 }
 
+// Singleton-program-dir convenience wrappers (the historical API). Equivalent
+// to result_from(get_program_directory(), name, ...); the concurrent flush
+// path uses result_from with the per-flush captured dir instead.
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string &name, Polynomial &p) {
+    return result_from(niobium::compiler().get_program_directory(), name, p);
+}
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string &name, MRP &m) {
+    return result_from(niobium::compiler().get_program_directory(), name, m);
+}
+
+// NOTE: there is no result_from(dir, name, MRPArray&) — the consumer-side
+// dir-explicit family (replay_bridge.hpp) covers Polynomial and MRP only. So
+// this overload is the singleton-dir path with no isolated-mode counterpart: in
+// isolated replay it
+// would read whatever dir the shared Compiler last pointed at, not a specific
+// flush's. That is not a live hazard here because haze's flush never collects
+// MRPArray outputs — finalize() reads every output as a per-residue Polynomial
+// via result_from(<captured dir>, ...). An isolated caller needing the MRPArray
+// view must collect its residues the same way, or fhetch must grow the
+// dir-explicit overload first.
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, MRPArray &arr) {
-    auto ct = load_serialized_probe(name);
+    auto ct = load_serialized_probe(niobium::compiler().get_program_directory(), name);
     if (!ct)
         return false;
 

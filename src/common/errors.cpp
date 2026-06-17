@@ -38,6 +38,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_NOT_FLUSHED;
     case HazeInternalError::UnsupportedDataFormat:
         return HAZE_ERROR_NOT_SUPPORTED;
+    case HazeInternalError::KernelValidationFailed:
+        return HAZE_ERROR_KERNEL_VALIDATION;
     // Internal: haze invariants / backend failed. Caller can't recover;
     // the specific variant survives in the HAZE_DEBUG=1 stderr log.
     case HazeInternalError::BackendInitFailed:
@@ -98,6 +100,8 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "D2H read of address with no materialized bytes (tag output + flush before D2H)";
     case HazeInternalError::UnsupportedDataFormat:
         return "montgomery/bit-reversal not supported on this target (use FUNC_SIM, not local)";
+    case HazeInternalError::KernelValidationFailed:
+        return "memoized kernel body diverged on validation re-trace (stateful body?)";
     }
     return "unknown";
 }

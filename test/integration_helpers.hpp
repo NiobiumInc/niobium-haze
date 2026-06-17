@@ -17,47 +17,56 @@
 
 namespace haze::test {
 
-// MODULUS CONTRACT (single source of truth): the values passed to
-// hazeSetCiphertextModulus ARE the .fhetch trace moduli, and both replay paths
+// MODULUS CONTRACT (single source of truth): the moduli passed to
+// hazeContextCreate ARE the .fhetch trace moduli, and both replay paths
 // reconstruct under them; hazeReplayBridgeInitCryptoContext's scaffold prime is
 // overwritten with the trace primes at synthesis (bridge switch_tower_modulus)
-// and never consulted for results. So tests set the
-// slot to the intended prime and oracle against it (verified by "trace modulus
+// and never consulted for results. So tests create the context with the
+// intended primes and oracle against them (verified by "trace modulus
 // is authoritative ..." in test_hardware_format.cpp). Modulus-less SRP ops are
 // trace-authoritative too — haze recovers and binds the source modulus — except
 // a copy of a never-modulus-bound (raw H2D) address, which has none.
 
-// Combined integration setup: reset, ring dim, bridge CC init, set the
-// ciphertext modulus, configure device. Returns the modulus it set so callers
-// generate inputs and oracles against the same (authoritative) value.
+// The current test context. recreate_ctx (via the setup_* helpers)
+// destroys the previous case's context and creates a fresh one — the
+// per-case isolation hazeDeviceReset used to provide for engine state;
+// hazeDeviceReset itself now resets only the process globals.
+inline hazeContext_t &ctx() {
+    static hazeContext_t current = nullptr;
+    return current;
+}
+
+inline void recreate_ctx(uint64_t ring_dim, const std::vector<uint64_t> &moduli) {
+    if (ctx() != nullptr)
+        REQUIRE(hazeContextDestroy(ctx()) == HAZE_SUCCESS);
+    ctx() = nullptr;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeContextCreate(&ctx(), ring_dim, moduli.data(), moduli.size()) == HAZE_SUCCESS);
+}
+
+// Combined integration setup: fresh context with the modulus in slot
+// `mod_idx`, process-global reset, bridge CC init. Returns the modulus so
+// callers generate inputs and oracles against the same (authoritative) value.
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    std::vector<uint64_t> moduli(static_cast<size_t>(mod_idx) + 1, modulus);
+    recreate_ctx(ring_dim, moduli);
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(mod_idx, modulus) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return modulus;
 }
 
-// Three-prime variant for MRP cases: all three slots set before the single
-// hazeConfigureDevice, each to its intended (trace-authoritative) prime: slot
-// 0 the requested modulus, slots 1 and 2 the suite's NTT-friendly companion
-// primes. Returns the configured base, index-aligned with the modulus slots.
+// Three-prime variant for MRP cases: slot 0 the requested modulus, slots 1
+// and 2 the suite's NTT-friendly companion primes. Returns the configured
+// base, index-aligned with the modulus slots.
 inline std::vector<uint64_t>
 setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 576460752303415297ULL) {
     constexpr uint64_t kQ1 = 576460752303439873ULL;
     constexpr uint64_t kQ2 = 576460752303702017ULL;
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    recreate_ctx(ring_dim, {modulus, kQ1, kQ2});
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, modulus) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return {modulus, kQ1, kQ2};
 }
 
@@ -88,8 +97,8 @@ allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
     std::vector<void *> ptrs(residues.size(), nullptr);
     for (std::size_t i = 0; i < residues.size(); ++i) {
         const std::size_t bytes = residues[i].size() * sizeof(uint64_t);
-        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+        REQUIRE(hazeMalloc(ctx(), &ptrs[i], bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMemcpy(ctx(), ptrs[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
                 HAZE_SUCCESS);
     }
     return ptrs;
@@ -99,14 +108,14 @@ allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
 inline std::vector<void *> allocate_dst_residues(std::size_t count, std::size_t bytes) {
     std::vector<void *> ptrs(count, nullptr);
     for (std::size_t i = 0; i < count; ++i) {
-        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+        REQUIRE(hazeMalloc(ctx(), &ptrs[i], bytes) == HAZE_SUCCESS);
     }
     return ptrs;
 }
 
 inline void free_all_residues(const std::vector<void *> &ptrs) {
     for (void *p : ptrs) {
-        REQUIRE(hazeFree(p) == HAZE_SUCCESS);
+        REQUIRE(hazeFree(ctx(), p) == HAZE_SUCCESS);
     }
 }
 

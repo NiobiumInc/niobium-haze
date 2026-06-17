@@ -87,7 +87,7 @@ is unaffected.
 Symptom: a clean release build links with warnings like `object file ...
 was built for newer macOS version (26.0) than being linked (14.0)`, then
 segfaults non-deterministically inside calls that should be no-ops
-(`hazeSetRingDimension`, `hazeMalloc`). Two libc++ ABI versions are
+(`hazeContextCreate`, `hazeMalloc`). Two libc++ ABI versions are
 colliding in the same process.
 
 Fix: rebuild every dylib in the link graph in the same shell so each
@@ -353,38 +353,59 @@ replay_bridge/                OpenFHE-using helper that synthesizes
                               symbol resolution.
 ```
 
-### The lazy record-and-replay execution model
+### The deferred-tape execution model
 
 This is the central design contribution. Every compute API call
-(`hazeAdd`, `hazeMul`, `hazeNTT`, ...) runs through an `EpochSession` RAII
-guard that:
+(`hazeAdd`, `hazeMul`, `hazeNTT`, ...) records onto an append-only tape
+(`src/core/graph.hpp`) without calling fhetch at all:
 
-1. Calls `backend().ensure_initialized()` to bring up `niobium::compiler()`
-   on first compute (idempotent, lock-free fast path).
-2. Acquires `EpochState::mutex_` and starts FHETCH recording if not active.
-3. Resolves each `void*` operand: `epoch().lookup_or_create_locked(addr)`
-   either returns the polymap binding for a previously-bound DevAddr, or
-   promotes the shadow byte buffer at that address to a fresh
-   `fhetch::Polynomial` tagged as input.
-4. Emits the FHETCH instruction (`fhetch::sr_addp` etc.) and stores the
-   result polynomial into the polymap via
-   `store_compute_result_locked(dst_addr, poly)`. Output-hood is not inferred
-   here — `hazeTagOutput` declares it explicitly.
+1. `record_prelude(ctx)` only reads the context's FHE parameters — a
+   lock-free `ConfigSnapshot` published once by `hazeContextCreate` and
+   immutable for the context's lifetime. It does NOT touch the global
+   `niobium::compiler()`: nothing is emitted to fhetch until flush, and
+   flush re-initializes the engine from scratch anyway, so the record
+   path stays per-context and global-free (a compute on one context
+   cannot race a flush on another).
+2. Each `void*` operand resolves through the lock-free `BindingTable`
+   (addr → `ValueId`, one atomic word per allocation slot). First touch
+   snapshots the shadow bytes NOW (evicting) and appends an
+   `InputSnapshot` node; the value snapshot is eager, only the fhetch
+   emission is deferred.
+3. The destination binds a fresh `ValueId` (SSA-style: in-place ops are
+   safe because operands resolved first) and one `Node` is appended
+   whose THUNK performs the fhetch call (`sr_addp`, `mr_mulp`,
+   `fast_base_convert`, ...) at flush time. Thunks capture plain values
+   only — never fhetch objects (see the discipline note in graph.hpp).
+   Output-hood is not inferred — `hazeTagOutput` appends a metadata
+   node.
 
-No hardware, simulator, or polynomial math runs at this point. The
-recording phase only appends nodes to the FHETCH trace.
+No fhetch call, no hardware, no polynomial math runs at this point.
 
-Materialization is triggered by `hazeFlush`, which calls
-`EpochState::replay_and_populate()`:
+Materialization is triggered by `hazeFlush` → `lower::finalize()`
+(`src/core/lower.cpp`):
 
-1. `tag_pending_outputs_locked()` tags the explicitly-declared outputs (and
-   their MRP groups) for `fhetch::tag_output`. No-op when no recording is in
-   flight, so plain H2D-then-D2H round-trips elide it for free.
-2. `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch` trace.
-3. `CompilerBackend::replay()` dispatches per the configured target.
+1. `graph().seal()` swaps the tape out; `derive()` replays the
+   bookkeeping single-threaded over it in tape order — input/output
+   naming (`haze_in_N`/`haze_out_N`), MRP group registration + tag
+   expansion, the invalidate group-drop walk, H2D rebind-and-untag.
+   Its containers deliberately mirror the old eager engine's
+   `unordered_map`s: their iteration order is part of `.fhetch`
+   byte-identity (see the constraint note in lower.hpp).
+2. `compiler().start_epoch()` + recording start, then thunks run in
+   tape order, emitting exactly the instruction stream the eager
+   engine produced (values evict after their last consumer, so peak
+   memory matches the old keep-latest-per-addr polymap).
+3. Explicit outputs (and their MRP groups) get `fhetch::tag_output`;
+   `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch`
+   trace; `CompilerBackend::replay()` dispatches per the configured
+   target.
 4. `niobium::fhetch::result(...)` is called for each tagged output to read
    the simulator-computed polynomial back, and `update_shadow` writes the
    bytes into the allocator's sparse `shadow_data_` map.
+
+`scripts/trace-diff.sh` is the conformance harness for this layer:
+record-path changes must keep the per-suite trace artifacts
+byte-identical (capture a baseline, capture the candidate, compare).
 
 `hazeMemcpy(D2H)` (`haze::copy_to_host`) is then a pure shadow read.
 `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops — nothing runs
@@ -406,24 +427,49 @@ CUDA-shape parity but do not flush and do not model ordering.
   unflushed addr) or `SourceUnavailable` (compute / D2D extract path — using an
   addr that was never written is a contract violation).
 
-Every `hazeMalloc` allocation must equal the configured polynomial size
-(`ring_dim * sizeof(uint64_t)`). `hazeSetRingDimension` is required before
-the first `hazeMalloc`. Non-polynomial scratch (pointer arrays, twiddle
-tables, kernel-arg packs) goes through `hazeHostAlloc` or ordinary host
-malloc, not `hazeMalloc`.
+Every `hazeMalloc` allocation must equal the context's polynomial size
+(`ring_dim * sizeof(uint64_t)`, fixed at `hazeContextCreate`).
+Non-polynomial scratch (pointer arrays, twiddle tables, kernel-arg
+packs) goes through `hazeHostAlloc` or ordinary host malloc, not
+`hazeMalloc`.
 
 `DevAddr` is an `enum class : uintptr_t` cast from / to `void*` only at
 the C ABI boundary. `kHbmBase = 0x4000000000ULL` keeps haze-allocated
 addresses above FHETCH's synthetic address range (< `0x1000000000`).
 
-### Lock order
+### Locking
 
-`EpochState::mutex_` may call into `DeviceAllocator` (epoch → allocator).
-The reverse direction is forbidden — allocator-side code must never call
-back into `EpochState` while holding `mutex_` or it will deadlock. The
-constraint is enforced architecturally (no back-call exists in source);
-clang TSA catches violations of the per-mutex `HAZE_REQUIRES` /
-`HAZE_EXCLUDES` contracts at compile time.
+Haze locks form a hierarchy (the full ordered edge set lives in
+`src/common/thread_safety.hpp`), with `lower.cpp`'s file-local
+`g_lower_mutex` outermost. The record path is shallow: it takes only
+`Graph::append`'s internal mutex (a short push) and the
+`DeviceAllocator` mutex (leaf; the allocator call completes before the
+append). `lower::finalize` serializes flushes against each other by
+holding `g_lower_mutex` across the whole flush, and under it momentarily
+acquires the other subsystems' locks one at a time (the open-bracket
+check, backend bring-up, `seal()`, shadow population). During lowering
+proper — thunk execution, output tagging — only `g_lower_mutex` is held,
+so fhetch's own internal locks are reached only by the single flush
+thread. Replay itself depends on the mode: the default in-process replay
+runs under `g_lower_mutex` (flushes serialize end to end); isolated mode
+(`HAZE_REPLAY_ISOLATED=1`, `core/config.cpp::replay_isolated`) releases
+the lock for ONE phase only — the per-flush worker-process replay
+(`Compiler::replay_project` → `fhetch_sim`/`nbcc_fhetch_replay`), which
+runs in its own address space and owns its own OpenFHE state — so
+concurrent flushes on distinct-program-dir contexts overlap those
+minutes-long replays. Readback (`result_from` + `update_shadow`) then
+RE-TAKES `g_lower_mutex`: `result_from` deserializes a ciphertext through
+OpenFHE's process-global static caches (the state EMIT also touches), so
+running it off-lock would just move the cross-thread OpenFHE race from
+replay into readback. It is a cheap file read, so serializing it costs
+nothing against the replay that already overlapped. The
+`BindingTable` and `LowerCtx` are
+deliberately annotation-free (single-word atomics / single-threaded at
+flush); everything mutex-guarded carries `HAZE_GUARDED_BY` /
+`HAZE_EXCLUDES`, and clang TSA checks the contracts at compile time.
+Cross-thread reuse of one device address without user synchronization
+is documented-undefined (CUDA-like) — see the contract block above
+`hazeFlush` in `include/haze/haze.h`.
 
 `HazeMutex` (a thin annotated wrapper around `std::mutex`) and
 `HazeLockGuard` exist because libstdc++'s `std::mutex` and
@@ -447,8 +493,11 @@ directory (`build/runs/haze/...`). Each functional epoch produces its own
 (MRP) operations like `hazeModUp` / `hazeModDown` produce
 `ciphertext_templates/<name>.template` files via the `replay_bridge`'s
 `post_recording_hook`, registered when `hazeReplayBridgeInitCryptoContext`
-runs. The hook is wiped by `hazeDeviceReset`, so any test that resets
-must re-call `hazeReplayBridgeInitCryptoContext` afterward — the
+runs. Every flush scrubs and rebinds the process-global fhetch engine
+from the flushing context (`LoweringSession::ensure_backend`), restoring
+the hook from the bridge's stored state; `hazeDeviceReset` wipes the
+stored state too, so any test that resets must re-call
+`hazeReplayBridgeInitCryptoContext` afterward — the
 `integration_helpers.hpp::setup_integration_compute_config` helper
 enforces this.
 
@@ -487,9 +536,10 @@ parent project (e.g., niobium-client) has already built it.
 - C-ABI public headers use `HAZE_NOEXCEPT`; never throw across the
   boundary. Internal code uses `std::expected<T, HazeInternalError>` for
   fallible paths and translates to `hazeError_t` at the API edge.
-- Every test that records must reset state per case
-  (`hazeDeviceReset`) and re-init the bridge if it uses MRP outputs.
-  See `integration_helpers.hpp::setup_integration_compute_config`.
+- Every test that records gets per-case isolation from a FRESH context
+  (`haze::test::recreate_ctx`, which also resets the process globals)
+  and re-inits the bridge if it uses MRP outputs. See
+  `integration_helpers.hpp::setup_integration_compute_config`.
 - Tests `cd` into a runs dir before recording so `program_dir`
   resolves under the build tree, not the source tree.
 - For new CKKS-op e2e tests, see `test/e2e/README.md` — the

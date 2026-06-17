@@ -11,18 +11,18 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Process-wide reset orchestration. Each subsystem owns its own reset();
-// reset_all() invokes them in dependency order (epoch first so any
-// pending compute is dropped before the backend / allocator state is
-// torn down).
+// Process-wide reset orchestration. Engine state lives in hazeContext_t
+// objects (destroyed individually); hazeDeviceReset clears only what is
+// still process-global: the compiler backend, streams/events, the
+// active device, the replay bridge, the fhetch engine, and the
+// thread-local last-error flag.
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-#include "core/allocator.hpp"
 #include "core/backend.hpp"
-#include "core/config.hpp"
+#include "core/context.hpp" // IWYU pragma: keep — ctx-> needs the complete type
 #include "core/device.hpp"
-#include "core/epoch.hpp"
+#include "core/record.hpp"
 #include "core/stream.hpp"
 
 #include <haze/haze.h>
@@ -32,42 +32,40 @@
 
 namespace haze {
 
-void reset_all() noexcept {
-    // Clear all internal state first, since we may depend on external object state when clearing
-    // otherwise.
-    epoch().reset();
+void reset_process_globals() noexcept {
     backend().reset();
-    allocator().reset();
-    config().reset();
     streams_reset();
     events_reset();
     device_reset();
     hazeReplayBridgeReset();
-
-    // Clear any external state next
+    // External engine last: it may be queried by the bridge reset above.
     niobium::compiler().reset();
 }
 
 } // namespace haze
 
 extern "C" hazeError_t hazeDeviceReset(void) noexcept {
-    haze::reset_all();
+    haze::reset_process_globals();
     // Match cudaDeviceReset: also clear the thread-local last-error so
     // callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;
     return HAZE_SUCCESS;
 }
 
-extern "C" hazeError_t hazeWriteProgram(void) noexcept {
-    return set_internal_result(haze::write_program());
-}
-
-extern "C" hazeError_t hazeTagOutput(void *ptr) noexcept {
-    if (ptr == nullptr)
+extern "C" hazeError_t hazeWriteProgram(hazeContext_t ctx) noexcept {
+    if (ctx == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::tag_output(haze::to_dev_addr(ptr)));
+    return set_internal_result(haze::write_program(*ctx));
 }
 
-extern "C" hazeError_t hazeFlush(void) noexcept {
-    return set_internal_result(haze::flush());
+extern "C" hazeError_t hazeTagOutput(hazeContext_t ctx, void *ptr) noexcept {
+    if (ctx == nullptr || ptr == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::tag_output(*ctx, haze::to_dev_addr(ptr)));
+}
+
+extern "C" hazeError_t hazeFlush(hazeContext_t ctx) noexcept {
+    if (ctx == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::flush(*ctx));
 }

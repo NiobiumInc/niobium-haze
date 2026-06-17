@@ -1,0 +1,134 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+// The contents of this file and all related materials provided herein (the
+// "Product") may not be used except pursuant to a separate written
+// agreement signed by a duly authorized officer of Niobium Microsystems,
+// Inc. (a "License Agreement").
+// Without limiting the foregoing, you may not, at any time or for any
+// reason, directly or indirectly, in whole or in part: (i) copy, modify,
+// or create derivative works of the Product; (ii) rent, lease, lend, sell,
+// sublicense, assign, distribute, publish, transfer, or otherwise make
+// available the Product; (iii) reverse engineer, disassemble, decompile,
+// decode, or adapt the Product; or (iv) remove any proprietary notices
+// from the Product.
+#pragma once
+
+#include "common/errors.hpp"
+#include "common/handle.hpp"
+#include "common/thread_safety.hpp"
+#include "core/context_fwd.hpp"
+#include "core/graph.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <haze/haze_types.h>
+#include <memory>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace haze {
+
+// Kernel memoization (backs hazeKernelBegin / hazeKernelEnd).
+//
+// A RECORD bracket redirects the record path's node appends into a
+// frame (Graph::install_frame_sink); End closes the frame, enforces the
+// closed-body rule, caches the sub-tape under its key, and appends the
+// body to the main tape. A REPLAY bracket skips the body entirely: End
+// instantiates the cached sub-tape against the call's actual
+// inputs/outputs — cloned nodes with eagerly-translated metadata and a
+// shared vid_remap for the (immutable, reused) thunks.
+//
+// Lock order: cache mutex_ -> Graph append mutex (sink install / clone
+// appends) — the KernelCache->Graph edge of the lock hierarchy (see
+// src/common/thread_safety.hpp); Graph never calls back into the cache.
+class KernelCache {
+  public:
+    KernelCache() = default; // constructed as a haze_context_s member
+
+    // True while a Begin bracket is open (nesting gate for the shim).
+    bool has_open_frame() const noexcept HAZE_EXCLUDES(mutex_);
+
+    // The owning context is passed in (rather than held) so the cache
+    // stays an inert value member of haze_context_s; ctx must be the
+    // context this cache is a member of.
+    std::expected<hazeKernelDisposition, HazeInternalError>
+    begin(Context &ctx, const char *name, uint64_t key_hash, std::span<const uint8_t> key_bytes,
+          std::span<const hazeKernelInput> inputs) noexcept HAZE_EXCLUDES(mutex_);
+
+    std::expected<void, HazeInternalError> end(Context &ctx,
+                                               std::span<const hazeKernelOutput> outputs) noexcept
+        HAZE_EXCLUDES(mutex_);
+
+    // Discard the open frame after a body error (no memo entry, no
+    // nodes reach the main tape).
+    std::expected<void, HazeInternalError> abort_frame(Context &ctx) noexcept HAZE_EXCLUDES(mutex_);
+
+    // Toggles; unset means "consult the env" (HAZE_KERNEL_MEMO,
+    // HAZE_KERNEL_VALIDATE), matching HAZE_TARGET's resolution style.
+    void set_memo_enabled(bool enabled) noexcept HAZE_EXCLUDES(mutex_);
+    void set_validate(bool enabled) noexcept HAZE_EXCLUDES(mutex_);
+
+    // hazeDeviceReset: drop the cache and any open bracket (the sink is
+    // cleared by Graph::reset; call this first).
+    void reset(Context &ctx) noexcept HAZE_EXCLUDES(mutex_);
+
+    KernelCache(const KernelCache &) = delete;
+    KernelCache &operator=(const KernelCache &) = delete;
+
+  private:
+    struct SubTape {
+        std::string name;
+        std::vector<uint8_t> key_bytes;
+        std::vector<DevAddr> in_addrs; // flattened input residues at record time
+        std::vector<ValueId> in_vids;
+        std::vector<DevAddr> out_addrs; // flattened outputs bound at End
+        std::vector<ValueId> out_vids;
+        // The recorded_moduli value the cold body's terminal op left on
+        // each output (real prime, or 0 == sentinel/erased). Restored on
+        // replay so a post-kernel copy/automorph of the output recovers
+        // exactly what a cold trace would — NOT re-derived from the call
+        // descriptor, which carries a real prime even where the body
+        // stored the copy sentinel (SRP automorph / D2D of a raw input).
+        std::vector<uint64_t> out_moduli;
+        std::vector<Node> body; // recorded nodes (recording call's vids/addrs)
+    };
+
+    struct OpenFrame {
+        std::string name;
+        uint64_t key_hash = 0;
+        std::vector<uint8_t> key_bytes;
+        std::vector<DevAddr> in_addrs;
+        std::vector<ValueId> in_vids;
+        std::unique_ptr<std::vector<Node>> body;   // sink target (stable address)
+        const SubTape *replay = nullptr;           // REPLAY: instantiate this at End
+        const SubTape *validate_against = nullptr; // validation re-trace target
+        bool passthrough = false;                  // memo disabled: tag-only End
+    };
+
+    bool memo_enabled_locked() const HAZE_REQUIRES(mutex_);
+    bool validate_enabled_locked() const HAZE_REQUIRES(mutex_);
+    const SubTape *find_locked(uint64_t key_hash, std::span<const uint8_t> key_bytes) const
+        HAZE_REQUIRES(mutex_);
+    std::expected<void, HazeInternalError>
+    check_closed_body_locked(const OpenFrame &frame, std::span<const DevAddr> out_addrs) const
+        HAZE_REQUIRES(mutex_);
+    // Failure unwinding: drop every binding the frame's body created so
+    // a caller that continues recording past a failed End sees a LOUD
+    // SourceUnavailable on next use instead of a stale value resolving
+    // to a node that never reached the tape.
+    void rollback_body_bindings_locked(Context &ctx, const OpenFrame &frame) const
+        HAZE_REQUIRES(mutex_);
+    void instantiate_locked(Context &ctx, const SubTape &sub, const OpenFrame &frame,
+                            std::span<const DevAddr> out_addrs) HAZE_REQUIRES(mutex_);
+
+    mutable HazeMutex mutex_;
+    std::unordered_multimap<uint64_t, std::unique_ptr<SubTape>> cache_ HAZE_GUARDED_BY(mutex_);
+    std::unique_ptr<OpenFrame> frame_ HAZE_GUARDED_BY(mutex_);
+    // -1 = unset (env decides), else 0/1.
+    int memo_override_ HAZE_GUARDED_BY(mutex_) = -1;
+    int validate_override_ HAZE_GUARDED_BY(mutex_) = -1;
+};
+
+} // namespace haze

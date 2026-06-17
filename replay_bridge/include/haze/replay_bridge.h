@@ -35,6 +35,15 @@ HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64
 /// hazeDeviceReset; idempotent and safe to call before init.
 HAZE_API void hazeReplayBridgeReset(void) HAZE_NOEXCEPT;
 
+/// Re-install the post-recording hook and re-capture the bridge's
+/// CryptoContext into the (freshly scrubbed) compiler singleton. The
+/// per-flush engine scrub calls niobium::compiler().reset(), which
+/// drops the hook InitCryptoContext installed; this puts it back from
+/// the bridge's stored state. No-op success when InitCryptoContext has
+/// not been called (flushing without the bridge is legal — MRP outputs
+/// then synthesize no templates, exactly as before init).
+HAZE_API hazeError_t hazeReplayBridgeReinstallHook(void) HAZE_NOEXCEPT;
+
 /// Return 1 iff the post-recording hook reported any failure since the
 /// last call, then reset the flag. Per-failure detail is in the log.
 HAZE_API int hazeReplayBridgeTakeHookHadError(void) HAZE_NOEXCEPT;

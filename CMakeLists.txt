@@ -178,6 +178,7 @@ add_library(haze_objs OBJECT
   src/api/device.cpp
   src/api/error.cpp
   src/api/graph.cpp
+  src/api/kernel.cpp
   src/api/lifecycle.cpp
   src/api/memory.cpp
   src/api/stream.cpp
@@ -186,9 +187,14 @@ add_library(haze_objs OBJECT
   src/core/backend.cpp
   src/core/basis_convert.cpp
   src/core/config.cpp
+  src/api/context.cpp
   src/core/device.cpp
-  src/core/epoch.cpp
+  src/core/graph.cpp
+  src/core/kernel_cache.cpp
+  src/core/lower.cpp
+  src/core/lowering_session.cpp
   src/core/mrp_polymap.cpp
+  src/core/record.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
   # Shared leaf utilities.
@@ -254,6 +260,29 @@ set_target_properties(haze PROPERTIES OUTPUT_NAME haze)
 target_include_directories(haze PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+)
+
+# Header-only typed kernel layer (include/haze/cxx/). Consumer floor is
+# C++20 — everything lowers to the C ABI, so libhaze's internal C++23
+# never reaches the consumer's toolchain.
+add_library(haze_cxx INTERFACE)
+add_library(haze::cxx ALIAS haze_cxx)
+target_include_directories(haze_cxx INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(haze_cxx INTERFACE cxx_std_20)
+target_link_libraries(haze_cxx INTERFACE haze)
+
+# Floor check: the global standard is C++23, so this object target pins
+# -std=c++20 and compiles a TU that includes only the public cxx
+# headers. A C++23-ism leaking into include/haze/cxx/ fails the BUILD.
+add_library(haze_cxx_floor20 OBJECT test/cxx/floor20_check.cpp)
+target_link_libraries(haze_cxx_floor20 PRIVATE haze_cxx)
+set_target_properties(haze_cxx_floor20 PROPERTIES
+  CXX_STANDARD 20
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
 )
 
 find_package(Threads REQUIRED)
@@ -424,6 +453,7 @@ set(_openfhe_include "${OPENFHE_INSTALL_DIR}/include/openfhe")
 
 add_executable(haze_tests
   test/test_build.cpp
+  test/test_tape.cpp
   test/test_memory.cpp
   test/test_config.cpp
   test/test_compute.cpp
@@ -438,6 +468,10 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
   test/test_hardware_format.cpp
+  test/test_threaded_record.cpp
+  test/test_threaded_replay.cpp
+  test/test_kernel_memo.cpp
+  test/cxx/test_kernel_guards.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.
@@ -448,6 +482,7 @@ add_executable(haze_tests
   test/e2e/test_openfhe_mul_no_relin_e2e.cpp
   test/e2e/test_openfhe_mul_e2e.cpp
   test/e2e/test_openfhe_rotate_e2e.cpp
+  test/e2e/test_kernel_memo_two_keysets_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
   test/e2e/test_ops_ctx_params_e2e.cpp
   # Same compiled code as libhaze.so, linked directly — NOT the shipped
@@ -496,6 +531,15 @@ if(TARGET niobium_fhetch)
   add_dependencies(haze_tests niobium_fhetch)
 endif()
 
+# test_threaded_replay spawns the fhetch_sim worker for isolated replay; bake
+# its built path in so the test is self-contained (else it SKIPs). fhetch_sim
+# is an in-tree target from the niobium-fhetch subdir.
+if(TARGET fhetch_sim)
+  add_dependencies(haze_tests fhetch_sim)
+  target_compile_definitions(haze_tests PRIVATE
+    HAZE_FHETCH_SIM_PATH="$<TARGET_FILE:fhetch_sim>")
+endif()
+
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
 # initializers that omit fields with default member initializers. clang's
 # -Wmissing-field-initializers flags those omissions even though they're
@@ -533,6 +577,7 @@ add_executable(haze_e2e_tests
   test/e2e/ops.cpp
   test/e2e/public/test_simple_program.cpp
   test/e2e/public/test_interleave.cpp
+  test/e2e/public/test_cxx_simple_program.cpp
 )
 
 # Public headers only: haze C ABI + the bridge's public C ABI + the test

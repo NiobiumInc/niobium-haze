@@ -72,16 +72,14 @@ class AllocatorTestAccess;
 //    or materialization update — creates the shadow entry.
 //
 // Thread-safety: all public methods take mutex_ themselves (annotated
-// HAZE_EXCLUDES). DeviceAllocator must NOT call back into EpochState
-// while holding mutex_ — that violates the epoch -> allocator lock
-// order and would deadlock.
+// HAZE_EXCLUDES). mutex_ is the BOTTOM of the lock hierarchy (see
+// src/common/thread_safety.hpp): allocator code never calls into any
+// other haze subsystem, so nothing is acquired while it is held.
+// Config::mutex_ (init_params) and g_lower_mutex (flush shadow
+// population) acquire it; it acquires nothing in turn.
 class DeviceAllocator {
   public:
-    // HAZE_API on this and `extract_polynomial_components` exports the
-    // symbols from libhaze's hidden-visibility .so so the test binary
-    // can resolve them; encapsulation rests on allocator.hpp living in
-    // src/ (private include path), not on the visibility attribute.
-    HAZE_API static DeviceAllocator &instance() noexcept;
+    DeviceAllocator() = default; // constructed as a haze_context_s member
 
     // Configure the pool's polynomial size. Calling with a size different
     // from the current configuration drains the pool. Calling with size 0
@@ -100,7 +98,7 @@ class DeviceAllocator {
         HAZE_EXCLUDES(mutex_);
 
     // Snapshot the shadow buffer as a vector of `ring_dim` 64-bit limbs.
-    // Used by EpochState::lookup_or_create_locked when promoting fresh
+    // Used by record.cpp's resolve_operand when promoting fresh
     // shadow data to a FHETCH input polynomial. Returns NoData if the
     // address has no shadow entry; the caller surfaces this as
     // SourceUnavailable. **Evicts the shadow entry on success** — the
@@ -148,17 +146,14 @@ class DeviceAllocator {
     DeviceAllocator &operator=(const DeviceAllocator &) = delete;
 
   private:
-    DeviceAllocator() = default;
-
     friend class test::AllocatorTestAccess;
 
     // Helper (caller holds mutex_).
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
 
-    // mutex_ protects all state below. Lock order across HAZE: callers
-    // already holding EpochState::mutex_ may re-enter here (epoch →
-    // allocator). Allocator-side code must NOT call into EpochState
-    // while holding this lock — the reverse direction is forbidden.
+    // mutex_ protects all state below. It is a leaf: no haze lock is
+    // ever held while acquiring it, and no allocator method calls back
+    // into the recording layer while holding it.
     mutable HazeMutex mutex_;
     // Live DevAddrs. Set membership covers the lifetime of the
     // hazeMalloc/hazeFree contract; allocation size is implicit
@@ -176,8 +171,7 @@ class DeviceAllocator {
     uintptr_t next_addr_ HAZE_GUARDED_BY(mutex_) = kHbmBase;
 };
 
-inline DeviceAllocator &allocator() noexcept {
-    return DeviceAllocator::instance();
-}
+// TEMPORARY default-context bridge (context.cpp). HAZE_API so the test
+// binary resolves it out of the hidden-visibility .so.
 
 } // namespace haze

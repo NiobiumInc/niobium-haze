@@ -30,9 +30,42 @@
 //   - Mark accessor methods that hand out a reference to the underlying
 //     capability with HAZE_RETURN_CAPABILITY(field).
 //
-// For HAZE's epoch -> allocator lock order, the architectural separation
-// (DeviceAllocator never calls into EpochState) is the primary
-// enforcement, with TSAN as the runtime backstop.
+// HAZE lock hierarchy — every HazeMutex, outermost first. A holder of a
+// lock may acquire only locks strictly below it; the reverse of any edge
+// deadlocks. The edges form a DAG (no cycle), which is what lets the
+// flush path legitimately reach almost every subsystem under one lock:
+//
+//   g_lower_mutex (lower.cpp)              flush serialization; outermost.
+//     │  Held across finalize()'s EMIT phase, which momentarily acquires:
+//     ├─→ KernelCache::mutex_              open-bracket check (has_open_frame)
+//     ├─→ CompilerBackend::init_mutex_     backend bring-up (ensure_backend)
+//     ├─→ Graph::mutex_                    tape size() / seal()
+//     └─→ DeviceAllocator::mutex_          shadow population (default replay)
+//   KernelCache::mutex_
+//     └─→ Graph::mutex_                    frame-sink install, clone appends
+//   CompilerBackend::init_mutex_
+//     └─→ Config::mutex_                   ensure_initialized reads the params
+//   Config::mutex_
+//     └─→ DeviceAllocator::mutex_          init_params fixes the pool geometry
+//
+// During lowering proper (thunk execution, output tagging) only
+// g_lower_mutex is held — the edges under it are momentary, each released
+// before the next. The REPLAY + shadow-population step depends on the mode.
+// Default in-process replay runs entirely under g_lower_mutex (hence the
+// g_lower→Allocator edge above). Isolated mode (replay_isolated()) RELEASES
+// g_lower_mutex for ONE phase only — the worker-process replay
+// (replay_project), which runs in a separate address space and touches no
+// in-process haze/OpenFHE state — so concurrent contexts overlap that
+// minutes-long step. It then RE-TAKES g_lower_mutex for readback, because
+// result_from() deserializes through OpenFHE's process-global static caches
+// (ILDCRTParams / CRT roots — the same state EMIT touches), and update_shadow
+// writes the allocator (the g_lower→Allocator edge again). So no haze-internal
+// work ever touches OpenFHE statics or the allocator without g_lower held;
+// only the isolated worker spawn runs off-lock. Everything not shown is a leaf
+// (record helpers finish their allocator call before Graph::append). No haze
+// code may add or reorder an edge without updating this hierarchy. TSAN is the
+// runtime backstop for the lock-free BindingTable, which carries no TSA
+// annotations by design.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names
