@@ -35,6 +35,7 @@
 #include <haze/haze_types.h>    // IWYU pragma: keep
 #include <haze/replay_bridge.h> // IWYU pragma: keep
 #include <niobium/compiler.h>   // IWYU pragma: keep
+#include <system_error>
 
 namespace fs = std::filesystem;
 
