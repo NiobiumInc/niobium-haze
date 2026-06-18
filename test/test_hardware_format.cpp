@@ -276,38 +276,29 @@ TEST_CASE("mod_arith: switchmodulus immediates (ordinary and montgomery)", "[uni
     }
 }
 
-TEST_CASE("data format config: setter beats env var beats default", "[unit][hwfmt]") {
-    EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
+TEST_CASE("data format config: explicit setters, default off, reset clears", "[unit][hwfmt]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 
     // Default: both off.
     REQUIRE_FALSE(haze::config().montgomery());
     REQUIRE_FALSE(haze::config().bit_reversal());
 
-    // Env enables independently.
-    ::setenv("HAZE_MONTGOMERY", "1", 1); // NOLINT(misc-include-cleaner)
+    // Each flag is set independently via its explicit setter.
+    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
     REQUIRE(haze::config().montgomery());
     REQUIRE_FALSE(haze::config().bit_reversal());
-    ::setenv("HAZE_BIT_REVERSAL", "true", 1); // NOLINT(misc-include-cleaner)
+    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
     REQUIRE(haze::config().bit_reversal());
 
-    // Explicit setter beats env.
+    // A setter turns its flag back off without touching the other.
     REQUIRE(hazeSetMontgomery(0) == HAZE_SUCCESS);
     REQUIRE_FALSE(haze::config().montgomery());
     REQUIRE(haze::config().bit_reversal()); // untouched
 
-    // Reset clears the explicit setter, so the env applies again.
+    // Reset restores both to the default.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(haze::config().montgomery());
-
-    // Both flags set independently via explicit setters.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
-    REQUIRE(haze::config().montgomery());
-    REQUIRE(haze::config().bit_reversal());
-
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE_FALSE(haze::config().montgomery());
+    REQUIRE_FALSE(haze::config().bit_reversal());
 }
 
 TEST_CASE("data format on local target is rejected at flush", "[unit][hwfmt]") {
@@ -380,6 +371,9 @@ TEST_CASE("record-time: recording stays ordinary-form with switchmodulus markers
     REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_SUCCESS);
     REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
+    // The mod-down's centered rebase (the 4-op switchmodulus block) is the
+    // reduced-noise FBC variant, so enable it explicitly.
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
 
     const auto dir = record_program("haze_hwfmt_on", /*with_mod_down=*/true);
 
@@ -577,6 +571,7 @@ TEST_CASE("data-format transport: elementwise results byte-exact vs plain oracle
         SKIP("data format requires a transport target (run under make test-transport)");
     EnvGuard guard({"HAZE_MONTGOMERY", "HAZE_BIT_REVERSAL"});
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::apply_target_from_env();
     REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
 
@@ -608,9 +603,13 @@ TEST_CASE("data-format transport: A/B byte-exact vs ordinary mode", "[integratio
     // internal representation, so the full output vectors (including the
     // FBC/mod-down path) must compare byte-for-byte equal.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::apply_target_from_env();
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     const auto ordinary = run_mixed_computation(/*with_mod_down=*/true);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::apply_target_from_env();
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
     const auto encoded = run_mixed_computation(/*with_mod_down=*/true);
@@ -689,6 +688,7 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const auto ordinary = run_ntt();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::apply_target_from_env();
     REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetBitReversal(1) == HAZE_SUCCESS);
     const auto encoded = run_ntt();

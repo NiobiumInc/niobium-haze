@@ -44,6 +44,8 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 // values rather than be clobbered by the bridge's single picked prime.
 static void configure_three_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
@@ -542,6 +544,8 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 // sr_* ops.
 void configure_sixteen_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);

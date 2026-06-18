@@ -10,12 +10,21 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <vector>
 
 namespace haze::test {
+
+// The library no longer reads HAZE_TARGET; the suite still uses it as the
+// parameter selecting the replay target (set by make test-transport). Bridge it
+// to the explicit setter after a device reset, before the first configure/record.
+inline void apply_target_from_env() {
+    if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
+        REQUIRE(hazeSetTarget(t) == HAZE_SUCCESS);
+}
 
 // MODULUS CONTRACT (single source of truth): the values passed to
 // hazeSetCiphertextModulus ARE the .fhetch trace moduli, and both replay paths
@@ -34,6 +43,8 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    apply_target_from_env();
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
@@ -51,6 +62,8 @@ setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 57646
     constexpr uint64_t kQ1 = 576460752303439873ULL;
     constexpr uint64_t kQ2 = 576460752303702017ULL;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    apply_target_from_env();
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
