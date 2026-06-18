@@ -174,80 +174,39 @@ std::string Config::program_description() const noexcept {
 }
 
 std::string Config::target() const noexcept {
-    {
-        HazeLockGuard lock(mutex_);
-        if (target_set_)
-            return target_;
-    }
-    // Env var fallback used only when no explicit hazeSetTarget call has
-    // been made. Default if env var unset: kLocalTarget — runs the
-    // in-process FHETCH simulator, so hazeMemcpy(D2H) returns
-    // simulator-computed values out of the box without requiring
-    // nbcc_fhetch_replay.
-    if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
-        return std::string{t};
-    return std::string{kLocalTarget};
+    // Default kLocalTarget runs the in-process FHETCH simulator.
+    HazeLockGuard lock(mutex_);
+    return target_set_ ? target_ : std::string{kLocalTarget};
 }
-
-namespace {
-
-// Truthy env-var read for the data-format toggles: "1" or "true".
-bool env_flag(const char *name) noexcept {
-    const char *v = std::getenv(name);
-    if (v == nullptr)
-        return false;
-    return (v[0] == '1' && v[1] == '\0') || std::string_view{v} == "true";
-}
-
-} // namespace
 
 void Config::set_montgomery(bool enable) noexcept {
     HazeLockGuard lock(mutex_);
     montgomery_ = enable;
-    montgomery_set_ = true;
 }
 
 void Config::set_bit_reversal(bool enable) noexcept {
     HazeLockGuard lock(mutex_);
     bit_reversal_ = enable;
-    bit_reversal_set_ = true;
 }
 
 bool Config::montgomery() const noexcept {
-    {
-        HazeLockGuard lock(mutex_);
-        if (montgomery_set_)
-            return montgomery_;
-    }
-    // Env fallback mirrors target(): consulted only when no explicit setter
-    // call has been made.
-    return env_flag("HAZE_MONTGOMERY");
+    HazeLockGuard lock(mutex_);
+    return montgomery_;
 }
 
 bool Config::bit_reversal() const noexcept {
-    {
-        HazeLockGuard lock(mutex_);
-        if (bit_reversal_set_)
-            return bit_reversal_;
-    }
-    return env_flag("HAZE_BIT_REVERSAL");
+    HazeLockGuard lock(mutex_);
+    return bit_reversal_;
 }
 
 void Config::set_reduced_noise(bool enable) noexcept {
     HazeLockGuard lock(mutex_);
     reduced_noise_ = enable;
-    reduced_noise_set_ = true;
 }
 
 bool Config::reduced_noise() const noexcept {
-    {
-        HazeLockGuard lock(mutex_);
-        if (reduced_noise_set_)
-            return reduced_noise_;
-    }
-    // Env fallback mirrors montgomery(): consulted only when no explicit
-    // setter call has been made.
-    return env_flag("HAZE_REDUCED_NOISE");
+    HazeLockGuard lock(mutex_);
+    return reduced_noise_;
 }
 
 void Config::reset() noexcept {
@@ -266,10 +225,7 @@ void Config::reset() noexcept {
     program_dir_set_ = false;
     montgomery_ = false;
     bit_reversal_ = false;
-    montgomery_set_ = false;
-    bit_reversal_set_ = false;
     reduced_noise_ = false;
-    reduced_noise_set_ = false;
 }
 
 } // namespace haze
