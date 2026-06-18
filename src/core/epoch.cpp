@@ -128,7 +128,7 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
 }
 
 bool EpochState::is_input_locked(DevAddr addr) const noexcept {
-    return input_addrs_.find(addr) != input_addrs_.end();
+    return input_addrs_.contains(addr);
 }
 
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
