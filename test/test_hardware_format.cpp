@@ -686,6 +686,7 @@ TEST_CASE("data-format transport: NTT round trip and automorph under data format
     };
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    haze::test::apply_target_from_env();
     const auto ordinary = run_ntt();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     haze::test::apply_target_from_env();

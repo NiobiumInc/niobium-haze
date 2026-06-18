@@ -497,14 +497,20 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
     try {
         // The record-time capture builds a local OpenFHE context regardless of the
         // replay target, so disable the compiler's hardware ring-dim/prime checks
-        // here; the compiler enforces hardware compatibility at dispatch.
+        // here; the compiler enforces hardware compatibility at dispatch. Pass the
+        // configured target too: this pre-init runs before the first compute, so
+        // without it a flush with no compute op would replay against the compiler's
+        // default target instead of the configured one (init() re-applies, so the
+        // backend's first-compute bring-up stays authoritative when it does run).
         {
+            const std::string target_arg = "--target=" + haze::config().target();
             std::string prog_storage = "haze";
+            std::string target_storage = target_arg;
             std::string no_ring_check_storage = "--no-ring-dim-check";
             std::string no_prime_check_storage = "--no-prime-check";
-            char *argv[] = {prog_storage.data(), no_ring_check_storage.data(),
-                            no_prime_check_storage.data(), nullptr};
-            int argc = 3;
+            char *argv[] = {prog_storage.data(), target_storage.data(),
+                            no_ring_check_storage.data(), no_prime_check_storage.data(), nullptr};
+            int argc = 4;
             niobium::compiler().init(argc, argv);
         }
 
