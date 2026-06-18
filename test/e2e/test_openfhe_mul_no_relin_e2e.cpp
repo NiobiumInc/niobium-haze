@@ -109,6 +109,8 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     INFO("policy: " << P::kName);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
 
     CCParams<CryptoContextCKKSRNS> params;
     params.SetMultiplicativeDepth(2);

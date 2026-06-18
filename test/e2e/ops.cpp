@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
@@ -365,6 +366,13 @@ void Allocs::free_all() noexcept {
 
 OpCtx make_ctx(const CtxParams &params) {
     using namespace lbcrypto;
+
+    // The library reads no env: bridge the HAZE_TARGET test parameter to the
+    // explicit setter, and enable the reduced-noise FBC so haze matches the
+    // WITH_REDUCED_NOISE OpenFHE oracle. The caller resets the device just before.
+    if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
+        REQUIRE(hazeSetTarget(t) == HAZE_SUCCESS);
+    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
 
     OpCtx ctx;
     ctx.mode = params.mode;
