@@ -75,9 +75,12 @@ bool CompilerBackend::ensure_initialized() noexcept {
         std::string no_ring_check_storage = "--no-ring-dim-check";
         std::string no_prime_check_storage = "--no-prime-check";
         // prog + --target + up to two optional flags + NULL terminator.
-        char *argv[7] = {prog_storage.data(), target_arg_storage.data(),
-                         nullptr,              nullptr,
-                         nullptr,              nullptr,
+        char *argv[7] = {prog_storage.data(),
+                         target_arg_storage.data(),
+                         nullptr,
+                         nullptr,
+                         nullptr,
+                         nullptr,
                          nullptr};
         int argc = 2;
         if (montgomery)

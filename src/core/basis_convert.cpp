@@ -40,8 +40,7 @@ fhetch::FbcVariant fbc_variant() noexcept {
 }
 
 fhetch::FbcCenterShape fbc_center_shape() noexcept {
-    return config().montgomery() ? fhetch::FbcCenterShape::FourOp
-                                 : fhetch::FbcCenterShape::ThreeOp;
+    return config().montgomery() ? fhetch::FbcCenterShape::FourOp : fhetch::FbcCenterShape::ThreeOp;
 }
 
 // Validation helpers; each returns InvalidArgument with a debug-log
@@ -141,7 +140,8 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant(), fbc_center_shape());
+    fhetch::MRP result =
+        fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant(), fbc_center_shape());
     // result.base() == src_base \ rescale_base in src_base's original
     // order. Use it directly so HAZE-side and backend-side never disagree
     // on the dst layout.
