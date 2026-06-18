@@ -91,9 +91,7 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
-    // Drop computed-ness too, so a recycled addr re-loaded via H2D next epoch
-    // is classified as the live-in input it now is, not a stale compute result.
-    computed_addrs_.erase(addr);
+    input_addrs_.erase(addr);
     // A recycled allocation leading a new group gets a fresh name rather
     // than colliding with a possibly-pending group from its previous life.
     mrp_in_names_.erase(addr);
@@ -125,20 +123,19 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
     poly_map_.emplace(addr, poly);
+    input_addrs_.insert(addr);
     return poly;
 }
 
-bool EpochState::is_computed_locked(DevAddr addr) const noexcept {
-    return computed_addrs_.find(addr) != computed_addrs_.end();
+bool EpochState::is_input_locked(DevAddr addr) const noexcept {
+    return input_addrs_.find(addr) != input_addrs_.end();
 }
 
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // This addr now holds a trace-produced value, not a live-in (see
-    // is_computed_locked); an H2D re-upload (tag_h2d_input_locked) clears it
-    // back to input.
-    computed_addrs_.insert(addr);
+    // This addr now holds a trace-produced value, not a live-in input.
+    input_addrs_.erase(addr);
     // A no-modulus (kCopyModulus) result drops any stale entry so a later
     // copy/automorph can't recover a previous occupant's modulus here.
     if (modulus != kCopyModulus)
@@ -222,12 +219,11 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
         fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
-    // New H2D bytes are the truth at addr: overwrite the binding and drop any
-    // output tag (a re-uploaded input is not an output). MRP-group claims stay.
+    // New H2D bytes overwrite the binding, drop any output tag, and reclassify
+    // the addr as a live-in input (MRP-group claims stay).
     poly_map_.insert_or_assign(addr, std::move(poly));
     pending_outputs_.erase(addr);
-    // This addr is now a live-in input again, not a trace-produced value.
-    computed_addrs_.erase(addr);
+    input_addrs_.insert(addr);
     return {};
 }
 
@@ -473,7 +469,7 @@ void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
     addr_modulus_.clear();
-    computed_addrs_.clear();
+    input_addrs_.clear();
     known_mrp_groups_.clear();
     pending_mrp_groups_.clear();
     addr_to_mrp_groups_.clear();
