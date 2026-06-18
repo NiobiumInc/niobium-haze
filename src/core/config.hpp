@@ -58,10 +58,8 @@ class Config {
     uint64_t ring_dim() const noexcept;
     uint64_t modulus(int idx) const noexcept;
 
-    // Program / target metadata fed to the compiler during init.
-    // Defaults: name="haze", version="0.1", description="HAZE runtime",
-    // target=kLocalTarget (overridable by HAZE_TARGET env var unless
-    // an explicit hazeSetTarget call has been made).
+    // Program / target metadata fed to the compiler during init. Defaults:
+    // name="haze", version="0.1", description="HAZE runtime", target=kLocalTarget.
     std::expected<void, HazeInternalError> set_program_info(const char *name, const char *version,
                                                             const char *description) noexcept;
     std::expected<void, HazeInternalError> set_target(const char *target) noexcept;
@@ -70,20 +68,15 @@ class Config {
     std::string program_description() const noexcept;
     std::string target() const noexcept;
 
-    // Data-representation toggles: Montgomery form and bit-reversed coefficient
-    // order, independent. Per flag: explicit setter > env (HAZE_MONTGOMERY /
-    // HAZE_BIT_REVERSAL, "1"/"true") > off. The local simulator runs only
-    // ordinary-form traces; the backend rejects these at init.
+    // Data-representation toggles (Montgomery form, bit-reversed order), off by
+    // default; the local simulator rejects non-ordinary traces at init.
     void set_montgomery(bool enable) noexcept;
     void set_bit_reversal(bool enable) noexcept;
     bool montgomery() const noexcept;
     bool bit_reversal() const noexcept;
 
-    // Reduced-noise FBC variant (centered base conversion, matching OpenFHE's
-    // WITH_REDUCED_NOISE). Independent of the data-format toggles above; same
-    // precedence: explicit setter > env (HAZE_REDUCED_NOISE, "1"/"true") > off.
-    // Off by default; bit-exact parity with a WITH_REDUCED_NOISE OpenFHE
-    // reference requires turning it on (the HazeEngine constructor / tests do).
+    // Centered (reduced-noise) FBC variant matching OpenFHE WITH_REDUCED_NOISE,
+    // off by default; the HazeEngine constructor enables it for bit-exact parity.
     void set_reduced_noise(bool enable) noexcept;
     bool reduced_noise() const noexcept;
 
@@ -120,10 +113,7 @@ class Config {
     bool program_dir_set_ = false;
     bool montgomery_ = false;
     bool bit_reversal_ = false;
-    bool montgomery_set_ = false;
-    bool bit_reversal_set_ = false;
     bool reduced_noise_ = false;
-    bool reduced_noise_set_ = false;
 };
 
 inline Config &config() noexcept {

@@ -160,10 +160,7 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  *                       nbcc_fhetch_replay binary on PATH plus a
  *                       running FHETCH server.
  *
- * Resolution order:
- *   1. hazeSetTarget(target)  - explicit programmatic call.
- *   2. HAZE_TARGET env var    - read at the first hazeFlush() if (1) is unset.
- *   3. "local"                - default if both above are unset.
+ * Defaults to "local" if hazeSetTarget is not called.
  *
  * Behaviour-by-target dispatch happens inside hazeFlush(), which finalises the
  * recording, runs the replay, and populates the tagged outputs' shadow buffers;
@@ -187,16 +184,12 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
  *     exactly one is recordable (for trace inspection via hazeWriteProgram)
  *     but rejected at replay.
  *
- * Per flag: explicit setter > HAZE_MONTGOMERY / HAZE_BIT_REVERSAL env
- * ("1"/"true") > off. Call before the first H2D or compute. */
+ * Off by default; set before the first H2D or compute. */
 HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
 
-/* Reduced-noise FBC variant (centered base conversion, matching OpenFHE's
- * WITH_REDUCED_NOISE). Independent of the data-format toggles above. Off by
- * default; enable for bit-exact parity with a WITH_REDUCED_NOISE OpenFHE
- * reference. Precedence: explicit setter > HAZE_REDUCED_NOISE env ("1"/"true")
- * > off. Call before the first H2D or compute. */
+/* Centered (reduced-noise) FBC matching OpenFHE WITH_REDUCED_NOISE (off by
+ * default, enabled for bit-exact parity); set before the first H2D or compute. */
 HAZE_API hazeError_t hazeSetReducedNoise(int enable) HAZE_NOEXCEPT;
 
 /* Finalize the recording and write the project directory (.fhetch trace,
