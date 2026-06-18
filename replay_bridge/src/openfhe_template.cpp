@@ -495,14 +495,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return HAZE_ERROR_INVALID_VALUE;
 
     try {
-        // The in-process simulator is not Niobium hardware, so the compiler's
-        // hardware ring-dimension / prime compatibility checks don't apply to
-        // the local capture context. capture_crypto_context() -> set_ring_dimension()
-        // below would otherwise throw for a non-hardware ring (e.g. N=4096), and
-        // the backend's first-compute init() (core/backend.cpp) runs only AFTER
-        // this. init() is idempotent and set_program_info()/set_program_directory()
-        // re-establish program state, so applying the opt-out flags here is safe.
-        // Hardware/transport targets keep the checks.
+        // Disable the hardware ring-dim/prime checks for the local capture context
+        // here (capture_crypto_context below runs before the backend's first-compute
+        // init), so a non-hardware ring like N=4096 works.
         if (haze::config().target() == haze::kLocalTarget) {
             std::string prog_storage = "haze";
             std::string no_ring_check_storage = "--no-ring-dim-check";

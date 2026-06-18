@@ -32,12 +32,8 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// FBC mode for the base-conversion ops, selected from engine config (set via
-// the HazeEngine constructor / hazeSetReducedNoise / hazeSetMontgomery):
-//   - reduced_noise -> centered (ReducedNoise) vs plain (Standard) FBC, matching
-//     OpenFHE's WITH_REDUCED_NOISE. Off by default.
-//   - montgomery    -> the 4-op center quadruple the hardware data format
-//     recognizes as a SwitchModulus; the local simulator uses the lean 3-op shape.
+// FBC mode from engine config: reduced_noise selects the centered variant,
+// montgomery selects the 4-op (hardware SwitchModulus) center shape.
 fhetch::FbcVariant fbc_variant() noexcept {
     return config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
                                     : fhetch::FbcVariant::Standard;
@@ -176,9 +172,7 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     }
 
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
-    // Key-switch ModUp uses fhetch's centered (ReducedNoise) lift unconditionally
-    // — that is what a WITH_REDUCED_NOISE OpenFHE reference does and what the
-    // reduced-noise parity gate exercises; only the center shape is config-driven.
+    // ModUp uses fhetch's centered lift unconditionally; only the shape is config-driven.
     fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base, fbc_center_shape());
     if (result.length() != p.digit_count) {
         record_internal_error(HazeInternalError::BackendShapeMismatch,

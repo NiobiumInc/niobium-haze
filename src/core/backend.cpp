@@ -74,8 +74,7 @@ bool CompilerBackend::ensure_initialized() noexcept {
         std::string bitrev_arg_storage = "--bit_reversal";
         std::string no_ring_check_storage = "--no-ring-dim-check";
         std::string no_prime_check_storage = "--no-prime-check";
-        // 7 = prog + --target + montgomery + bit_reversal + the two local-sim
-        // hardware-check opt-outs + NULL terminator (grow if another flag is added).
+        // prog + --target + up to two optional flags + NULL terminator.
         char *argv[7] = {prog_storage.data(), target_arg_storage.data(),
                          nullptr,              nullptr,
                          nullptr,              nullptr,
@@ -85,10 +84,8 @@ bool CompilerBackend::ensure_initialized() noexcept {
             argv[argc++] = montgomery_arg_storage.data();
         if (bit_reversal)
             argv[argc++] = bitrev_arg_storage.data();
-        // The in-process simulator is not Niobium hardware, so the compiler's
-        // hardware ring-dimension / prime compatibility checks don't apply. Skip
-        // them for the local target so local replay accepts any valid CKKS context
-        // (e.g. N=4096); transport/hardware targets keep the checks.
+        // The local simulator isn't hardware; skip the hardware ring-dim/prime
+        // checks so local replay accepts any valid CKKS context (e.g. N=4096).
         if (target == kLocalTarget) {
             argv[argc++] = no_ring_check_storage.data();
             argv[argc++] = no_prime_check_storage.data();
