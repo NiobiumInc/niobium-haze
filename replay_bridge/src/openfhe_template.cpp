@@ -495,10 +495,10 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return HAZE_ERROR_INVALID_VALUE;
 
     try {
-        // Disable the hardware ring-dim/prime checks for the local capture context
-        // here (capture_crypto_context below runs before the backend's first-compute
-        // init), so a non-hardware ring like N=4096 works.
-        if (haze::config().target() == haze::kLocalTarget) {
+        // The record-time capture builds a local OpenFHE context regardless of the
+        // replay target, so disable the compiler's hardware ring-dim/prime checks
+        // here; the compiler enforces hardware compatibility at dispatch.
+        {
             std::string prog_storage = "haze";
             std::string no_ring_check_storage = "--no-ring-dim-check";
             std::string no_prime_check_storage = "--no-prime-check";

@@ -84,12 +84,10 @@ bool CompilerBackend::ensure_initialized() noexcept {
             argv[argc++] = montgomery_arg_storage.data();
         if (bit_reversal)
             argv[argc++] = bitrev_arg_storage.data();
-        // The local simulator isn't hardware; skip the hardware ring-dim/prime
-        // checks so local replay accepts any valid CKKS context (e.g. N=4096).
-        if (target == kLocalTarget) {
-            argv[argc++] = no_ring_check_storage.data();
-            argv[argc++] = no_prime_check_storage.data();
-        }
+        // The haze record/replay-bridge never enforces hardware ring-dim/prime
+        // compatibility (the compiler does at dispatch); always skip those checks.
+        argv[argc++] = no_ring_check_storage.data();
+        argv[argc++] = no_prime_check_storage.data();
         niobium::compiler().init(argc, argv);
         niobium::compiler().set_program_info(program_name, program_version, program_description);
         // Optional explicit output dir: when set via hazeSetProgramDirectory,
