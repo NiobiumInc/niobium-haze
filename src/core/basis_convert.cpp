@@ -122,7 +122,14 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     }
 
     const fhetch::ModuliBase target_base(p.dst_base, p.dst_base + p.dst_base_len);
-    fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base);
+    // Thread the engine's configured FBC variant/shape, matching mod_down/mod_up
+    // below — basis_convert was the lone CRT primitive pinned to the 2-arg
+    // fast_base_convert default (ReducedNoise/ThreeOp). With reduced_noise off this
+    // yields the Standard lift that a split rescale/keyswitch mod-down (INTT only the
+    // dropped limbs, then basis-convert + NTT + combine in eval) composes against
+    // byte-for-byte; with reduced_noise on it tracks the centered variant automatically.
+    fhetch::MRP result =
+        fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant(), fbc_center_shape());
     return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
 }
 
