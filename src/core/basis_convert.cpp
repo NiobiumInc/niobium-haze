@@ -179,20 +179,22 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     }
 
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
-    // ModUp uses fhetch's centered lift unconditionally; only the shape is config-driven.
-    fhetch::MRPArray result = fhetch::dig_decomp(*src_mrp, digit_bases, p_base, fbc_center_shape());
-    if (result.length() != p.digit_count) {
-        record_internal_error(HazeInternalError::BackendShapeMismatch,
-                              "hazeModUp: dig_decomp returned wrong length");
-        return std::unexpected(HazeInternalError::BackendShapeMismatch);
-    }
 
-    // Each result[d].base() == src_base + p_base — same size and order
-    // across all digits. Use it directly to flatten dst writes.
+    // Open-code fhetch::dig_decomp so the per-digit lift follows the configured FBC
+    // variant. dig_decomp hardcodes FbcVariant::ReducedNoise (centered), but mod_down and
+    // basis_convert thread config()'s fbc_variant(); mod_up must too, otherwise reduced_noise
+    // cannot toggle the keyswitch mod-up and a non-reduced-noise context gets a mismatched
+    // (always-centered) digit decomposition. The per-digit target is src_base ∪ p_base (Q∥P),
+    // exactly as dig_decomp builds it, and each lifted digit's base equals that target.
+    const fhetch::MRP &x = *src_mrp;
+    fhetch::ModuliBase target_base = x.base();
+    target_base.insert(target_base.end(), p_base.begin(), p_base.end());
     for (size_t d = 0; d < p.digit_count; ++d) {
-        const auto &d_base = result[d].base();
+        const fhetch::MRP digit = fhetch::fast_base_convert(
+            fhetch::mr_subset(x, digit_bases[d]), target_base, fbc_variant(), fbc_center_shape());
+        const auto &d_base = digit.base();
         auto stored =
-            store_mrp_locked(dst + (d * d_base.size()), result[d], d_base.data(), d_base.size());
+            store_mrp_locked(dst + (d * d_base.size()), digit, d_base.data(), d_base.size());
         if (!stored)
             return stored;
     }
