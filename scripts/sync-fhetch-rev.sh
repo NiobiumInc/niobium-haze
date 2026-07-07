@@ -35,7 +35,7 @@ echo "syncing flake.lock niobium-fhetch-src rev -> $submodule_rev"
 
 if command -v nix >/dev/null 2>&1; then
     nix flake lock --override-input niobium-fhetch-src \
-        "git+ssh://git@github.com/NiobiumInc/niobium-fhetch.git?rev=${submodule_rev}&submodules=1"
+        "git+https://github.com/NiobiumInc/niobium-fhetch.git?rev=${submodule_rev}&submodules=1"
     exit 0
 fi
 
