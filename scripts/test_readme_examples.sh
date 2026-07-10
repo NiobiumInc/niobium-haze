@@ -80,7 +80,7 @@ trap 'rm -rf "$scratch"' EXIT
 extract_block() {
     local name="$1"
     awk -v want="$name" '
-        /^<!-- readme-example:begin / { active = ($0 ~ ("name=" want " ")); next }
+        /^<!-- readme-example:begin / { active = (index($0, "name=" want " ") > 0); next }
         /^<!-- readme-example:end/    { if (active) exit; next }
         active && /^```/              { infence = !infence; next }
         active && infence             { print }
@@ -108,6 +108,7 @@ printf '[readme] compiling C example (quickstart.c)\n'
     -o "$scratch/quickstart"
 
 printf '[readme] compiling C++ example (ckks22.cpp)\n'
+# C++17 rather than the repo's C++23: the example is a portable consumer snippet.
 "$cxx" -std=c++17 -O2 \
     -I"$haze_include_dir" -I"$haze_bridge_include_dir" \
     -isystem "$stock_openfhe_dir/include/openfhe" \
