@@ -114,9 +114,8 @@ sums directly: `1 + 2 == 3` in every coefficient of every limb.
 #include <stdio.h>
 #include <stdlib.h>
 
-/* A 22-limb RNS modulus chain at ring dimension N = 65536 — the shape a CKKS
-   ciphertext carries (see the C++ example below). Each limb is a distinct
-   NTT-friendly ~60-bit prime (q = 1 mod 2N). */
+/* 22-limb RNS modulus chain at ring dimension N = 65536, matching a CKKS
+   ciphertext. Each limb is a distinct NTT-friendly ~60-bit prime (q = 1 mod 2N). */
 enum { kNumLimbs = 22 };
 
 int main(void) {
@@ -136,44 +135,40 @@ int main(void) {
 
     /* ---- Configure the FHE parameter set. ---- */
     hazeSetRingDimension(ring_dim);
-    /* The local simulator reconstructs ciphertext values from a CryptoContext;
-       seed one for (N, q[0]). The moduli set next stay authoritative. */
+    /* Seed the CryptoContext the local simulator uses to reconstruct values. */
     uint64_t picked = 0;
     hazeReplayBridgeInitCryptoContext(ring_dim, q[0], &picked);
     for (int i = 0; i < kNumLimbs; ++i)
         hazeSetCiphertextModulus(i, q[i]);
     hazeConfigureDevice();
 
-    /* ---- Allocate device polynomials; stage host inputs (a = 1, b = 2). ---- */
+    /* ---- Allocate the MRP groups; stage host inputs (a = 1, b = 2). ---- */
     void *d_a[kNumLimbs], *d_b[kNumLimbs], *d_dst[kNumLimbs];
     const void *h_a[kNumLimbs], *h_b[kNumLimbs];
     void *h_res[kNumLimbs];
 
     uint64_t *a = malloc(bytes), *b = malloc(bytes);
-    uint64_t *result = malloc((size_t)kNumLimbs * bytes); /* one row per residue */
+    uint64_t *result = malloc((size_t)kNumLimbs * bytes);
     if (a == NULL || b == NULL || result == NULL) return 2;
     for (uint64_t i = 0; i < ring_dim; ++i) { a[i] = 1; b[i] = 2; }
 
+    hazeMallocMrp(d_a,   kNumLimbs, bytes);
+    hazeMallocMrp(d_b,   kNumLimbs, bytes);
+    hazeMallocMrp(d_dst, kNumLimbs, bytes);
     for (int i = 0; i < kNumLimbs; ++i) {
-        hazeMalloc(&d_a[i],   bytes);
-        hazeMalloc(&d_b[i],   bytes);
-        hazeMalloc(&d_dst[i], bytes);
-        h_a[i]   = a; /* every residue stages the same host data here */
+        h_a[i]   = a;
         h_b[i]   = b;
         h_res[i] = result + (size_t)i * ring_dim;
     }
 
-    /* ---- Stage both inputs to the device as whole MRP groups. ---- */
+    /* ---- Stage the inputs, record the add, read the results: one MRP op
+           each over the whole 22-limb base. ---- */
     hazeMemcpyMrp(d_a, h_a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, q, kNumLimbs);
     hazeMemcpyMrp(d_b, h_b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, q, kNumLimbs);
-
-    /* ---- Record the add as one MRP op over the whole 22-limb base. ---- */
     hazeAddMrp(d_dst, (const void *const *)d_a, (const void *const *)d_b, q, kNumLimbs,
                /*stream=*/NULL);
 
-    /* ---- Declare the outputs, run, then read the whole group back at once. ---- */
-    for (int i = 0; i < kNumLimbs; ++i)
-        hazeTagOutput(d_dst[i]);
+    hazeTagOutput(d_dst[0]); /* tagging one residue tags the whole group */
     hazeFlush();
     hazeMemcpyMrp(h_res, (const void *const *)d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST, q,
                   kNumLimbs);
@@ -190,11 +185,9 @@ int main(void) {
             }
     }
 
-    for (int i = 0; i < kNumLimbs; ++i) {
-        hazeFree(d_a[i]);
-        hazeFree(d_b[i]);
-        hazeFree(d_dst[i]);
-    }
+    hazeFreeMrp(d_a,   kNumLimbs);
+    hazeFreeMrp(d_b,   kNumLimbs);
+    hazeFreeMrp(d_dst, kNumLimbs);
     free(a);
     free(b);
     free(result);
@@ -205,12 +198,6 @@ int main(void) {
 }
 ```
 <!-- readme-example:end -->
-
-Buffers are heap-allocated (22 residues at `N = 65536` is ~11 MB of coefficients,
-far past a safe stack). `hazeReplayBridgeInitCryptoContext` seeds the
-CryptoContext the local simulator uses to reconstruct ciphertext values; the
-per-residue primes set with `hazeSetCiphertextModulus` remain authoritative for
-the results.
 
 ### C++ — the same add over a real CKKS ciphertext, decrypt-verified
 
@@ -299,11 +286,10 @@ int main() {
     auto h2d = [&](const std::vector<std::vector<uint64_t>> &chain) {
         const std::size_t n = chain.size();
         std::vector<void *> ptrs(n, nullptr);
+        hazeMallocMrp(ptrs.data(), n, bytes);
         std::vector<const void *> src(n, nullptr);
-        for (std::size_t t = 0; t < n; ++t) {
-            hazeMalloc(&ptrs[t], bytes);
+        for (std::size_t t = 0; t < n; ++t)
             src[t] = chain[t].data();
-        }
         hazeMemcpyMrp(ptrs.data(), src.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE,
                       q_base.data(), n);
         return ptrs;
@@ -314,19 +300,15 @@ int main() {
     const auto b1 = h2d(extract_chain(ct2->GetElements()[1], N));
 
     std::vector<void *> r0(towers, nullptr), r1(towers, nullptr);
-    for (std::size_t t = 0; t < towers; ++t) {
-        hazeMalloc(&r0[t], bytes);
-        hazeMalloc(&r1[t], bytes);
-    }
+    hazeMallocMrp(r0.data(), towers, bytes);
+    hazeMallocMrp(r1.data(), towers, bytes);
 
     // ---- Record the homomorphic add: one MRP op over the whole 22-limb base
     //      per ciphertext polynomial (c0, c1). ----
     hazeAddMrp(r0.data(), a0.data(), b0.data(), q_base.data(), towers, nullptr);
     hazeAddMrp(r1.data(), a1.data(), b1.data(), q_base.data(), towers, nullptr);
-    for (std::size_t t = 0; t < towers; ++t) {
-        hazeTagOutput(r0[t]);
-        hazeTagOutput(r1[t]);
-    }
+    hazeTagOutput(r0[0]); // tagging one residue tags the whole group
+    hazeTagOutput(r1[0]);
     hazeFlush();
 
     // ---- Read both result polynomials back as whole MRP groups (shadow reads). ----
@@ -342,8 +324,18 @@ int main() {
     hazeMemcpyMrp(res1_ptrs.data(), r1.data(), bytes, HAZE_MEMCPY_DEVICE_TO_HOST,
                   q_base.data(), towers);
 
-    // ---- Inject the limbs into a correctly-shaped OpenFHE shell and decrypt. ----
-    auto shell = cc->EvalAdd(ct1, ct2)->Clone();
+    // ---- Release the device groups; the rest is host-side OpenFHE. ----
+    hazeFreeMrp(a0.data(), a0.size());
+    hazeFreeMrp(a1.data(), a1.size());
+    hazeFreeMrp(b0.data(), b0.size());
+    hazeFreeMrp(b1.data(), b1.size());
+    hazeFreeMrp(r0.data(), r0.size());
+    hazeFreeMrp(r1.data(), r1.size());
+
+    // ---- Inject the limbs into a shell of the right shape and decrypt. The
+    //      shell is ct1 (level 0, 22 towers, scale 1 — same shape as the sum),
+    //      a non-answer: a no-op inject would decrypt to x1, not x1 + x2. ----
+    auto shell = ct1->Clone();
     auto inject = [&](std::size_t elem, const std::vector<std::vector<uint64_t>> &rows) {
         auto &towers_vec = shell->GetElements()[elem].GetAllElements();
         for (std::size_t t = 0; t < towers; ++t) {
@@ -362,12 +354,12 @@ int main() {
     out->SetLength(x1.size());
     const auto slots = out->GetRealPackedValue();
 
-    double max_err = 0.0;
-    for (std::size_t i = 0; i < x1.size(); ++i)
-        max_err = std::fmax(max_err, std::fabs(slots[i] - (x1[i] + x2[i])));
-    if (max_err > 1e-6) {
-        std::fprintf(stderr, "decryption mismatch: max_err=%.3e\n", max_err);
-        return 1;
+    for (std::size_t i = 0; i < x1.size(); ++i) {
+        const double err = std::fabs(slots[i] - (x1[i] + x2[i]));
+        if (!(err <= 1e-6)) { // negated compare so a NaN slot (corrupt decrypt) also fails
+            std::fprintf(stderr, "slot %zu = %.6f, want %.6f\n", i, slots[i], x1[i] + x2[i]);
+            return 1;
+        }
     }
 
     const double elapsed =
@@ -378,17 +370,12 @@ int main() {
 ```
 <!-- readme-example:end -->
 
-The `(c0, c1)` extraction and injection touch OpenFHE directly, but they run
-before recording starts (first `hazeAdd`) and after it stops (`hazeFlush`), so
-they never enter the trace. Because this example links a consumer's own stock
-OpenFHE — a different build than the instrumented one hidden inside `libhaze` —
-verification is by decryption, not bit-exact RNS equality.
-
-Replace `hazeAdd` with any sequence of `hazeMul`, `hazeNTT`, `hazeAutomorph`,
-`hazeBasisConvert`, ... and the recording layer captures every op in execution
-order. `test/test_compute.cpp` and `test/test_basis_convert.cpp` exercise the
-full surface; the `test/e2e/` suite builds the CKKS operation set (add,
-mult + relin, rotate, rescale) on the same C ABI.
+Replace `hazeAddMrp` with any sequence of `hazeMulMrp`, `hazeNTTMrp`,
+`hazeAutomorphMrp`, `hazeBasisConvert`, ... and the recording layer captures
+every op in execution order. `test/test_compute.cpp` and
+`test/test_basis_convert.cpp` exercise the full surface; the `test/e2e/` suite
+builds the CKKS operation set (add, mult + relin, rotate, rescale) on the same
+C ABI.
 
 ## Building
 

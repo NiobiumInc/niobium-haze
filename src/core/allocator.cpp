@@ -16,10 +16,12 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <expected>
 #include <haze/haze_types.h>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -51,9 +53,8 @@ size_t DeviceAllocator::polynomial_size() const noexcept {
     return poly_bytes_;
 }
 
-std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes) noexcept {
-    HazeLockGuard lock(mutex_);
-
+std::expected<void, HazeInternalError>
+DeviceAllocator::validate_poly_size_locked(size_t bytes) const noexcept {
     // Polynomial size must be configured (via Config::set_ring_dimension)
     // before any allocation. HAZE's device space is FHETCH-addressable
     // storage — without a known polynomial size we cannot serve it.
@@ -73,21 +74,25 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
                               "DeviceAllocator::allocate: size != polynomial bytes");
         return std::unexpected(HazeInternalError::AllocTooSmall);
     }
+    return {};
+}
 
-    // Recycle from the free list when available. The shadow_data_
-    // entry was already evicted at hazeFree time; the recycled DevAddr
-    // starts in the same "no shadow, no data" state as a fresh one.
+std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked() noexcept {
+    // Recycle from the free list when available. Both the shadow_data_ entry
+    // and alloc_set_ membership were dropped at hazeFree time, so a pooled
+    // DevAddr must NOT currently be live; if it is, pool_free_ and alloc_set_
+    // have desynced (a double-push or a live addr wrongly pooled).
     if (!pool_free_.empty()) {
         DevAddr addr = pool_free_.back();
         pool_free_.pop_back();
         if (alloc_set_.contains(addr)) {
-            return addr;
+            record_internal_error(HazeInternalError::PoolMapDesync,
+                                  "DeviceAllocator::allocate (recycled addr already live)");
+            return std::unexpected(HazeInternalError::PoolMapDesync);
         }
-        // pool_free_ entry without an alloc_set_ peer means internal
-        // state is corrupt; fail rather than mint a fresh DevAddr.
-        record_internal_error(HazeInternalError::PoolMapDesync,
-                              "DeviceAllocator::allocate (pool_free_ -> alloc_set_)");
-        return std::unexpected(HazeInternalError::PoolMapDesync);
+        // Re-establish liveness for the recycled addr.
+        alloc_set_.insert(addr);
+        return addr;
     }
 
     // Fresh allocation: bump the address counter by exactly poly_bytes_.
@@ -99,22 +104,84 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes
     return addr;
 }
 
+std::expected<void, HazeInternalError> DeviceAllocator::free_one_locked(DevAddr addr) noexcept {
+    if (!alloc_set_.contains(addr)) {
+        // Not live: an unknown address or a double free. Reject rather than
+        // re-pool it — re-pooling would later hand the same DevAddr out to two
+        // live allocations (aliasing).
+        record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
+        return std::unexpected(HazeInternalError::UnknownAddress);
+    }
+    // Lifetime ends here: drop liveness and the shadow bytes, and pool the
+    // DevAddr for the next allocate() to recycle.
+    alloc_set_.erase(addr);
+    shadow_data_.erase(addr);
+    pool_free_.push_back(addr);
+    return {};
+}
+
+std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate(size_t bytes) noexcept {
+    HazeLockGuard lock(mutex_);
+    if (auto ok = validate_poly_size_locked(bytes); !ok) {
+        return std::unexpected(ok.error());
+    }
+    return allocate_one_locked();
+}
+
+std::expected<std::vector<DevAddr>, HazeInternalError>
+DeviceAllocator::allocate_many(size_t count, size_t bytes) noexcept {
+    std::vector<DevAddr> out;
+    if (count == 0) {
+        return out; // Empty MRP group: nothing to reserve.
+    }
+    HazeLockGuard lock(mutex_);
+    if (auto ok = validate_poly_size_locked(bytes); !ok) {
+        return std::unexpected(ok.error());
+    }
+    // The C-ABI shim bounds `count` to kMaxCiphertextModuli before calling in,
+    // so this reservation can never request an unbounded size.
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        auto addr = allocate_one_locked();
+        if (!addr) {
+            // Roll back everything reserved in THIS call so nothing leaks and
+            // no partially-populated result escapes. Each `done` was just
+            // reserved, so free_one_locked cannot fail on it.
+            for (DevAddr done : out) {
+                [[maybe_unused]] const auto rolled_back = free_one_locked(done);
+            }
+            return std::unexpected(addr.error());
+        }
+        out.push_back(*addr);
+    }
+    return out;
+}
+
 std::expected<void, HazeInternalError> DeviceAllocator::free(DevAddr addr) noexcept {
     if (to_uintptr(addr) == 0) {
         // hazeFree(nullptr) matches CUDA semantics: silent success.
         return {};
     }
     HazeLockGuard lock(mutex_);
-    if (!alloc_set_.contains(addr)) {
-        record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
-        return std::unexpected(HazeInternalError::UnknownAddress);
+    return free_one_locked(addr);
+}
+
+std::expected<void, HazeInternalError>
+DeviceAllocator::free_many(std::span<const DevAddr> addrs) noexcept {
+    if (addrs.empty()) {
+        return {};
     }
-    // Evict the shadow — those bytes are no longer the user's to read.
-    // The DevAddr stays in alloc_set_ and goes onto the free list for
-    // the next allocate() to recycle.
-    shadow_data_.erase(addr);
-    pool_free_.push_back(addr);
-    return {};
+    HazeLockGuard lock(mutex_);
+    std::expected<void, HazeInternalError> first_error{};
+    for (DevAddr addr : addrs) {
+        if (to_uintptr(addr) == 0) {
+            continue; // Null entry: skip, matching hazeFree(nullptr).
+        }
+        if (auto freed = free_one_locked(addr); !freed && first_error) {
+            first_error = std::unexpected(freed.error());
+        }
+    }
+    return first_error;
 }
 
 std::expected<std::vector<uint64_t>, HazeInternalError>

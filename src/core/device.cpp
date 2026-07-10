@@ -25,7 +25,6 @@ namespace {
 inline constexpr int kDeviceCount = 1;
 inline constexpr size_t kHbmSize = 16ULL * 1024 * 1024 * 1024; // 16 GB
 inline constexpr int kNumRegisters = 64;
-inline constexpr int kMaxCiphertextModuli = 64;
 inline constexpr int kNumHbmBanks = 8;
 // Ring dimension exponents 10..16 → N = 1024..65536.
 inline constexpr int kSupportedRingDimExponents[] = {10, 11, 12, 13, 14, 15, 16};

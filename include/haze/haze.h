@@ -101,6 +101,36 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
+// Per-residue (MRP) allocation. hazeMallocMrp reserves `count` device
+// polynomials for one MRP group and writes their addresses into
+// `ptrs[0..count)`. `count` is the group's residue count (the `base_len`
+// passed to the MRP compute ops); `size` is the bytes per residue and must
+// equal the configured polynomial size (ring_dim * sizeof(uint64_t)) — same
+// rule and same error (HAZE_ERROR_ALLOC_TOO_SMALL) as hazeMalloc, and
+// hazeSetRingDimension must precede the first allocation (else
+// HAZE_ERROR_CONFIGERR). The group is reserved under a single allocator lock
+// rather than `count` separate hazeMalloc calls. Like hazeMalloc/hazeFree,
+// these are pure allocator operations and are not recorded into the trace.
+//
+// Partial-failure rollback: if the i-th reservation fails, the 0..i-1 already
+// reserved are freed and the error returned, so nothing leaks and `ptrs` is
+// left unwritten. On success every ptrs[j] is non-null. `count == 0` is a
+// success no-op (empty group), but `ptrs == NULL` is checked first, so
+// (NULL, 0) returns HAZE_ERROR_INVALID_VALUE; a `count` above the device
+// modulus envelope (hazeDeviceProp::maxCiphertextModuli) is rejected the same
+// way rather than attempting an unbounded reservation.
+HAZE_API hazeError_t hazeMallocMrp(void **ptrs, size_t count, size_t size) HAZE_NOEXCEPT;
+
+// Free the `count`-residue MRP group in `ptrs[0..count)` (addresses from
+// hazeMallocMrp or any `count` hazeMalloc results) under a single allocator
+// lock. Every address is freed even if one fails; the first error is
+// returned. NULL entries are skipped, matching hazeFree(NULL). Freeing an
+// address that is not currently allocated (e.g. a double free) returns
+// HAZE_ERROR_UNKNOWN_ADDRESS. `count == 0` is a no-op, but `ptrs == NULL` is
+// checked first so (NULL, 0) returns HAZE_ERROR_INVALID_VALUE; a `count`
+// above the device modulus envelope is rejected the same way.
+HAZE_API hazeError_t hazeFreeMrp(void *const *ptrs, size_t count) HAZE_NOEXCEPT;
+
 // Declare `ptr` an output of the in-flight recording (tagging any one residue
 // of an MRP value tags the whole value). HAZE_ERROR_SOURCE_UNAVAILABLE if `ptr`
 // names no recorded value; a later H2D to a tagged address drops the tag. A
