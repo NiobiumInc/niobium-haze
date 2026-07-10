@@ -129,7 +129,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
         config build \
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
-        test-unit test-sim test-e2e test-transport test-isolation test test-all \
+        test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
         clean clean-runs
 
 # ==============================================================================
@@ -155,11 +155,12 @@ Usage: make <target> [MODE=debug|release]
     test-unit           Run unit suite (HAZE_TARGET=local; no FHE math)
     test-sim            Run sim suite (HAZE_TARGET=local; in-process simulator)
     test-e2e            Run e2e suite (public C ABI + stock OpenFHE, decrypt)
+    test-readme         Compile + run the README examples (C + C++)
     test-transport      Run integration suite via nbcc_fhetch_replay
                         (requires NIOBIUM_COMPILER_ROOT)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
     test                Default: test-unit + test-sim + test-e2e + test-isolation
-    test-all            test + test-transport
+    test-all            test + test-readme + test-transport
 
   Cleanup:
     clean-runs          Remove test runs/ artifacts
@@ -313,9 +314,15 @@ test-e2e: build ## Run the e2e suite (public C ABI + stock OpenFHE, decrypt-veri
 	@cd "$(HAZE_RUNS_DIR)" && \
 	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_e2e_tests"
 
+test-readme: build ## Compile + run the README examples (C + C++) via the local simulator
+	@BUILD_DIR="$(BUILD_DIR)" \
+	 STOCK_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
+	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
+	 scripts/test_readme_examples.sh
+
 test: test-unit test-sim test-e2e test-isolation ## Run default test suites + isolation guard (no transport dependency)
 
-test-all: test-unit test-sim test-e2e test-isolation test-transport ## Run everything (incl. transport path)
+test-all: test-unit test-sim test-e2e test-readme test-isolation test-transport ## Run everything (incl. README examples + transport path)
 
 # ==============================================================================
 # Cleanup

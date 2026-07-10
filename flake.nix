@@ -571,6 +571,32 @@
             touch "$out"
           '';
 
+          # README examples: extract the fenced C + C++ examples from README.md,
+          # compile each against the shipped libhaze (+ stock OpenFHE for the
+          # C++ one), and run them through the in-process FHETCH simulator.
+          # Docs-as-tests: the published snippets cannot drift without failing
+          # CI. Points the script at the prebuilt store paths (no rebuild) and
+          # runs in $TMPDIR so no recording artifacts land in the source root.
+          readme-examples =
+            pkgs.runCommand "haze-readme-examples"
+              {
+                nativeBuildInputs = [ pkgs.clang ];
+                HAZE_LIB_DIR = "${p.haze}/lib";
+                HAZE_INCLUDE_DIR = "${p.haze}/include";
+                # replay_bridge.h is not installed into the haze package's
+                # include dir; supply it straight from the source tree.
+                HAZE_BRIDGE_INCLUDE_DIR = "${./replay_bridge/include}";
+                STOCK_OPENFHE_DIR = "${p.openfhe-stock}";
+                README = "${./README.md}";
+                CC = "clang";
+                CXX = "clang++";
+              }
+              ''
+                export HAZE_RUNS_DIR="$TMPDIR/runs"
+                bash ${./scripts/test_readme_examples.sh}
+                touch "$out"
+              '';
+
           # Isolation guard: assert the shipped libhaze exports ONLY the haze* C
           # ABI (no leaked OpenFHE symbols), the property that lets it coexist
           # with another OpenFHE in one process. A leak wouldn't fail the build,

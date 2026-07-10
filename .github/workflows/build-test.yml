@@ -96,6 +96,9 @@ jobs:
       - name: Run e2e suite (public C ABI + stock OpenFHE, decrypt-verified)
         run: nix develop --command make test-e2e MODE=release
 
+      - name: Run README example checks (C + C++ extracted from README.md)
+        run: nix develop --command make test-readme MODE=release
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
