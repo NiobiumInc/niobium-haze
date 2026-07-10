@@ -93,8 +93,8 @@ simulator internals, see the companion repository:
 Two runnable examples show the same libhaze operation — a 22-limb ciphertext
 add — first in pure C, then in C++ wrapped in real CKKS. Both configure a
 22-limb RNS modulus chain at ring dimension `N = 65536` and run the identical
-C-ABI sequence (configure -> H2D -> per-residue `hazeAdd` -> tag -> flush ->
-D2H) through the in-process simulator; they differ only in the surrounding
+C-ABI sequence (configure -> H2D -> `hazeAddMrp` over the base -> tag -> flush
+-> D2H) through the in-process simulator; they differ only in the surrounding
 crypto. Both are extracted and gated in CI (`make test-readme`), so the code
 below cannot silently rot: `scripts/test_readme_examples.sh` compiles and runs
 each one against the shipped `libhaze`.
@@ -102,9 +102,9 @@ each one against the shipped `libhaze`.
 ### C — raw 22-limb add, verified per residue
 
 The C example links only `libhaze` (OpenFHE has no C API, so a `.c` translation
-unit cannot encrypt or decrypt). It adds two polynomials on each of the 22
-residues and checks the recorded modular sums directly: `1 + 2 == 3` in every
-coefficient of every limb.
+unit cannot encrypt or decrypt). It adds two polynomials across all 22 residues
+in a single `hazeAddMrp` call over the base, then checks the recorded modular
+sums directly: `1 + 2 == 3` in every coefficient of every limb.
 
 <!-- readme-example:begin lang=c name=quickstart -->
 ```c
@@ -146,7 +146,11 @@ int main(void) {
 
     /* ---- Allocate device polynomials; stage host inputs (a = 1, b = 2). ---- */
     void *d_a[kNumLimbs], *d_b[kNumLimbs], *d_dst[kNumLimbs];
-    uint64_t *a = malloc(bytes), *b = malloc(bytes), *result = malloc(bytes);
+    const void *h_a[kNumLimbs], *h_b[kNumLimbs];
+    void *h_res[kNumLimbs];
+
+    uint64_t *a = malloc(bytes), *b = malloc(bytes);
+    uint64_t *result = malloc((size_t)kNumLimbs * bytes); /* one row per residue */
     if (a == NULL || b == NULL || result == NULL) return 2;
     for (uint64_t i = 0; i < ring_dim; ++i) { a[i] = 1; b[i] = 2; }
 
@@ -154,26 +158,33 @@ int main(void) {
         hazeMalloc(&d_a[i],   bytes);
         hazeMalloc(&d_b[i],   bytes);
         hazeMalloc(&d_dst[i], bytes);
-        hazeMemcpy(d_a[i], a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
-        hazeMemcpy(d_b[i], b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+        h_a[i]   = a; /* every residue stages the same host data here */
+        h_b[i]   = b;
+        h_res[i] = result + (size_t)i * ring_dim;
     }
 
-    /* ---- Record one pointwise add per residue. ---- */
-    for (int i = 0; i < kNumLimbs; ++i)
-        hazeAdd(d_dst[i], d_a[i], d_b[i], /*mod_idx=*/i, /*stream=*/NULL);
+    /* ---- Stage both inputs to the device as whole MRP groups. ---- */
+    hazeMemcpyMrp(d_a, h_a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, q, kNumLimbs);
+    hazeMemcpyMrp(d_b, h_b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE, q, kNumLimbs);
 
-    /* ---- Declare the outputs, run the recorded program, read them back. ---- */
+    /* ---- Record the add as one MRP op over the whole 22-limb base. ---- */
+    hazeAddMrp(d_dst, (const void *const *)d_a, (const void *const *)d_b, q, kNumLimbs,
+               /*stream=*/NULL);
+
+    /* ---- Declare the outputs, run, then read the whole group back at once. ---- */
     for (int i = 0; i < kNumLimbs; ++i)
         hazeTagOutput(d_dst[i]);
     hazeFlush();
+    hazeMemcpyMrp(h_res, (const void *const *)d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST, q,
+                  kNumLimbs);
 
     int ok = 1;
     for (int i = 0; i < kNumLimbs && ok; ++i) {
-        hazeMemcpy(result, d_dst[i], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+        const uint64_t *r = (const uint64_t *)h_res[i];
         for (uint64_t k = 0; k < ring_dim; ++k)
-            if (result[k] != 3) { /* (1 + 2) mod q_i == 3 for every prime */
+            if (r[k] != 3) { /* (1 + 2) mod q_i == 3 for every prime */
                 printf("limb %d coeff %llu = %llu (expected 3)\n", i,
-                       (unsigned long long)k, (unsigned long long)result[k]);
+                       (unsigned long long)k, (unsigned long long)r[k]);
                 ok = 0;
                 break;
             }
@@ -207,8 +218,9 @@ The C++ example is the realistic capstone: a genuine CKKS ciphertext add. A
 consumer's own stock OpenFHE handles `keygen` / `encrypt` / `decrypt`; libhaze
 performs the compute. OpenFHE derives the 22-limb chain at `N = 65536`; haze is
 configured from the moduli read off that context, both ciphertexts' `(c0, c1)`
-limbs are added per residue, and the haze-computed result is injected back into
-an OpenFHE ciphertext shell and decrypted to confirm the slots equal `x1 + x2`.
+polynomials are added with one `hazeAddMrp` per polynomial over the 22-limb
+base, and the haze-computed result is injected back into an OpenFHE ciphertext
+shell and decrypted to confirm the slots equal `x1 + x2`.
 
 <!-- readme-example:begin lang=cpp name=ckks22 -->
 ```cpp
@@ -283,13 +295,17 @@ int main() {
         hazeSetCiphertextModulus(static_cast<int>(i), q_base[i]);
     hazeConfigureDevice();
 
-    // ---- Stage each ciphertext's (c0, c1) limbs to the device. ----
+    // ---- Stage each ciphertext's (c0, c1) limbs to the device as one MRP group. ----
     auto h2d = [&](const std::vector<std::vector<uint64_t>> &chain) {
-        std::vector<void *> ptrs(chain.size(), nullptr);
-        for (std::size_t t = 0; t < chain.size(); ++t) {
+        const std::size_t n = chain.size();
+        std::vector<void *> ptrs(n, nullptr);
+        std::vector<const void *> src(n, nullptr);
+        for (std::size_t t = 0; t < n; ++t) {
             hazeMalloc(&ptrs[t], bytes);
-            hazeMemcpy(ptrs[t], chain[t].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+            src[t] = chain[t].data();
         }
+        hazeMemcpyMrp(ptrs.data(), src.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE,
+                      q_base.data(), n);
         return ptrs;
     };
     const auto a0 = h2d(extract_chain(ct1->GetElements()[0], N));
@@ -303,25 +319,28 @@ int main() {
         hazeMalloc(&r1[t], bytes);
     }
 
-    // ---- Record the homomorphic add: one pointwise add per residue, on both
-    //      ciphertext polynomials. A CKKS add is independent per limb. ----
-    for (std::size_t t = 0; t < towers; ++t) {
-        hazeAdd(r0[t], a0[t], b0[t], static_cast<int>(t), nullptr);
-        hazeAdd(r1[t], a1[t], b1[t], static_cast<int>(t), nullptr);
-    }
+    // ---- Record the homomorphic add: one MRP op over the whole 22-limb base
+    //      per ciphertext polynomial (c0, c1). ----
+    hazeAddMrp(r0.data(), a0.data(), b0.data(), q_base.data(), towers, nullptr);
+    hazeAddMrp(r1.data(), a1.data(), b1.data(), q_base.data(), towers, nullptr);
     for (std::size_t t = 0; t < towers; ++t) {
         hazeTagOutput(r0[t]);
         hazeTagOutput(r1[t]);
     }
     hazeFlush();
 
-    // ---- Read the haze-computed limbs back (pure shadow reads). ----
+    // ---- Read both result polynomials back as whole MRP groups (shadow reads). ----
     std::vector<std::vector<uint64_t>> res0(towers, std::vector<uint64_t>(N));
     std::vector<std::vector<uint64_t>> res1(towers, std::vector<uint64_t>(N));
+    std::vector<void *> res0_ptrs(towers), res1_ptrs(towers);
     for (std::size_t t = 0; t < towers; ++t) {
-        hazeMemcpy(res0[t].data(), r0[t], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
-        hazeMemcpy(res1[t].data(), r1[t], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+        res0_ptrs[t] = res0[t].data();
+        res1_ptrs[t] = res1[t].data();
     }
+    hazeMemcpyMrp(res0_ptrs.data(), r0.data(), bytes, HAZE_MEMCPY_DEVICE_TO_HOST,
+                  q_base.data(), towers);
+    hazeMemcpyMrp(res1_ptrs.data(), r1.data(), bytes, HAZE_MEMCPY_DEVICE_TO_HOST,
+                  q_base.data(), towers);
 
     // ---- Inject the limbs into a correctly-shaped OpenFHE shell and decrypt. ----
     auto shell = cc->EvalAdd(ct1, ct2)->Clone();
