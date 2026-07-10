@@ -438,13 +438,15 @@ Build:
 
 Test:
   test-unit         Unit suite (HAZE_TARGET=local; no FHE math).
-  test-sim          [integration] suite via the in-process FHETCH
-                    simulator (HAZE_TARGET=local). Validates FHE math
-                    without external binaries.
+  test-sim          Sim suite via the in-process FHETCH simulator
+                    (HAZE_TARGET=local). Validates FHE math.
+  test-e2e          E2E suite (public C ABI + stock OpenFHE, decrypt).
+  test-readme       Compile + run the README examples (C + C++).
   test-transport    [integration] suite via nbcc_fhetch_replay
                     (opt-in; requires NIOBIUM_COMPILER_ROOT).
-  test              Default: test-unit + test-sim.
-  test-all          test-unit + test-sim + test-transport.
+  test-isolation    Assert libhaze exports only the haze* C ABI.
+  test              Default: test-unit + test-sim + test-e2e + test-isolation.
+  test-all          test + test-readme + test-transport.
 
 Cleanup:
   clean-runs        Remove test runs/ artifacts.
