@@ -90,57 +90,286 @@ simulator internals, see the companion repository:
 
 ## Recording an FHE op
 
-The example below configures the device, records a pointwise add of two
-polynomials, replays through the in-process simulator, and reads the result:
+Two runnable examples show the same libhaze operation — a 22-limb ciphertext
+add — first in pure C, then in C++ wrapped in real CKKS. Both configure a
+22-limb RNS modulus chain at ring dimension `N = 65536` and run the identical
+C-ABI sequence (configure -> H2D -> per-residue `hazeAdd` -> tag -> flush ->
+D2H) through the in-process simulator; they differ only in the surrounding
+crypto. Both are extracted and gated in CI (`make test-readme`), so the code
+below cannot silently rot: `scripts/test_readme_examples.sh` compiles and runs
+each one against the shipped `libhaze`.
 
+### C — raw 22-limb add, verified per residue
+
+The C example links only `libhaze` (OpenFHE has no C API, so a `.c` translation
+unit cannot encrypt or decrypt). It adds two polynomials on each of the 22
+residues and checks the recorded modular sums directly: `1 + 2 == 3` in every
+coefficient of every limb.
+
+<!-- readme-example:begin lang=c name=quickstart -->
 ```c
 #include <haze/haze.h>
+#include <haze/replay_bridge.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+/* A 22-limb RNS modulus chain at ring dimension N = 65536 — the shape a CKKS
+   ciphertext carries (see the C++ example below). Each limb is a distinct
+   NTT-friendly ~60-bit prime (q = 1 mod 2N). */
+enum { kNumLimbs = 22 };
 
 int main(void) {
-    const uint64_t ring_dim = 4096;
+    const uint64_t ring_dim = 65536;
     const size_t   bytes    = ring_dim * sizeof(uint64_t);
-    const uint64_t modulus  = 576460752303415297ULL;
-    const int      mod_idx  = 0;
+
+    static const uint64_t q[kNumLimbs] = {
+        576460752308273153ULL, 576460752315482113ULL, 576460752319021057ULL,
+        576460752319414273ULL, 576460752321642497ULL, 576460752325705729ULL,
+        576460752328327169ULL, 576460752329113601ULL, 576460752329506817ULL,
+        576460752329900033ULL, 576460752331210753ULL, 576460752337502209ULL,
+        576460752340123649ULL, 576460752342876161ULL, 576460752347201537ULL,
+        576460752347332609ULL, 576460752352837633ULL, 576460752354017281ULL,
+        576460752355065857ULL, 576460752355459073ULL, 576460752358604801ULL,
+        576460752364240897ULL,
+    };
 
     /* ---- Configure the FHE parameter set. ---- */
     hazeSetRingDimension(ring_dim);
-    hazeSetCiphertextModulus(mod_idx, modulus);
+    /* The local simulator reconstructs ciphertext values from a CryptoContext;
+       seed one for (N, q[0]). The moduli set next stay authoritative. */
+    uint64_t picked = 0;
+    hazeReplayBridgeInitCryptoContext(ring_dim, q[0], &picked);
+    for (int i = 0; i < kNumLimbs; ++i)
+        hazeSetCiphertextModulus(i, q[i]);
     hazeConfigureDevice();
 
-    /* ---- Allocate three device polynomials. ---- */
-    void *d_a = NULL, *d_b = NULL, *d_dst = NULL;
-    hazeMalloc(&d_a,   bytes);
-    hazeMalloc(&d_b,   bytes);
-    hazeMalloc(&d_dst, bytes);
-
-    /* ---- Stage host inputs and record the add. ---- */
-    uint64_t a[ring_dim], b[ring_dim], result[ring_dim];
+    /* ---- Allocate device polynomials; stage host inputs (a = 1, b = 2). ---- */
+    void *d_a[kNumLimbs], *d_b[kNumLimbs], *d_dst[kNumLimbs];
+    uint64_t *a = malloc(bytes), *b = malloc(bytes), *result = malloc(bytes);
+    if (a == NULL || b == NULL || result == NULL) return 2;
     for (uint64_t i = 0; i < ring_dim; ++i) { a[i] = 1; b[i] = 2; }
-    hazeMemcpy(d_a, a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
-    hazeMemcpy(d_b, b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
 
-    hazeAdd(d_dst, d_a, d_b, mod_idx, /*stream=*/NULL);
+    for (int i = 0; i < kNumLimbs; ++i) {
+        hazeMalloc(&d_a[i],   bytes);
+        hazeMalloc(&d_b[i],   bytes);
+        hazeMalloc(&d_dst[i], bytes);
+        hazeMemcpy(d_a[i], a, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+        hazeMemcpy(d_b[i], b, bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+    }
 
-    /* ---- Declare the output, run the recorded program, then read it back. ---- */
-    hazeTagOutput(d_dst);
+    /* ---- Record one pointwise add per residue. ---- */
+    for (int i = 0; i < kNumLimbs; ++i)
+        hazeAdd(d_dst[i], d_a[i], d_b[i], /*mod_idx=*/i, /*stream=*/NULL);
+
+    /* ---- Declare the outputs, run the recorded program, read them back. ---- */
+    for (int i = 0; i < kNumLimbs; ++i)
+        hazeTagOutput(d_dst[i]);
     hazeFlush();
-    hazeMemcpy(result, d_dst, bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
 
-    printf("result[0] = %llu\n", (unsigned long long)result[0]);  /* 3 */
+    int ok = 1;
+    for (int i = 0; i < kNumLimbs && ok; ++i) {
+        hazeMemcpy(result, d_dst[i], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+        for (uint64_t k = 0; k < ring_dim; ++k)
+            if (result[k] != 3) { /* (1 + 2) mod q_i == 3 for every prime */
+                printf("limb %d coeff %llu = %llu (expected 3)\n", i,
+                       (unsigned long long)k, (unsigned long long)result[k]);
+                ok = 0;
+                break;
+            }
+    }
 
-    hazeFree(d_a);
-    hazeFree(d_b);
-    hazeFree(d_dst);
+    for (int i = 0; i < kNumLimbs; ++i) {
+        hazeFree(d_a[i]);
+        hazeFree(d_b[i]);
+        hazeFree(d_dst[i]);
+    }
+    free(a);
+    free(b);
+    free(result);
+
+    if (!ok) return 1;
+    printf("readme-c: OK\n");
     return 0;
 }
 ```
+<!-- readme-example:end -->
+
+Buffers are heap-allocated (22 residues at `N = 65536` is ~11 MB of coefficients,
+far past a safe stack). `hazeReplayBridgeInitCryptoContext` seeds the
+CryptoContext the local simulator uses to reconstruct ciphertext values; the
+per-residue primes set with `hazeSetCiphertextModulus` remain authoritative for
+the results.
+
+### C++ — the same add over a real CKKS ciphertext, decrypt-verified
+
+The C++ example is the realistic capstone: a genuine CKKS ciphertext add. A
+consumer's own stock OpenFHE handles `keygen` / `encrypt` / `decrypt`; libhaze
+performs the compute. OpenFHE derives the 22-limb chain at `N = 65536`; haze is
+configured from the moduli read off that context, both ciphertexts' `(c0, c1)`
+limbs are added per residue, and the haze-computed result is injected back into
+an OpenFHE ciphertext shell and decrypted to confirm the slots equal `x1 + x2`.
+
+<!-- readme-example:begin lang=cpp name=ckks22 -->
+```cpp
+#include <openfhe.h>
+
+#include <haze/haze.h>
+#include <haze/haze_types.h>
+#include <haze/replay_bridge.h>
+
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+using namespace lbcrypto;
+
+// Per-tower uint64 limbs of one ciphertext polynomial (c0 or c1).
+static std::vector<std::vector<uint64_t>> extract_chain(const DCRTPoly &poly, uint64_t n) {
+    const std::size_t towers = poly.GetNumOfElements();
+    std::vector<std::vector<uint64_t>> chain(towers, std::vector<uint64_t>(n));
+    for (std::size_t t = 0; t < towers; ++t) {
+        const auto &vals = poly.GetElementAtIndex(static_cast<uint32_t>(t)).GetValues();
+        for (uint64_t i = 0; i < n; ++i)
+            chain[t][i] = vals[i].ConvertToInt<uint64_t>();
+    }
+    return chain;
+}
+
+int main() {
+    const auto t_start = std::chrono::steady_clock::now();
+
+    // ---- Build a 22-limb CKKS context with stock OpenFHE. ----
+    CCParams<CryptoContextCKKSRNS> params;
+    params.SetMultiplicativeDepth(21);     // 22 RNS towers (depth + 1)
+    params.SetScalingModSize(55);
+    params.SetFirstModSize(60);
+    params.SetScalingTechnique(FIXEDAUTO); // tower count is exactly depth + 1
+    params.SetSecurityLevel(HEStd_128_classic);
+    params.SetBatchSize(8);
+    auto cc = GenCryptoContext(params);
+    cc->Enable(PKE);
+    cc->Enable(KEYSWITCH);
+    cc->Enable(LEVELEDSHE);
+    auto keys = cc->KeyGen();
+
+    const uint64_t N = cc->GetRingDimension();
+    const std::size_t bytes = static_cast<std::size_t>(N) * sizeof(uint64_t);
+    std::vector<uint64_t> q_base;
+    for (const auto &p : cc->GetCryptoParameters()->GetElementParams()->GetParams())
+        q_base.push_back(p->GetModulus().ConvertToInt<uint64_t>());
+    const std::size_t towers = q_base.size();
+    if (N != 65536 || towers != 22) {
+        std::fprintf(stderr, "unexpected chain: N=%llu towers=%zu\n", (unsigned long long)N,
+                     towers);
+        return 1;
+    }
+
+    // ---- Encrypt two packed real-valued vectors. ----
+    const std::vector<double> x1 = {0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0};
+    const std::vector<double> x2 = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0};
+    auto ct1 = cc->Encrypt(keys.publicKey, cc->MakeCKKSPackedPlaintext(x1));
+    auto ct2 = cc->Encrypt(keys.publicKey, cc->MakeCKKSPackedPlaintext(x2));
+
+    // ---- Configure haze for the same chain (moduli read off the context). ----
+    hazeDeviceReset();
+    hazeSetRingDimension(N);
+    uint64_t picked = 0;
+    hazeReplayBridgeInitCryptoContext(N, q_base[0], &picked);
+    for (std::size_t i = 0; i < towers; ++i)
+        hazeSetCiphertextModulus(static_cast<int>(i), q_base[i]);
+    hazeConfigureDevice();
+
+    // ---- Stage each ciphertext's (c0, c1) limbs to the device. ----
+    auto h2d = [&](const std::vector<std::vector<uint64_t>> &chain) {
+        std::vector<void *> ptrs(chain.size(), nullptr);
+        for (std::size_t t = 0; t < chain.size(); ++t) {
+            hazeMalloc(&ptrs[t], bytes);
+            hazeMemcpy(ptrs[t], chain[t].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE);
+        }
+        return ptrs;
+    };
+    const auto a0 = h2d(extract_chain(ct1->GetElements()[0], N));
+    const auto a1 = h2d(extract_chain(ct1->GetElements()[1], N));
+    const auto b0 = h2d(extract_chain(ct2->GetElements()[0], N));
+    const auto b1 = h2d(extract_chain(ct2->GetElements()[1], N));
+
+    std::vector<void *> r0(towers, nullptr), r1(towers, nullptr);
+    for (std::size_t t = 0; t < towers; ++t) {
+        hazeMalloc(&r0[t], bytes);
+        hazeMalloc(&r1[t], bytes);
+    }
+
+    // ---- Record the homomorphic add: one pointwise add per residue, on both
+    //      ciphertext polynomials. A CKKS add is independent per limb. ----
+    for (std::size_t t = 0; t < towers; ++t) {
+        hazeAdd(r0[t], a0[t], b0[t], static_cast<int>(t), nullptr);
+        hazeAdd(r1[t], a1[t], b1[t], static_cast<int>(t), nullptr);
+    }
+    for (std::size_t t = 0; t < towers; ++t) {
+        hazeTagOutput(r0[t]);
+        hazeTagOutput(r1[t]);
+    }
+    hazeFlush();
+
+    // ---- Read the haze-computed limbs back (pure shadow reads). ----
+    std::vector<std::vector<uint64_t>> res0(towers, std::vector<uint64_t>(N));
+    std::vector<std::vector<uint64_t>> res1(towers, std::vector<uint64_t>(N));
+    for (std::size_t t = 0; t < towers; ++t) {
+        hazeMemcpy(res0[t].data(), r0[t], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+        hazeMemcpy(res1[t].data(), r1[t], bytes, HAZE_MEMCPY_DEVICE_TO_HOST);
+    }
+
+    // ---- Inject the limbs into a correctly-shaped OpenFHE shell and decrypt. ----
+    auto shell = cc->EvalAdd(ct1, ct2)->Clone();
+    auto inject = [&](std::size_t elem, const std::vector<std::vector<uint64_t>> &rows) {
+        auto &towers_vec = shell->GetElements()[elem].GetAllElements();
+        for (std::size_t t = 0; t < towers; ++t) {
+            auto &np = towers_vec[t];
+            NativeVector nv(static_cast<uint32_t>(N), NativeInteger(np.GetModulus()));
+            for (uint64_t i = 0; i < N; ++i)
+                nv[i] = NativeInteger(rows[t][i]);
+            np.SetValues(nv, np.GetFormat());
+        }
+    };
+    inject(0, res0);
+    inject(1, res1);
+
+    Plaintext out;
+    cc->Decrypt(keys.secretKey, shell, &out);
+    out->SetLength(x1.size());
+    const auto slots = out->GetRealPackedValue();
+
+    double max_err = 0.0;
+    for (std::size_t i = 0; i < x1.size(); ++i)
+        max_err = std::fmax(max_err, std::fabs(slots[i] - (x1[i] + x2[i])));
+    if (max_err > 1e-6) {
+        std::fprintf(stderr, "decryption mismatch: max_err=%.3e\n", max_err);
+        return 1;
+    }
+
+    const double elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+    std::printf("readme-cpp: OK (%.2f s)\n", elapsed);
+    return 0;
+}
+```
+<!-- readme-example:end -->
+
+The `(c0, c1)` extraction and injection touch OpenFHE directly, but they run
+before recording starts (first `hazeAdd`) and after it stops (`hazeFlush`), so
+they never enter the trace. Because this example links a consumer's own stock
+OpenFHE — a different build than the instrumented one hidden inside `libhaze` —
+verification is by decryption, not bit-exact RNS equality.
 
 Replace `hazeAdd` with any sequence of `hazeMul`, `hazeNTT`, `hazeAutomorph`,
 `hazeBasisConvert`, ... and the recording layer captures every op in execution
 order. `test/test_compute.cpp` and `test/test_basis_convert.cpp` exercise the
-full surface; they are useful as worked examples.
+full surface; the `test/e2e/` suite builds the CKKS operation set (add,
+mult + relin, rotate, rescale) on the same C ABI.
 
 ## Building
 
