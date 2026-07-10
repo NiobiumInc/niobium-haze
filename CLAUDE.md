@@ -412,6 +412,10 @@ the first `hazeMalloc`. Non-polynomial scratch (pointer arrays, twiddle
 tables, kernel-arg packs) goes through `hazeHostAlloc` or ordinary host
 malloc, not `hazeMalloc`.
 
+`hazeMallocMrp` / `hazeFreeMrp` (backed by `DeviceAllocator::allocate_many`
+/ `free_many`) batch an MRP group under a single lock acquisition, reusing
+the single-poly logic; `allocate_many` rolls back on a partial failure.
+
 `DevAddr` is an `enum class : uintptr_t` cast from / to `void*` only at
 the C ABI boundary. `kHbmBase = 0x4000000000ULL` keeps haze-allocated
 addresses above FHETCH's synthetic address range (< `0x1000000000`).

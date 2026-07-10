@@ -27,6 +27,25 @@ class AllocatorTestAccess {
         std::forward<F>(f)(it->second.data(), it->second.size());
         return true;
     }
+
+    // Number of live DevAddrs (alloc_set_ membership). Lets a test assert
+    // that a failed allocation leaves nothing allocated.
+    static std::size_t alloc_set_size(const DeviceAllocator &a) noexcept {
+        HazeLockGuard lock(a.mutex_);
+        return a.alloc_set_.size();
+    }
+
+    // Push a DevAddr to the FRONT of the free list. allocate pops from the
+    // back, so a free list of [wedge, recyclable] makes a two-poly batch
+    // recycle `recyclable` first, then pop `wedge`. Passing a still-LIVE addr
+    // as `wedge` makes that second pop hit the "recycled addr already live"
+    // PoolMapDesync path — the only way to exercise allocate_many's mid-batch
+    // rollback (unreachable via the public API otherwise). Depends on the
+    // allocator's LIFO free-list discipline.
+    static void push_front_pool_entry(DeviceAllocator &a, DevAddr addr) noexcept {
+        HazeLockGuard lock(a.mutex_);
+        a.pool_free_.insert(a.pool_free_.begin(), addr);
+    }
 };
 
 } // namespace haze::test

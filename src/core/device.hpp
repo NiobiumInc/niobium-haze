@@ -19,6 +19,13 @@
 
 namespace haze {
 
+// Device ciphertext-modulus envelope (reported as
+// hazeDeviceProp::maxCiphertextModuli). Also the upper bound on an MRP
+// group's residue count: a valid group cannot span more residues than the
+// device supports moduli, so the C-ABI batch entry points reject a larger
+// `count` rather than attempting an unbounded reservation.
+inline constexpr int kMaxCiphertextModuli = 64;
+
 // Single-device runtime state. Only one device exists; the only valid
 // device index is 0. Free functions instead of a class — a class adds
 // nothing over a one-int counter and a couple of getters.

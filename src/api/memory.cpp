@@ -13,15 +13,18 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
+#include "core/device.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <unistd.h>
+#include <vector>
 
 extern "C" hazeError_t hazeMalloc(void **ptr, size_t size) noexcept {
     if (ptr == nullptr)
@@ -37,6 +40,47 @@ extern "C" hazeError_t hazeFree(void *ptr) noexcept {
     if (ptr != nullptr)
         haze::epoch().invalidate(haze::to_dev_addr(ptr));
     return set_internal_result(haze::allocator().free(haze::to_dev_addr(ptr)));
+}
+
+extern "C" hazeError_t hazeMallocMrp(void **ptrs, size_t count, size_t size) noexcept {
+    // ptrs is checked before count, so (NULL, 0) returns INVALID_VALUE.
+    if (ptrs == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Bound count to the device modulus envelope before any reservation so an
+    // absurd value cannot throw std::length_error across this noexcept boundary.
+    if (count > static_cast<size_t>(haze::kMaxCiphertextModuli))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::allocator().allocate_many(count, size);
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    // On success the allocator returns exactly `count` addresses; only then
+    // is `ptrs` written (rollback leaves it untouched).
+    for (size_t i = 0; i < count; ++i)
+        ptrs[i] = haze::to_void_ptr((*result)[i]);
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazeFreeMrp(void *const *ptrs, size_t count) noexcept {
+    // ptrs is checked before count, so (NULL, 0) returns INVALID_VALUE.
+    if (ptrs == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Bound count before the reservation below (same noexcept concern as
+    // hazeMallocMrp).
+    if (count > static_cast<size_t>(haze::kMaxCiphertextModuli))
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // Mirror hazeFree: drop each live address's epoch polymap binding first.
+    // epoch().invalidate takes (and releases) the epoch lock before the
+    // single allocator lock in free_many, preserving the epoch -> allocator
+    // lock order.
+    std::vector<haze::DevAddr> addrs;
+    addrs.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const haze::DevAddr addr = haze::to_dev_addr(ptrs[i]);
+        if (ptrs[i] != nullptr)
+            haze::epoch().invalidate(addr);
+        addrs.push_back(addr);
+    }
+    return set_internal_result(haze::allocator().free_many(addrs));
 }
 
 extern "C" hazeError_t hazeMallocAsync(void **ptr, size_t size, hazeStream_t /*stream*/) noexcept {

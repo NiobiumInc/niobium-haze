@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -92,6 +93,25 @@ class DeviceAllocator {
     std::expected<DevAddr, HazeInternalError> allocate(size_t bytes) noexcept HAZE_EXCLUDES(mutex_);
     std::expected<void, HazeInternalError> free(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
+    // Batched allocate/free for an MRP group: the mutex is taken ONCE for
+    // all `count` residues (not once per residue). Both reuse the single-poly
+    // logic under the lock.
+    //
+    // allocate_many reserves `count` polynomials of `bytes` each (each must
+    // equal the configured polynomial size, same contract as allocate). On
+    // any per-residue failure the polys already reserved in this call are
+    // freed and the error returned, so nothing leaks; on success the result
+    // holds exactly `count` addresses. count == 0 yields an empty result.
+    std::expected<std::vector<DevAddr>, HazeInternalError> allocate_many(size_t count,
+                                                                         size_t bytes) noexcept
+        HAZE_EXCLUDES(mutex_);
+
+    // free_many attempts every address; zero-valued (null) entries are
+    // skipped (hazeFree(nullptr) semantics). It frees all of them and returns
+    // the first error encountered, if any.
+    std::expected<void, HazeInternalError> free_many(std::span<const DevAddr> addrs) noexcept
+        HAZE_EXCLUDES(mutex_);
+
     // Bulk operations on a single allocation. Each path validates count
     // against the allocation size.
     std::expected<void, HazeInternalError> copy_h2d(DevAddr dst, const void *src,
@@ -152,8 +172,16 @@ class DeviceAllocator {
 
     friend class test::AllocatorTestAccess;
 
-    // Helper (caller holds mutex_).
+    // Helpers (caller holds mutex_). validate_poly_size_locked enforces the
+    // ring-dim-set + single-size contract; allocate_one_locked and
+    // free_one_locked are the single-poly bodies shared by the scalar and
+    // batched entry points so the logic lives in one place.
     void clear_pool_locked() noexcept HAZE_REQUIRES(mutex_);
+    std::expected<void, HazeInternalError> validate_poly_size_locked(size_t bytes) const noexcept
+        HAZE_REQUIRES(mutex_);
+    std::expected<DevAddr, HazeInternalError> allocate_one_locked() noexcept HAZE_REQUIRES(mutex_);
+    std::expected<void, HazeInternalError> free_one_locked(DevAddr addr) noexcept
+        HAZE_REQUIRES(mutex_);
 
     // mutex_ protects all state below. Lock order across HAZE: callers
     // already holding EpochState::mutex_ may re-enter here (epoch →

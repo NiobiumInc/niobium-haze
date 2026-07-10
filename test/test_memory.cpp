@@ -1,4 +1,9 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+#include "allocator_test_access.hpp"
+#include "common/handle.hpp"
+#include "core/allocator.hpp"
+#include "core/device.hpp"
+
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -238,4 +243,261 @@ TEST_CASE("hazePointerGetAttributes rejects null attrs out-pointer", "[unit]") {
     int stack_local = 0;
     REQUIRE(hazePointerGetAttributes(nullptr, &stack_local) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
+}
+
+// ---------------------------------------------------------------------------
+// hazeMallocMrp / hazeFreeMrp — batched MRP-group allocation.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("hazeMallocMrp allocates a usable group that hazeFreeMrp releases", "[unit]") {
+    constexpr size_t kN = 4096;
+    constexpr size_t kBytes = kN * sizeof(uint64_t);
+    constexpr size_t kCount = 4;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
+
+    void *ptrs[kCount] = {};
+    REQUIRE(hazeMallocMrp(ptrs, kCount, kBytes) == HAZE_SUCCESS);
+    for (size_t i = 0; i < kCount; ++i) {
+        REQUIRE(ptrs[i] != nullptr);
+        for (size_t j = i + 1; j < kCount; ++j)
+            REQUIRE(ptrs[i] != ptrs[j]);
+    }
+
+    // Each poly is a normal allocation: H2D then D2H round-trips.
+    std::vector<uint64_t> src(kN);
+    for (size_t i = 0; i < kN; ++i)
+        src[i] = static_cast<uint64_t>(i) + 1;
+    for (void *ptr : ptrs) {
+        REQUIRE(hazeMemcpy(ptr, src.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+        std::vector<uint64_t> dst(kN, 0);
+        REQUIRE(hazeMemcpy(dst.data(), ptr, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(dst == src);
+    }
+    REQUIRE(hazeFreeMrp(ptrs, kCount) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeMallocMrp/hazeFreeMrp round-trip recycles the group", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    constexpr size_t kCount = 3;
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+
+    void *g1[kCount] = {};
+    REQUIRE(hazeMallocMrp(g1, kCount, kBytes) == HAZE_SUCCESS);
+    const std::vector<void *> first(g1, g1 + kCount);
+    REQUIRE(hazeFreeMrp(g1, kCount) == HAZE_SUCCESS);
+
+    void *g2[kCount] = {};
+    REQUIRE(hazeMallocMrp(g2, kCount, kBytes) == HAZE_SUCCESS);
+    for (void *addr : g2)
+        REQUIRE(std::ranges::find(first, addr) != first.end());
+    REQUIRE(hazeFreeMrp(g2, kCount) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeMallocMrp with count 0 is a success no-op", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *const sentinel = reinterpret_cast<void *>(0x5A5A);
+    void *ptrs[1] = {sentinel};
+    REQUIRE(hazeMallocMrp(ptrs, 0, 32768) == HAZE_SUCCESS);
+    REQUIRE(ptrs[0] == sentinel); // left untouched
+}
+
+TEST_CASE("hazeMallocMrp before hazeSetRingDimension is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    void *ptrs[2] = {};
+    REQUIRE(hazeMallocMrp(ptrs, 2, 32768) == HAZE_ERROR_CONFIGERR);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeMallocMrp with null ptrs is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    REQUIRE(hazeMallocMrp(nullptr, 4, 32768) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeMallocMrp with wrong size is rejected and allocates nothing", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    const auto &alloc = haze::DeviceAllocator::instance();
+    REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == 0);
+
+    void *ptrs[3] = {reinterpret_cast<void *>(0xA), reinterpret_cast<void *>(0xB),
+                     reinterpret_cast<void *>(0xC)};
+    // ring_dim=4096 -> polynomial bytes = 32768; an 8KB request fails.
+    REQUIRE(hazeMallocMrp(ptrs, 3, 8192) == HAZE_ERROR_ALLOC_TOO_SMALL);
+    hazeGetLastError();
+    // Validation fails before any reservation: ptrs untouched, nothing live.
+    REQUIRE(ptrs[0] == reinterpret_cast<void *>(0xA));
+    REQUIRE(ptrs[2] == reinterpret_cast<void *>(0xC));
+    REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == 0);
+}
+
+TEST_CASE("hazeMallocMrp rolls back reserved polys on a mid-batch failure", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    auto &alloc = haze::DeviceAllocator::instance();
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+
+    // p stays live; r is freed so the batch can recycle it as residue 0.
+    void *p = nullptr;
+    void *r = nullptr;
+    REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&r, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(r) == HAZE_SUCCESS);
+    const size_t live_before = haze::test::AllocatorTestAccess::alloc_set_size(alloc);
+
+    // Wedge a still-live addr (p) in front of the recyclable r: the batch
+    // recycles r for residue 0, then pops p for residue 1 and hits the
+    // "recycled addr already live" desync, forcing rollback of residue 0.
+    haze::test::AllocatorTestAccess::push_front_pool_entry(alloc, haze::to_dev_addr(p));
+
+    void *ptrs[2] = {reinterpret_cast<void *>(0x1111), reinterpret_cast<void *>(0x2222)};
+    REQUIRE(hazeMallocMrp(ptrs, 2, kBytes) == HAZE_ERROR_INTERNAL);
+    hazeGetLastError();
+
+    // Rollback freed the recycled residue: nothing extra is live, ptrs untouched.
+    REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == live_before);
+    REQUIRE(ptrs[0] == reinterpret_cast<void *>(0x1111));
+
+    // Clear the injected corruption before the next case.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeFreeMrp with null ptrs is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeFreeMrp(nullptr, 2) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeFreeMrp with count 0 is a success no-op", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    void *ptrs[1] = {nullptr};
+    REQUIRE(hazeFreeMrp(ptrs, 0) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeFreeMrp skips null entries and frees the rest", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *a = nullptr;
+    void *b = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+
+    void *group[3] = {a, nullptr, b}; // middle entry null -> skipped
+    REQUIRE(hazeFreeMrp(group, 3) == HAZE_SUCCESS);
+
+    // Both real addresses were freed into the pool: the next two allocations
+    // recycle them (proving neither the null entry nor its neighbours were
+    // dropped).
+    void *r0 = nullptr;
+    void *r1 = nullptr;
+    REQUIRE(hazeMalloc(&r0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&r1, kBytes) == HAZE_SUCCESS);
+    REQUIRE((r0 == a || r0 == b));
+    REQUIRE((r1 == a || r1 == b));
+    REQUIRE(r0 != r1);
+    REQUIRE(hazeFree(r0) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(r1) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeMallocMrp rejects an out-of-range count without allocating", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    const auto &alloc = haze::DeviceAllocator::instance();
+    void *ptrs[1] = {reinterpret_cast<void *>(0x1234)};
+
+    // count = SIZE_MAX and count = cap+1 both reject before any reserve, so
+    // the giant reservation is never attempted (no abort, no OOM).
+    REQUIRE(hazeMallocMrp(ptrs, SIZE_MAX, 32768) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeMallocMrp(ptrs, static_cast<size_t>(haze::kMaxCiphertextModuli) + 1, 32768) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+
+    REQUIRE(ptrs[0] == reinterpret_cast<void *>(0x1234)); // untouched
+    REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == 0);
+}
+
+TEST_CASE("hazeFreeMrp rejects an out-of-range count", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    void *ptrs[1] = {nullptr};
+    REQUIRE(hazeFreeMrp(ptrs, SIZE_MAX) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeFreeMrp(ptrs, static_cast<size_t>(haze::kMaxCiphertextModuli) + 1) ==
+            HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeFree of an already-freed address is rejected", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *p = nullptr;
+    REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(p) == HAZE_ERROR_UNKNOWN_ADDRESS); // double free rejected
+    hazeGetLastError();
+}
+
+TEST_CASE("malloc after free does not alias a second live allocation", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *a = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    void *b = nullptr;
+    void *c = nullptr;
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS); // recycles a
+    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS); // fresh
+    REQUIRE(b != c);                                 // two live allocations, no aliasing
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeFreeMrp of an already-freed group is rejected and does not alias", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *g[1] = {};
+    REQUIRE(hazeMallocMrp(g, 1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeFreeMrp(g, 1) == HAZE_SUCCESS);
+    REQUIRE(hazeFreeMrp(g, 1) == HAZE_ERROR_UNKNOWN_ADDRESS); // double free rejected
+    hazeGetLastError();
+
+    // The rejected second free must not have re-pooled the addr: two live
+    // allocations get distinct addresses.
+    void *x = nullptr;
+    void *y = nullptr;
+    REQUIRE(hazeMalloc(&x, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&y, kBytes) == HAZE_SUCCESS);
+    REQUIRE(x != y);
+    REQUIRE(hazeFree(x) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(y) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeFreeMrp frees every entry and returns the first error", "[unit]") {
+    constexpr size_t kBytes = 4096 * sizeof(uint64_t);
+    auto &alloc = haze::DeviceAllocator::instance();
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    void *a = nullptr;
+    void *bad = nullptr;
+    void *b = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&bad, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    // Pre-free `bad` so freeing it again inside the group is an error.
+    REQUIRE(hazeFree(bad) == HAZE_SUCCESS);
+    const size_t live_before = haze::test::AllocatorTestAccess::alloc_set_size(alloc); // a, b
+
+    void *group[3] = {a, bad, b};
+    REQUIRE(hazeFreeMrp(group, 3) == HAZE_ERROR_UNKNOWN_ADDRESS); // first (and only) error
+    hazeGetLastError();
+    // Despite bad's error, a and b were still freed: two fewer live.
+    REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == live_before - 2);
 }
