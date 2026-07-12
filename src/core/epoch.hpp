@@ -52,17 +52,12 @@ class EpochState {
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Finalize the epoch: tag outputs, write the trace, dispatch replay,
-    // populate shadow buffers. No-op when not recording, and a TRUE no-op
-    // when recording but nothing is tagged — the recording (vendor trace,
-    // bindings, counters) stays open so a later tag + flush still
-    // materializes everything recorded so far.
+    // populate shadow buffers; a TRUE no-op when not recording or nothing
+    // is tagged (the open recording and bindings survive).
     std::expected<void, HazeInternalError> replay_and_populate() noexcept HAZE_EXCLUDES(mutex_);
 
-    // Finalize the epoch and write the program directory (trace + inputs +
-    // templates + cryptocontext) WITHOUT dispatching replay or populating
-    // shadow buffers. Backs hazeWriteProgram() for the record-here /
-    // replay-elsewhere (e.g. FPGA) flow. No-op when not recording or when
-    // nothing is tagged (same true-no-op rule as replay_and_populate).
+    // Finalize and write the program directory WITHOUT replay/population
+    // (backs hazeWriteProgram); same true-no-op rule as replay_and_populate.
     std::expected<void, HazeInternalError> write_program() noexcept HAZE_EXCLUDES(mutex_);
 
     // Declare `addr` an output of the active recording (backs hazeTagOutput).
@@ -77,12 +72,8 @@ class EpochState {
     // Initialise the compiler backend (idempotent) and start recording.
     void ensure_recording_locked() HAZE_REQUIRES(mutex_);
 
-    // Gate for the compute preludes: error when ensure_recording_locked
-    // could not start a recording (backend init failed or refused). Maps
-    // the montgomery/bit-reversal-on-local refusal to UnsupportedDataFormat
-    // (HAZE_ERROR_NOT_SUPPORTED, matching the haze.h contract that the
-    // first compute or flush reports it) and everything else to
-    // BackendInitFailed.
+    // Compute-prelude gate: UnsupportedDataFormat for the
+    // montgomery/bit-reversal-on-local refusal, BackendInitFailed otherwise.
     std::expected<void, HazeInternalError> require_recording_locked() const noexcept
         HAZE_REQUIRES(mutex_);
 
@@ -95,14 +86,10 @@ class EpochState {
     // opposed to a value the trace produces (compute result / D2D copy).
     bool is_input_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
-    // Bind `addr` to `poly`. Output-hood is declared explicitly via
-    // tag_output_locked, not inferred from being computed. `modulus` records
-    // the residue's real modulus (kCopyModulus = "unknown") so a later
-    // pass-through copy / eval-form automorph of this address can recover and
-    // bind it; see recorded_modulus_locked. Also evicts any stale shadow
-    // bytes at `addr` (epoch -> allocator direction): the address now holds
-    // an unmaterialized result, so a D2H before tag+flush must report
-    // OutputNotFlushed rather than silently returning pre-compute bytes.
+    // Bind `addr` to `poly` (output-hood stays explicit via tag_output_locked);
+    // `modulus` records the residue's real modulus (kCopyModulus = unknown)
+    // for later copy/automorph recovery, and any stale shadow at `addr` is
+    // evicted so a pre-flush D2H reports OutputNotFlushed.
     void store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                      uint64_t modulus = kCopyModulus) noexcept
         HAZE_REQUIRES(mutex_);
@@ -165,9 +152,8 @@ class EpochState {
     // and write_program; returns the binding error without clearing state.
     std::expected<void, HazeInternalError> tag_pending_outputs_locked() HAZE_REQUIRES(mutex_);
 
-    // Shared finalize entry: true no-op when idle or nothing is tagged
-    // (the recording stays open), else tag outputs and materialize.
-    // run_replay=false stops after the trace is written (hazeWriteProgram).
+    // Shared finalize entry: true no-op when idle or nothing tagged, else
+    // tag outputs and materialize (run_replay=false stops after the trace).
     std::expected<void, HazeInternalError> finalize_locked(bool run_replay) HAZE_REQUIRES(mutex_);
 
     // Write the trace (step 1) and, when run_replay, dispatch replay + populate
@@ -285,12 +271,9 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
 // Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;
 
-// D2D as a recorded pass-through copy: promotes `src` if needed and binds `dst`
-// to the result. Always starts an epoch (no pre-recording byte-copy escape
-// hatch). `dst` must be a live allocation and `count` must equal the
-// configured polynomial size — the recorded IR copies whole polynomials, so a
-// partial D2D is unexpressible and rejected (InvalidArgument; count above the
-// polynomial size is PolySizeMismatch, matching H2D/D2H).
+// D2D as a recorded pass-through copy (always starts an epoch): `dst` must
+// be live and `count` must equal the polynomial size — partial D2D is
+// unexpressible in the IR (InvalidArgument; oversized is PolySizeMismatch).
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t count) noexcept;
 

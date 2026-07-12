@@ -27,10 +27,9 @@
 namespace haze {
 
 // Each compute prelude validates the destination, opens an EpochSession,
-// confirms the recording actually started (require_recording_locked — a
-// failed backend init must surface here, not as a silent HAZE_SUCCESS),
+// confirms the recording started (a failed backend init surfaces here),
 // resolves the modulus, copies sources from the polymap, dispatches the
-// FHETCH op, and stores the result. Sources are returned by value so
+// FHETCH op, and stores the result; sources are copied by value so
 // in-place ops (dst == src1 [== src2]) stay correct.
 
 // Polynomial-polynomial-modulus. Used by hazeAdd, hazeSub, hazeMul.

@@ -80,16 +80,14 @@ HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
 // compute -> hazeTagOutput(ptr) -> hazeFlush() -> hazeMemcpy(D2H). A D2H of an
 // address that was not tagged-and-flushed returns HAZE_ERROR_NOT_FLUSHED. A
 // plain H2D-then-D2H round-trip needs no tag/flush — the uploaded bytes are
-// returned as-is. Writing a compute result or D2D copy into an address drops
-// any bytes previously uploaded there: a D2H of that address errors with
-// HAZE_ERROR_NOT_FLUSHED until it is tagged and flushed (never returns the
-// stale pre-compute bytes).
+// returned as-is. A compute result or D2D copy landing on an address drops
+// any previously uploaded bytes there — D2H then errors with
+// HAZE_ERROR_NOT_FLUSHED until tag+flush, never returning stale data.
 //
-// D2D copies whole polynomials: `count` must equal the configured polynomial
-// size (a partial device-to-device copy is not expressible in the recorded
-// IR); other counts return HAZE_ERROR_SIZE_MISMATCH (count > polynomial) or
-// HAZE_ERROR_INVALID_VALUE (partial). H2D/D2H accept count <= polynomial
-// size. A zero `count` (memcpy or memset) is a success no-op, per CUDA.
+// D2D copies whole polynomials: `count` must equal the polynomial size
+// (partial copies are unexpressible in the IR — HAZE_ERROR_INVALID_VALUE;
+// oversized is HAZE_ERROR_SIZE_MISMATCH). H2D/D2H accept count <= polynomial
+// size, and a zero `count` (memcpy or memset) is a success no-op, per CUDA.
 
 HAZE_API hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
                                 hazeMemcpyKind kind) HAZE_NOEXCEPT;
@@ -203,10 +201,8 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  *
  * Defaults to "local" if hazeSetTarget is not called.
  *
- * The target is baked into the compiler backend when the first H2D or compute
- * call brings it up; calling hazeSetTarget after that point returns
- * HAZE_ERROR_CONFIGERR (it can no longer take effect — previously it was
- * silently ignored). Call hazeDeviceReset to re-target.
+ * The target is baked in when the first H2D/compute brings the backend up;
+ * later calls return HAZE_ERROR_CONFIGERR (hazeDeviceReset re-opens it).
  *
  * Behaviour-by-target dispatch happens inside hazeFlush(), which finalises the
  * recording, runs the replay, and populates the tagged outputs' shadow buffers;
@@ -231,10 +227,8 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
  *     but rejected at replay.
  *
  * Off by default; set before the first H2D or compute. Unlike hazeSetTarget,
- * post-init calls are deliberately accepted rather than rejected — toggling a
- * format the active target can't run is detected at the next compute/flush
- * (HAZE_ERROR_NOT_SUPPORTED) and toggling it back off restores the in-flight
- * recording untouched. */
+ * post-init toggles stay accepted: an unrunnable format is reported at the
+ * next compute/flush, and toggling back off keeps the recording intact. */
 HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
 

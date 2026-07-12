@@ -95,18 +95,15 @@ class DeviceAllocator {
     std::expected<DevAddr, HazeInternalError> allocate(size_t bytes) noexcept HAZE_EXCLUDES(mutex_);
     std::expected<void, HazeInternalError> free(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
-    // UnknownAddress unless `addr` is a live allocation. Validation guard
-    // for compute / D2D destinations at the recording layer.
+    // UnknownAddress unless `addr` is a live allocation.
     std::expected<void, HazeInternalError> require_allocated(DevAddr addr) const noexcept
         HAZE_EXCLUDES(mutex_);
 
-    // True while any allocation is live. Config uses this to freeze the
-    // ring dimension once device memory exists.
+    // True while any allocation is live (Config freezes ring_dim on it).
     bool has_live_allocations() const noexcept HAZE_EXCLUDES(mutex_);
 
-    // Drop the shadow entry for `addr` if one exists (no-op otherwise).
-    // Called by the epoch when a compute result / D2D copy re-binds the
-    // address: the stale bytes must not satisfy a pre-flush D2H.
+    // Drop `addr`'s shadow entry if present — stale bytes must not satisfy
+    // a pre-flush D2H after a compute/D2D re-bind.
     void evict_shadow(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Batched allocate/free for an MRP group: the mutex is taken ONCE for
@@ -173,11 +170,9 @@ class DeviceAllocator {
                                                               const void *ptr) const noexcept
         HAZE_EXCLUDES(mutex_);
 
-    // Track an allocation made by hazeHostAlloc so pointer_attributes
-    // can report it as HOST. The set is keyed by raw void* — pointers
-    // are unique because posix_memalign returns distinct addresses.
-    // unregister returns whether the pointer was registered, so
-    // hazeFreeHost can refuse to free() a pointer haze never allocated.
+    // Track hazeHostAlloc pointers for pointer_attributes; unregister
+    // returns whether the pointer was registered so hazeFreeHost can
+    // refuse foreign pointers.
     void register_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
     [[nodiscard]] bool unregister_host_pointer(const void *ptr) noexcept HAZE_EXCLUDES(mutex_);
 

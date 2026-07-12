@@ -29,17 +29,14 @@ namespace haze {
 // MRP; store_mrp_locked decomposes one back into per-addr stores. Both run
 // under the EpochSession lock (HAZE_REQUIRES enforces it via clang TSA).
 
-// Validate a caller-supplied CRT base: len in [1, kMaxCiphertextModuli]
-// (an absurd len would throw std::length_error out of a reserve inside a
-// noexcept frame), every prime non-zero (a 0 reaches % 0 in the FBC math
-// — SIGFPE), and no duplicates (fhetch keys MRP residues by modulus, so a
-// duplicate silently aliases residues; in hazeModDown it over-runs the
-// caller's dst array). InvalidArgument on any violation.
+// Validate a caller-supplied CRT base — len in [1, kMaxCiphertextModuli],
+// non-zero primes, no duplicates — returning InvalidArgument on violation
+// (each rule blocks a real crash: length_error through noexcept, % 0, and
+// residue aliasing / the hazeModDown dst overrun).
 std::expected<void, HazeInternalError> validate_moduli_base(const uint64_t *base,
                                                             std::size_t len) noexcept;
 
 // UnknownAddress unless every ptrs[0..len) is a live device allocation.
-// Fast-fail guard for MRP destination arrays before any IR is recorded.
 std::expected<void, HazeInternalError> require_allocated_array(void *const *ptrs,
                                                                std::size_t len) noexcept;
 

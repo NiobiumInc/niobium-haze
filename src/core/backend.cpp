@@ -118,8 +118,7 @@ bool CompilerBackend::is_initialized() const noexcept {
 }
 
 void CompilerBackend::start_epoch() noexcept {
-    // start_epoch is vendor-side bookkeeping (address-counter snapshot);
-    // catch so an unexpected vendor throw cannot cross a noexcept frame.
+    // Catch so a vendor throw cannot cross this noexcept frame.
     try {
         niobium::compiler().start_epoch();
     } catch (...) {
@@ -138,12 +137,9 @@ void CompilerBackend::start_recording() noexcept {
 }
 
 bool CompilerBackend::stop_recording() noexcept {
-    // Use stop() (not stop_epoch()): stop() writes both the .fhetch trace
-    // and fhetch_replay.json that nbcc_fhetch_replay needs for HTTP dispatch.
-    // Haze is single-epoch per epoch().reset(), so stop() also matches
-    // semantically. stop() does filesystem I/O (create_directories, trace
-    // write) that can throw — e.g. an unwritable program directory — so
-    // catch here: this frame is reached through noexcept hazeFlush.
+    // Upstream stop() (not stop_epoch()) also writes fhetch_replay.json;
+    // its filesystem I/O can throw, and this frame is reached through
+    // noexcept hazeFlush.
     try {
         return niobium::compiler().stop();
     } catch (...) {

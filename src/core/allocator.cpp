@@ -235,11 +235,8 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
         return std::unexpected(HazeInternalError::NoData);
     }
     if (data_it->second.size() != ring_dim) {
-        // Invariant break: every write path sizes the shadow to
-        // poly_bytes_/sizeof(uint64_t), which equals ring_dim under
-        // allocate()'s single-poly-size contract. Surface, don't paper
-        // over — and leave the entry intact (checked before extraction)
-        // so an error path never destroys the caller's bytes.
+        // Invariant break; checked before extraction so the error path
+        // never destroys the caller's bytes.
         record_internal_error(HazeInternalError::ShadowSizeMismatch,
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::ShadowSizeMismatch);
@@ -293,8 +290,7 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, co
         return std::unexpected(HazeInternalError::UnknownAddress);
     if (count > poly_bytes_)
         return std::unexpected(HazeInternalError::PolySizeMismatch);
-    // A zero-byte copy is a success no-op (CUDA parity) — in particular
-    // it must NOT fabricate an all-zero shadow entry.
+    // Zero-byte copy: success no-op, no fabricated shadow entry.
     if (count == 0)
         return {};
     // Lazy-create or overwrite the shadow entry. Sized to the full
@@ -348,10 +344,8 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
             "DeviceAllocator::copy_to_host: no shadow bytes (tag output + flush?)");
         return std::unexpected(HazeInternalError::OutputNotFlushed);
     }
-    // Defense-in-depth: bound the read by the entry's actual size, not just
-    // poly_bytes_ — a stale entry sized under an older ring_dim must never
-    // become a heap overread (Config also refuses ring-dim changes while
-    // allocations are live, so this should be unreachable).
+    // Bound by the entry's actual size so a stale-sized shadow can never
+    // become a heap overread (should be unreachable given the config freeze).
     if (count > data_it->second.size() * sizeof(uint64_t)) {
         record_internal_error(HazeInternalError::ShadowSizeMismatch,
                               "DeviceAllocator::copy_to_host: shadow smaller than count");

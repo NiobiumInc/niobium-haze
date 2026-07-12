@@ -54,8 +54,7 @@ std::expected<void, HazeInternalError> validate(const hazeBasisConvertParams &p)
                               "hazeBasisConvert: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Bound lengths, reject zero moduli (FBC math divides by them) and
-    // duplicates (residues are keyed by modulus).
+    // Zero moduli divide the FBC math; duplicates alias residue keys.
     if (auto v = validate_moduli_base(p.src_base, p.src_base_len); !v)
         return v;
     return validate_moduli_base(p.dst_base, p.dst_base_len);
@@ -68,10 +67,8 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
                               "hazeModDown: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Duplicate-free bases are load-bearing here: a duplicated rescale
-    // prime strips only one unique src prime, so the result would carry
-    // MORE residues than (src_base_len - rescale_base_len) and the store
-    // loop would run off the end of the caller's dst pointer array.
+    // Duplicate rescale primes strip only one unique src prime each — the
+    // result would then overrun the caller's dst pointer array.
     if (auto v = validate_moduli_base(p.src_base, p.src_base_len); !v)
         return v;
     if (auto v = validate_moduli_base(p.rescale_base, p.rescale_base_len); !v)
@@ -108,8 +105,7 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
         return v;
     if (auto v = validate_moduli_base(p.p_base, p.p_base_len); !v)
         return v;
-    // Each digit lifts to src_base ∪ p_base; a prime in both would give the
-    // union a duplicate residue key.
+    // Digits lift to src_base ∪ p_base; overlap duplicates a residue key.
     std::unordered_set<uint64_t> src_set(p.src_base, p.src_base + p.src_base_len);
     for (size_t j = 0; j < p.p_base_len; ++j) {
         if (src_set.contains(p.p_base[j])) {
@@ -123,11 +119,8 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
                               "hazeModUp: digit_count above device modulus envelope");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // digit_bases is a flat concatenation; the per-digit lengths must sum
-    // to digit_bases_total_len. Catch caller miscounts before slicing
-    // out-of-bounds. Every digit prime must also come from src_base:
-    // mr_subset(x, digit) indexes x by modulus and THROWS std::out_of_range
-    // on a foreign prime — inside a noexcept frame that is std::terminate.
+    // Per-digit lengths must sum to digit_bases_total_len, and every digit
+    // prime must come from src_base (mr_subset throws on a foreign prime).
     size_t sum = 0;
     size_t offset = 0;
     for (size_t i = 0; i < p.digit_count; ++i) {

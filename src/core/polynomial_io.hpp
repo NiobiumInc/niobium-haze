@@ -18,14 +18,8 @@
 
 namespace haze {
 
-// Read the integer-component values out of a fhetch::Polynomial via
-// Polynomial::int_data(). Replaces the old save_polynomial_json +
-// temp-file + JSON-parse round-trip, which collided across concurrent
-// haze processes (deterministic /tmp filenames) and could throw
-// filesystem errors through the noexcept flush path.
-//
-// Returns true on success and populates `out` with the values; false if
-// the polynomial is invalid, non-integer, or empty. Never throws.
+// Read a fhetch::Polynomial's integer values via int_data(); true on
+// success, false for an invalid/non-integer/empty polynomial, never throws.
 bool decode_result_values(const niobium::fhetch::Polynomial &p,
                           std::vector<uint64_t> &out) noexcept;
 

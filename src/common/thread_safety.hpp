@@ -33,18 +33,12 @@
 // Lock order (canonical statement — other files reference this one).
 // HAZE's mutexes form a DAG; acquire only along its edges:
 //
-//   EpochState::mutex_        -> { Config::mutex_, DeviceAllocator::mutex_ }
-//   Config::mutex_            -> DeviceAllocator::mutex_
+//   EpochState::mutex_           -> { Config::mutex_, DeviceAllocator::mutex_ }
+//   Config::mutex_               -> DeviceAllocator::mutex_
 //   CompilerBackend::init_mutex_ -> Config::mutex_
 //
-// Equivalently: epoch < backend-init < config < allocator. The allocator
-// is a LEAF — allocator-side code must call into no other component while
-// holding its lock. Config must never call into EpochState or the backend.
-// The live edges today: compute preludes read config() under the epoch
-// lock; Config::set_ring_dimension updates the allocator pool under the
-// config lock; backend init reads config() under init_mutex_. The
-// architectural separation (no back-calls) is the primary enforcement,
-// with TSAN as the runtime backstop.
+// The allocator is a leaf: allocator code must not call into any other
+// component while holding its lock; TSAN is the runtime backstop.
 
 // Clang's thread-safety attributes are exposed as GNU-style
 // __attribute__((...)), not C++11 [[clang::...]]. The macro names

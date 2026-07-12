@@ -31,43 +31,32 @@ class CompilerBackend {
   public:
     static CompilerBackend &instance() noexcept;
 
-    // Initialize the underlying compiler with program / target metadata
-    // pulled from Config. Idempotent and safe to call concurrently;
-    // first caller wins, others no-op once init completes. Returns true
-    // on success; false if the underlying init throws or the config is
-    // unsupported (montgomery/bit-reversal on the local target). On
-    // failure the backend stays uninitialized: ensure_recording_locked
-    // then refuses to start a recording, and the compute preludes'
-    // require_recording_locked gate turns that into an error at the C
-    // ABI instead of running against an uninitialized compiler.
+    // Idempotent, concurrency-safe compiler init from Config metadata;
+    // false on throw or unsupported config, and the compute preludes'
+    // require_recording_locked gate then surfaces the failure at the ABI.
     [[nodiscard]] bool ensure_initialized() noexcept;
 
     // True iff ensure_initialized() has completed successfully.
     bool is_initialized() const noexcept;
 
-    // Mark the start of a new epoch (memorizes the polynomial-ID base so
-    // post-materialize resets snap back to it). Call before start_recording.
+    // Mark a new epoch (snapshots the polynomial-ID base); call before
+    // start_recording.
     static void start_epoch() noexcept;
 
     // Begin a new recording (after init or after stop_recording).
     static void start_recording() noexcept;
 
-    // Finalize the current recording: write the per-epoch .fhetch trace
-    // plus fhetch_replay.json, and reset vendor state for the next epoch
-    // (upstream Compiler::stop(); the upstream stop_epoch() writes only
-    // the trace). Returns true on success. Does NOT trigger replay;
-    // callers materializing results must invoke replay() afterwards.
+    // Finalize the recording via upstream stop() — writes the .fhetch
+    // trace AND fhetch_replay.json (upstream stop_epoch() writes only the
+    // trace); replay() must be invoked separately.
     static bool stop_recording() noexcept;
 
-    // Drop the vendor-side captured input/output registries. Mirrors
-    // haze's per-epoch state clear so a failed materialize can't leak
-    // captures into the next epoch.
+    // Drop the vendor-side captured input/output registries (mirrors
+    // haze's per-epoch clear).
     static void clear_captured() noexcept;
 
-    // Full vendor-compiler reset (niobium::compiler().reset()). Only for
-    // hazeDeviceReset teardown — runs after every haze-side reset so
-    // live queries (e.g. the bridge's program-directory lookup) still see
-    // the pre-reset state.
+    // Full vendor-compiler reset; hazeDeviceReset teardown only, and last
+    // so live queries (bridge program-dir lookup) see pre-reset state.
     static void reset_compiler() noexcept;
 
     // Trigger replay of the most recently recorded epoch. Behaviour

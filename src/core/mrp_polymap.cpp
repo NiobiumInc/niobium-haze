@@ -95,10 +95,8 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
 std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
                                                         const fhetch::MRP &mrp,
                                                         const uint64_t *base, std::size_t len) {
-    // Last-line destination check: every dst must be a live allocation
-    // (fast-fail copies of this check run in the compute preludes, but
-    // basis-convert paths compute their dst layout from the params, so
-    // guard again where the writes actually happen).
+    // Guard where the writes happen: basis-convert paths derive their dst
+    // layout from params, so the prelude checks don't cover them.
     if (auto live = require_allocated_array(dst_polys, len); !live)
         return live;
     std::vector<DevAddr> addrs;
@@ -155,8 +153,7 @@ std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const 
 std::expected<void, HazeInternalError>
 copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t count,
                           const uint64_t *base, std::size_t len) noexcept {
-    // Same contract as the SRP D2D: whole-polynomial copies only, live
-    // destinations, and a validated base (recorded per-residue under base[i]).
+    // Same contract as SRP D2D: validated base, live dsts, whole-poly count.
     if (auto v = validate_moduli_base(base, len); !v)
         return v;
     if (auto live = require_allocated_array(dst, len); !live)

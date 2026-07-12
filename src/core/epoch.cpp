@@ -44,11 +44,8 @@ EpochState &EpochState::instance() noexcept {
 }
 
 void EpochState::ensure_recording_locked() {
-    // EpochSession initializes the backend before locking; the
-    // is_initialized() check guards the failed-init case (recording_
-    // stays false and require_recording_locked reports the failure).
-    // start_epoch() before start() memorizes the polynomial-ID base so
-    // post-materialize resets snap back to it; without it, IDs drift.
+    // On failed init recording_ stays false and require_recording_locked
+    // reports it; start_epoch() before start() keeps polynomial IDs stable.
     if (backend().is_initialized() && !recording_) {
         CompilerBackend::start_epoch();
         CompilerBackend::start_recording();
@@ -59,9 +56,8 @@ void EpochState::ensure_recording_locked() {
 std::expected<void, HazeInternalError> EpochState::require_recording_locked() const noexcept {
     if (recording_)
         return {};
-    // Distinguish the two ways ensure_recording_locked can refuse: an
-    // unsupported data-format + local-target combination (user-actionable,
-    // NOT_SUPPORTED per the haze.h contract) vs. the backend init throwing.
+    // Name the user-actionable refusal (montgomery/bit-reversal on local)
+    // distinctly from a backend-init failure.
     if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "require_recording_locked (montgomery/bit_reversal require a "
@@ -158,10 +154,8 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
         addr_modulus_.insert_or_assign(addr, modulus);
     else
         addr_modulus_.erase(addr);
-    // The addr now names an unmaterialized result: drop any stale shadow
-    // bytes (e.g. an earlier H2D upload) so a D2H before tag+flush errors
-    // with OutputNotFlushed instead of silently returning the old bytes.
-    // Epoch -> allocator is the permitted lock direction.
+    // Drop stale shadow bytes so a pre-flush D2H errors with
+    // OutputNotFlushed instead of returning the old bytes.
     allocator().evict_shadow(addr);
 }
 
@@ -222,10 +216,8 @@ std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr ds
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr addr) noexcept {
-    // Recording could not start (backend init failed or refused). H2D is
-    // still a valid shadow write — pure H2D-then-D2H round trips need no
-    // backend — so skip the fhetch tag rather than failing the memcpy;
-    // a later compute on this addr fails at require_recording_locked.
+    // No recording (failed init): keep H2D as a plain shadow write and skip
+    // the tag; a later compute fails at require_recording_locked.
     if (!recording_) {
         return {};
     }
@@ -395,15 +387,10 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
         return {}; // nothing to finalize
     }
 
-    // No outputs to materialize — recording was opened (e.g., by H2D's
-    // eager-tag) but no compute output was tagged. TRUE no-op: leave the
-    // recording, poly bindings, and counters untouched. Anything else
-    // desyncs haze from the vendor compiler — the vendor's start() no-ops
-    // while a recording is running, so a half-clear here would leave the
-    // old trace nodes buffered and the next flush would write BOTH epochs'
-    // nodes into one trace (and tagging a pre-flush result would report
-    // SourceUnavailable because its binding was dropped). Compute-free D2H
-    // reads keep working either way — they never touch the recording.
+    // Nothing tagged: TRUE no-op (recording, bindings, counters survive).
+    // A half-clear desyncs haze from the vendor recorder — its start()
+    // no-ops while running, so the next flush would emit both epochs'
+    // nodes into one trace.
     if (pending_outputs_.empty() && pending_mrp_groups_.empty()) {
         return {};
     }
@@ -575,10 +562,8 @@ std::expected<void, HazeInternalError> flush() noexcept {
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t count) noexcept {
-    // D2D is a recorded pass-through copy; the source is already tagged (H2D
-    // eager-tag or a prior compute), so the copy carries no real modulus.
-    // The recorded IR copies whole polynomials — validate dst liveness and
-    // an exact-polynomial count up front (see epoch.hpp for the contract).
+    // Recorded pass-through copy of a whole polynomial: validate dst
+    // liveness and exact-polynomial count up front (contract in epoch.hpp).
     if (auto live = allocator().require_allocated(dst); !live)
         return std::unexpected(live.error());
     if (count == 0)
@@ -590,8 +575,7 @@ std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAdd
     }
     if (count < poly_bytes) {
         record_internal_error(HazeInternalError::InvalidArgument,
-                              "copy_device_to_device: partial D2D is not expressible in the "
-                              "recorded IR (count must equal the polynomial size)");
+                              "copy_device_to_device: partial D2D not expressible in IR");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     EpochSession session;
