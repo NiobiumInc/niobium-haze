@@ -12,34 +12,26 @@
 // from the Product.
 #include "core/stream.hpp"
 
+#include "core/device_state.hpp"
+
 #include <atomic>
-#include <cstdint>
 #include <haze/haze_types.h>
 #include <new>
 
 namespace haze {
 
-namespace {
-std::atomic<uint64_t> g_next_stream_id{1};
-std::atomic<uint64_t> g_next_event_id{1};
-} // namespace
-
 hazeStream_t stream_create() noexcept {
     return new (std::nothrow)
-        haze_stream_s{.id = g_next_stream_id.fetch_add(1, std::memory_order_relaxed)};
+        haze_stream_s{.id = device_state().next_stream_id.fetch_add(1, std::memory_order_relaxed)};
 }
 
 void stream_destroy(hazeStream_t s) noexcept {
     delete s; // delete nullptr is well-defined and a no-op
 }
 
-void streams_reset() noexcept {
-    g_next_stream_id.store(1, std::memory_order_relaxed);
-}
-
 hazeEvent_t event_create() noexcept {
     return new (std::nothrow)
-        haze_event_s{.id = g_next_event_id.fetch_add(1, std::memory_order_relaxed)};
+        haze_event_s{.id = device_state().next_event_id.fetch_add(1, std::memory_order_relaxed)};
 }
 
 void event_destroy(hazeEvent_t e) noexcept {
@@ -49,10 +41,6 @@ void event_destroy(hazeEvent_t e) noexcept {
 void event_record(hazeEvent_t /*e*/) noexcept {
     // Events do not model ordering in this runtime (CUDA-shape parity
     // only); recording is a no-op.
-}
-
-void events_reset() noexcept {
-    g_next_event_id.store(1, std::memory_order_relaxed);
 }
 
 } // namespace haze

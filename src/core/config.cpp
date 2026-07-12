@@ -38,11 +38,6 @@ bool is_supported_ring_dim(uint64_t n) noexcept {
 
 } // namespace
 
-Config &Config::instance() noexcept {
-    static Config inst;
-    return inst;
-}
-
 std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) noexcept {
     if (!is_supported_ring_dim(n))
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -58,13 +53,13 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
     }
     // Live allocations bake in the polynomial size; changing it under them
     // left stale-sized shadows (formerly a heap overread on D2H).
-    if (ring_dim_ != n && DeviceAllocator::instance().has_live_allocations()) {
+    if (ring_dim_ != n && allocator().has_live_allocations()) {
         record_internal_error(HazeInternalError::ConfigLocked,
                               "set_ring_dimension: allocations live; free them or reset first");
         return std::unexpected(HazeInternalError::ConfigLocked);
     }
     ring_dim_ = n;
-    DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
+    allocator().set_polynomial_size(n * sizeof(uint64_t));
     return {};
 }
 

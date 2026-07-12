@@ -43,6 +43,5 @@ int device_active() noexcept;
 std::expected<void, HazeInternalError> device_set_active(int device) noexcept;
 std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *prop,
                                                               int device) noexcept;
-void device_reset() noexcept;
 
 } // namespace haze

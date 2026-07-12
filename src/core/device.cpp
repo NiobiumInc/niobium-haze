@@ -13,6 +13,7 @@
 #include "core/device.hpp"
 
 #include "common/errors.hpp"
+#include "core/device_state.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -32,10 +33,6 @@ inline constexpr int kNumHbmBanks = 8;
 // Config::set_ring_dimension validates against the same range.
 inline constexpr int kNumSupportedRingDims = kMaxRingDimExponent - kMinRingDimExponent + 1;
 
-// Single-device runtime: only one piece of mutable state. Atomic so a
-// hazeGetDevice racing a hazeDeviceReset reads a coherent value without
-// needing a lock (relaxed: no ordering is implied with other state).
-std::atomic<int> g_active_device{0};
 } // namespace
 
 int device_count() noexcept {
@@ -43,14 +40,14 @@ int device_count() noexcept {
 }
 
 int device_active() noexcept {
-    return g_active_device.load(std::memory_order_relaxed);
+    return device_state().active_device.load(std::memory_order_relaxed);
 }
 
 std::expected<void, HazeInternalError> device_set_active(int device) noexcept {
     if (device != 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
-    // g_active_device is initialised to 0, only reset to 0, and the
-    // guard above rejects every non-zero value — no assignment needed.
+    // active_device starts 0 and DeviceState::reset() only stores 0; the
+    // guard above rejects every non-zero value, so no assignment is needed.
     return {};
 }
 
@@ -73,10 +70,6 @@ std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *pr
     prop->maxCiphertextModuli = kMaxCiphertextModuli;
     prop->numHBMBanks = kNumHbmBanks;
     return {};
-}
-
-void device_reset() noexcept {
-    g_active_device.store(0, std::memory_order_relaxed);
 }
 
 } // namespace haze

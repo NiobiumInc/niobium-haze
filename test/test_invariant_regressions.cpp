@@ -5,6 +5,7 @@
 // destinations, no-op flush semantics, CRT base validation, sticky
 // last-error, and the configuration freeze rules.
 
+#include "core/stream.hpp" // haze_stream_s/haze_event_s ids for the reset pin
 #include "integration_helpers.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -494,4 +495,29 @@ TEST_CASE("failed materialize clears the epoch: retag fails, next flush is a no-
     REQUIRE(hazeFree(b) == HAZE_SUCCESS);
     REQUIRE(hazeFree(c) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeDeviceReset restarts stream/event ids and the active device", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeStream_t s1 = nullptr;
+    hazeEvent_t e1 = nullptr;
+    REQUIRE(hazeStreamCreate(&s1) == HAZE_SUCCESS);
+    REQUIRE(hazeEventCreate(&e1) == HAZE_SUCCESS);
+    REQUIRE(s1->id == 1);
+    REQUIRE(e1->id == 1);
+    REQUIRE(hazeStreamDestroy(s1) == HAZE_SUCCESS);
+    REQUIRE(hazeEventDestroy(e1) == HAZE_SUCCESS);
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeStream_t s2 = nullptr;
+    hazeEvent_t e2 = nullptr;
+    REQUIRE(hazeStreamCreate(&s2) == HAZE_SUCCESS);
+    REQUIRE(hazeEventCreate(&e2) == HAZE_SUCCESS);
+    REQUIRE(s2->id == 1); // counters restart, not continue
+    REQUIRE(e2->id == 1);
+    REQUIRE(hazeStreamDestroy(s2) == HAZE_SUCCESS);
+    REQUIRE(hazeEventDestroy(e2) == HAZE_SUCCESS);
+    int dev = -1;
+    REQUIRE(hazeGetDevice(&dev) == HAZE_SUCCESS);
+    REQUIRE(dev == 0);
 }

@@ -33,11 +33,9 @@ namespace haze {
 
 hazeStream_t stream_create() noexcept; // new haze_stream_s, caller owns
 void stream_destroy(hazeStream_t s) noexcept;
-void streams_reset() noexcept;
 
 hazeEvent_t event_create() noexcept;
 void event_destroy(hazeEvent_t e) noexcept;
 void event_record(hazeEvent_t e) noexcept;
-void events_reset() noexcept;
 
 } // namespace haze

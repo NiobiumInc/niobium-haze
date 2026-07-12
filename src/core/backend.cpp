@@ -29,11 +29,6 @@
 
 namespace haze {
 
-CompilerBackend &CompilerBackend::instance() noexcept {
-    static CompilerBackend inst;
-    return inst;
-}
-
 bool CompilerBackend::ensure_initialized() noexcept {
     // Lock-free fast path for the common case where init has already
     // completed. The acquire load pairs with the release store below so

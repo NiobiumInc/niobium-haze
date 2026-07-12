@@ -34,17 +34,16 @@ namespace haze {
 // "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 
+class DeviceState;
 class EpochState;
-EpochState &epoch() noexcept; // inline definition after the class
+EpochState &epoch() noexcept; // defined in device_state.cpp
 
-// Singleton tracking the polymap, pending outputs, and recording flag for
-// the active epoch; replay_and_populate() drains it at flush time. Public
-// methods take mutex_; _locked variants require it held via EpochSession
-// (enforced by clang -Wthread-safety).
+// Tracks the polymap, pending outputs, and recording flag for the active
+// epoch (a DeviceState member); replay_and_populate() drains it at flush
+// time. Public methods take mutex_; _locked variants require it held via
+// EpochSession (enforced by clang -Wthread-safety).
 class EpochState {
   public:
-    static EpochState &instance() noexcept;
-
     // The mutex itself; EpochSession is the canonical acquirer.
     HazeMutex &mutex() noexcept HAZE_RETURN_CAPABILITY(mutex_) { return mutex_; }
 
@@ -150,6 +149,7 @@ class EpochState {
     EpochState &operator=(const EpochState &) = delete;
 
   private:
+    friend class DeviceState;
     EpochState() = default;
 
     // Tag pending SRP + MRP outputs for fhetch. Shared by replay_and_populate
@@ -200,10 +200,6 @@ class EpochState {
     // Friend so EpochSession's ACQUIRE/RELEASE attributes can name mutex_.
     friend class EpochSession;
 };
-
-inline EpochState &epoch() noexcept {
-    return EpochState::instance();
-}
 
 // RAII guard for compute entry points: brings up the backend, takes the
 // epoch mutex, and enters recording mode for the session lifetime.

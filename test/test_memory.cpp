@@ -321,7 +321,7 @@ TEST_CASE("hazeMallocMrp with null ptrs is rejected", "[unit]") {
 TEST_CASE("hazeMallocMrp with wrong size is rejected and allocates nothing", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    const auto &alloc = haze::DeviceAllocator::instance();
+    const auto &alloc = haze::allocator();
     REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == 0);
 
     void *ptrs[3] = {reinterpret_cast<void *>(0xA), reinterpret_cast<void *>(0xB),
@@ -337,7 +337,7 @@ TEST_CASE("hazeMallocMrp with wrong size is rejected and allocates nothing", "[u
 
 TEST_CASE("hazeMallocMrp rolls back reserved polys on a mid-batch failure", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
-    auto &alloc = haze::DeviceAllocator::instance();
+    auto &alloc = haze::allocator();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
 
@@ -407,7 +407,7 @@ TEST_CASE("hazeFreeMrp skips null entries and frees the rest", "[unit]") {
 TEST_CASE("hazeMallocMrp rejects an out-of-range count without allocating", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    const auto &alloc = haze::DeviceAllocator::instance();
+    const auto &alloc = haze::allocator();
     void *ptrs[1] = {reinterpret_cast<void *>(0x1234)};
 
     // count = SIZE_MAX and count = cap+1 both reject before any reserve, so
@@ -482,7 +482,7 @@ TEST_CASE("hazeFreeMrp of an already-freed group is rejected and does not alias"
 
 TEST_CASE("hazeFreeMrp frees every entry and returns the first error", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
-    auto &alloc = haze::DeviceAllocator::instance();
+    auto &alloc = haze::allocator();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void *a = nullptr;

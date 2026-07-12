@@ -187,6 +187,7 @@ add_library(haze_objs OBJECT
   src/core/basis_convert.cpp
   src/core/config.cpp
   src/core/device.cpp
+  src/core/device_state.cpp
   src/core/epoch.cpp
   src/core/materialize.cpp
   src/core/mrp_polymap.cpp
