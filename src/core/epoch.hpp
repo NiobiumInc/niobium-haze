@@ -34,6 +34,9 @@ namespace haze {
 // "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 
+class EpochState;
+EpochState &epoch() noexcept; // inline definition after the class
+
 // Singleton tracking the polymap, pending outputs, and recording flag for
 // the active epoch; replay_and_populate() drains it at flush time. Public
 // methods take mutex_; _locked variants require it held via EpochSession
@@ -162,11 +165,11 @@ class EpochState {
     std::expected<void, HazeInternalError> finalize_guarded_locked(bool run_replay)
         HAZE_REQUIRES(mutex_);
 
-    // Write the trace (step 1) and, when run_replay, dispatch replay + populate
-    // shadows (steps 2-3). Always resets state at the end so the next epoch
-    // starts clean on success or failure.
-    std::expected<void, HazeInternalError> write_trace_and_replay_locked(bool run_replay)
-        HAZE_REQUIRES(mutex_);
+    // Backend/bridge orchestration for a finalized epoch (stop, replay,
+    // populate shadows); defined in core/materialize.cpp to keep OpenFHE /
+    // replay-bridge includes out of epoch.cpp. Never clears state — the
+    // caller does that after it returns.
+    std::expected<void, HazeInternalError> materialize_epoch(bool run_replay) HAZE_REQUIRES(mutex_);
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 

@@ -451,9 +451,10 @@ control surface (`CompilerBackend`):
   `niobium::compiler()` route through these wrappers only (`backend.cpp` is
   the sole first-party TU that includes `niobium/compiler.h`, besides the
   replay bridge's own init path).
-- The recording-side IR (`fhetch::sr_*`, `tag_input`, `tag_output`,
-  `result`) is emitted directly from `epoch.cpp`, bypassing the backend
-  wrapper.
+- The recording-side IR (`fhetch::sr_*`, `tag_input`, `tag_output`) is
+  emitted directly from `epoch.cpp` / `compute.hpp`, and `fhetch::result`
+  readback lives in `core/materialize.cpp` — the data plane bypasses the
+  backend wrapper.
 
 Recordings land in a per-program directory under the test working
 directory (`build/runs/haze/...`). Each functional epoch produces its own

@@ -455,3 +455,43 @@ TEST_CASE("bridge honors a custom program name for cryptocontext.dat", "[integra
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     fs::remove_all("haze_custom_prog_review");
 }
+
+TEST_CASE("failed materialize clears the epoch: retag fails, next flush is a no-op", "[unit]") {
+    // An unreachable transport target makes replay fail deterministically in
+    // every environment (spawn failure without a compiler; unknown-target
+    // error with one), exercising the materialize error path end to end.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeSetTarget("HAZE_TEST_NO_SUCH_TARGET") == HAZE_SUCCESS);
+    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *c = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> data(kRingDim, 3);
+    REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_ERROR_INTERNAL);
+    hazeGetLastError();
+
+    // Always-clear pin: the failed flush must drop every binding — a re-tag
+    // has nothing to name, the output was never materialized, and a second
+    // flush is an idle no-op instead of replaying a half-torn epoch.
+    REQUIRE(hazeTagOutput(c) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), c, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_ERROR_NOT_FLUSHED);
+    hazeGetLastError();
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}

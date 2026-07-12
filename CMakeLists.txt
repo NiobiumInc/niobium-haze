@@ -188,6 +188,7 @@ add_library(haze_objs OBJECT
   src/core/config.cpp
   src/core/device.cpp
   src/core/epoch.cpp
+  src/core/materialize.cpp
   src/core/mrp_polymap.cpp
   src/core/mrp_registry.cpp
   src/core/polynomial_io.cpp
@@ -225,7 +226,7 @@ target_link_libraries(haze_objs PRIVATE Niobium::fhetch)
 # ---------------------------------------------------------------------------
 # Replay bridge — OpenFHE-using helper that synthesizes CryptoContext +
 # ciphertext templates the compiler-side replay needs, and provides the
-# niobium::fhetch::result(...) overloads libhaze references from epoch.cpp.
+# niobium::fhetch::result(...) overloads libhaze references from core/materialize.cpp.
 # Built as an OBJECT library (see replay_bridge/CMakeLists.txt) so all its TUs
 # (incl. result()) are absorbed unconditionally; its OpenFHE includes stay out
 # of libhaze's own sources.

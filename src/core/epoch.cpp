@@ -18,12 +18,10 @@
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
-#include "core/polynomial_io.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/fhetch_api.h>
 #include <span>
@@ -300,7 +298,11 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
     if (auto tagged = tag_pending_outputs_locked(); !tagged)
         return std::unexpected(tagged.error());
 
-    return write_trace_and_replay_locked(run_replay);
+    // State always resets after materialization so the next epoch starts clean
+    // on success or failure.
+    auto materialized = materialize_epoch(run_replay);
+    clear_state_locked();
+    return materialized;
 }
 
 std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
@@ -324,79 +326,6 @@ std::expected<void, HazeInternalError> EpochState::finalize_guarded_locked(bool 
                               "finalize threw; epoch state cleared");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
-}
-
-std::expected<void, HazeInternalError> EpochState::write_trace_and_replay_locked(bool run_replay) {
-    if (!recording_) {
-        return {};
-    }
-
-    // Step 1: write the trace. The replay_bridge post-recording hook
-    // runs inside the vendor stop(); we drain its failure flag right after.
-    const bool stop_ok = CompilerBackend::stop_recording();
-    if (!stop_ok) {
-        clear_state_locked();
-        record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::write_trace_and_replay_locked (stop_recording)");
-        return std::unexpected(HazeInternalError::BackendReplayFailed);
-    }
-    if (hazeReplayBridgeTakeHookHadError() != 0) {
-        clear_state_locked();
-        record_internal_error(
-            HazeInternalError::BridgeHookFailed,
-            "post_recording_hook reported per-input/output failures (see prior log entries)");
-        return std::unexpected(HazeInternalError::BridgeHookFailed);
-    }
-
-    // hazeWriteProgram() stops here: step 1 has written the full program dir
-    // (.fhetch + inputs + templates + cryptocontext), ready to ship for
-    // out-of-process replay (e.g. on the FPGA host). There is no in-process
-    // result to read back, so skip replay + shadow population.
-    if (!run_replay) {
-        clear_state_locked();
-        return {};
-    }
-
-    // Step 2: dispatch replay. kLocalTarget runs the in-process simulator;
-    // other targets spawn nbcc_fhetch_replay over HTTP — both produce
-    // serialized_probes/<name>.ct for step 3 to read.
-    const bool replay_ok = CompilerBackend::replay();
-    if (!replay_ok) {
-        clear_state_locked();
-        record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::write_trace_and_replay_locked (replay)");
-        return std::unexpected(HazeInternalError::BackendReplayFailed);
-    }
-
-    // Step 3: per-output shadow population. Any failure aborts the
-    // epoch so a stale shadow can't surface as a silent wrong-value D2H.
-    for (auto &[addr, name] : pending_outputs_) {
-        fhetch::Polynomial result_poly;
-        if (!fhetch::result(name, result_poly)) {
-            std::ostringstream body;
-            body << "result('" << name << "') unavailable for addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec;
-            clear_state_locked();
-            record_internal_error(HazeInternalError::BackendOutputMissing, body.str().c_str());
-            return std::unexpected(HazeInternalError::BackendOutputMissing);
-        }
-        std::vector<uint64_t> values;
-        if (!decode_result_values(result_poly, values)) {
-            std::ostringstream body;
-            body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
-                 << to_uintptr(addr) << std::dec;
-            clear_state_locked();
-            record_internal_error(HazeInternalError::BackendOutputDecodeFailed, body.str().c_str());
-            return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
-        }
-        if (auto r = allocator().update_shadow(addr, std::move(values)); !r) {
-            clear_state_locked();
-            return std::unexpected(r.error());
-        }
-    }
-
-    clear_state_locked();
-    return {};
 }
 
 void EpochState::clear_state_locked() noexcept {
