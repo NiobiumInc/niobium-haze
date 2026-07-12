@@ -156,6 +156,11 @@ class EpochState {
     // tag outputs and materialize (run_replay=false stops after the trace).
     std::expected<void, HazeInternalError> finalize_locked(bool run_replay) HAZE_REQUIRES(mutex_);
 
+    // finalize_locked behind a catch-all: a vendor throw becomes an error at
+    // the C ABI instead of terminating through the noexcept flush entries.
+    std::expected<void, HazeInternalError> finalize_guarded_locked(bool run_replay)
+        HAZE_REQUIRES(mutex_);
+
     // Write the trace (step 1) and, when run_replay, dispatch replay + populate
     // shadows (steps 2-3). Always resets state at the end so the next epoch
     // starts clean on success or failure.

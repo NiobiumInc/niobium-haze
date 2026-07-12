@@ -41,10 +41,15 @@ class CompilerBackend {
 
     // Mark a new epoch (snapshots the polynomial-ID base); call before
     // start_recording.
-    static void start_epoch() noexcept;
+    [[nodiscard]] static bool start_epoch() noexcept;
 
     // Begin a new recording (after init or after stop_recording).
-    static void start_recording() noexcept;
+    [[nodiscard]] static bool start_recording() noexcept;
+
+    // Reject a target change once init has baked the target in; otherwise
+    // store it. Serialized against ensure_initialized via init_mutex_ so a
+    // set racing first-compute bring-up cannot be silently ignored.
+    [[nodiscard]] bool try_set_target(const char *target) noexcept;
 
     // Finalize the recording via upstream stop() — writes the .fhetch
     // trace AND fhetch_replay.json (upstream stop_epoch() writes only the
