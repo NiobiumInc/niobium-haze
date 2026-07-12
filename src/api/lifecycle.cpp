@@ -11,47 +11,19 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Process-wide reset orchestration. Each subsystem owns its own reset();
-// reset_all() invokes them in dependency order (epoch first so any
-// pending compute is dropped before the backend / allocator state is
-// torn down).
+// hazeDeviceReset and the flush/tag entry points; the reset orchestration
+// itself lives in DeviceState::reset() (core/device_state.cpp).
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
-#include "core/allocator.hpp"
-#include "core/backend.hpp"
-#include "core/config.hpp"
-#include "core/device.hpp"
+#include "core/device_state.hpp"
 #include "core/epoch.hpp"
-#include "core/stream.hpp"
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
-
-namespace haze {
-
-void reset_all() noexcept {
-    // Clear all internal state first, since we may depend on external object state when clearing
-    // otherwise. hazeReplayBridgeReset queries the compiler's live program
-    // directory, so the vendor-compiler reset must stay LAST.
-    epoch().reset();
-    backend().reset();
-    allocator().reset();
-    config().reset();
-    streams_reset();
-    events_reset();
-    device_reset();
-    hazeReplayBridgeReset();
-
-    // Clear any external state next
-    CompilerBackend::reset_compiler();
-}
-
-} // namespace haze
 
 extern "C" hazeError_t hazeDeviceReset(void) noexcept {
-    haze::reset_all();
+    haze::device_state().reset();
     // Match cudaDeviceReset: also clear the thread-local last-error so
     // callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;

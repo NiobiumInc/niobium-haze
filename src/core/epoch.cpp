@@ -34,11 +34,6 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
-EpochState &EpochState::instance() noexcept {
-    static EpochState inst;
-    return inst;
-}
-
 void EpochState::ensure_recording_locked() {
     // start_epoch() precedes start(); on any failure recording_ stays false so
     // require_recording_locked reports it. If start() fails after start_epoch()

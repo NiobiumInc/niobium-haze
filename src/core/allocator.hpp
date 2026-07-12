@@ -27,6 +27,8 @@
 
 namespace haze {
 
+class DeviceState;
+
 namespace test {
 // Forward declaration for the test peer (Attorney pattern); definition
 // lives under test/ and is never linked into production.
@@ -80,12 +82,6 @@ class AllocatorTestAccess;
 // order and would deadlock.
 class DeviceAllocator {
   public:
-    // HAZE_API on this and `extract_polynomial_components` exports the
-    // symbols from libhaze's hidden-visibility .so so the test binary
-    // can resolve them; encapsulation rests on allocator.hpp living in
-    // src/ (private include path), not on the visibility attribute.
-    HAZE_API static DeviceAllocator &instance() noexcept;
-
     // Configure the pool's polynomial size. Calling with a size different
     // from the current configuration drains the pool. Calling with size 0
     // disables pooling entirely.
@@ -182,6 +178,7 @@ class DeviceAllocator {
     DeviceAllocator &operator=(const DeviceAllocator &) = delete;
 
   private:
+    friend class DeviceState;
     DeviceAllocator() = default;
 
     friend class test::AllocatorTestAccess;
@@ -219,8 +216,7 @@ class DeviceAllocator {
     uintptr_t next_addr_ HAZE_GUARDED_BY(mutex_) = kHbmBase;
 };
 
-inline DeviceAllocator &allocator() noexcept {
-    return DeviceAllocator::instance();
-}
+// Defined in device_state.cpp.
+DeviceAllocator &allocator() noexcept;
 
 } // namespace haze

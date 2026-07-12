@@ -38,16 +38,14 @@ namespace haze {
 // through every comparison site in haze.
 constexpr std::string_view kLocalTarget = "local";
 
+class DeviceState;
+
 // Global FHE-context configuration: ring dimension, ciphertext moduli,
-// twiddle generators. Plus the program/target metadata fed to the
-// compiler at recording-init time.
-//
-// Singleton via instance(). Mutex protects mutating writes; reads are
-// taken under the same lock for consistency with vector resizes.
+// twiddle generators, plus the program/target metadata fed to the compiler
+// at recording-init time. A DeviceState member reached via config(); the
+// mutex covers writes and reads alike (vector resizes).
 class Config {
   public:
-    static Config &instance() noexcept;
-
     // FHE parameters (existing public API).
     std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept
         HAZE_EXCLUDES(mutex_);
@@ -100,6 +98,7 @@ class Config {
     Config &operator=(const Config &) = delete;
 
   private:
+    friend class DeviceState;
     Config() = default;
 
     mutable HazeMutex mutex_;
@@ -122,8 +121,7 @@ class Config {
     bool reduced_noise_ HAZE_GUARDED_BY(mutex_) = false;
 };
 
-inline Config &config() noexcept {
-    return Config::instance();
-}
+// Defined in device_state.cpp (returns the DeviceState member).
+Config &config() noexcept;
 
 } // namespace haze

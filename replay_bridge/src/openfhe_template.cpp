@@ -565,7 +565,7 @@ extern "C" void hazeReplayBridgeReset() noexcept {
 
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
-    // program_dir is queried live — reset_all() runs us before compiler().reset().
+    // program_dir is queried live — DeviceState::reset() runs us before the vendor reset.
     fs::path program_dir;
     try {
         program_dir = niobium::compiler().get_program_directory();

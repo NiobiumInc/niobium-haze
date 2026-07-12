@@ -23,14 +23,14 @@ namespace haze {
 // those route to the linked fhetch "dummy" compiler implicitly. CompilerBackend wraps
 // only the *control* operations: init, recording lifecycle, replay.
 //
+class DeviceState;
+
 // Single concrete class, no virtual dispatch. Backend swap (e.g. to the
 // niobium-fhetch dummy compiler when stable) happens at link time:
 // backend.cpp calls into whichever library supplies the
 // niobium::compiler() symbol.
 class CompilerBackend {
   public:
-    static CompilerBackend &instance() noexcept;
-
     // Idempotent, concurrency-safe compiler init from Config metadata;
     // false on throw or unsupported config, and the compute preludes'
     // require_recording_locked gate then surfaces the failure at the ABI.
@@ -78,6 +78,7 @@ class CompilerBackend {
     CompilerBackend &operator=(const CompilerBackend &) = delete;
 
   private:
+    friend class DeviceState;
     CompilerBackend() = default;
 
     // Atomic flag enables a lock-free fast path on the hot
@@ -87,8 +88,7 @@ class CompilerBackend {
     HazeMutex init_mutex_;
 };
 
-inline CompilerBackend &backend() noexcept {
-    return CompilerBackend::instance();
-}
+// Defined in device_state.cpp (returns the DeviceState member).
+CompilerBackend &backend() noexcept;
 
 } // namespace haze
