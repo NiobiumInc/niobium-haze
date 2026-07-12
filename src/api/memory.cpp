@@ -46,9 +46,8 @@ extern "C" hazeError_t hazeMallocMrp(void **ptrs, size_t num_residues, size_t si
     // ptrs is checked before num_residues, so (NULL, 0) returns INVALID_VALUE.
     if (ptrs == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Bound the residue count to the device modulus envelope before any
-    // reservation so an absurd value cannot throw std::length_error across
-    // this noexcept boundary.
+    // Bound before reserving so an absurd count cannot throw length_error
+    // across this noexcept boundary.
     if (num_residues > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     auto result = haze::allocator().allocate_many(num_residues, size);
@@ -65,8 +64,7 @@ extern "C" hazeError_t hazeFreeMrp(void *const *ptrs, size_t num_residues) noexc
     // ptrs is checked before num_residues, so (NULL, 0) returns INVALID_VALUE.
     if (ptrs == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Bound the residue count before the reservation below (same noexcept
-    // concern as hazeMallocMrp).
+    // Same noexcept bound as hazeMallocMrp.
     if (num_residues > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     // Mirror hazeFree: drop each live address's epoch polymap binding first.
@@ -114,9 +112,8 @@ extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*fla
 extern "C" hazeError_t hazeFreeHost(void *ptr) noexcept {
     if (ptr == nullptr)
         return HAZE_SUCCESS; // match cudaFreeHost(NULL)
-    // Only pointers hazeHostAlloc handed out may reach libc free() — a
-    // device handle (or any foreign pointer) would abort the process
-    // inside the allocator instead of returning an error.
+    // Only hazeHostAlloc pointers may reach libc free(); anything else
+    // would abort the process instead of returning an error.
     if (!haze::allocator().unregister_host_pointer(ptr))
         return set_error(HAZE_ERROR_INVALID_VALUE);
     // posix_memalign-allocated; libc free is the matched deallocator.
@@ -140,8 +137,7 @@ extern "C" hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
         const haze::DevAddr dev = haze::to_dev_addr(dst);
         if (auto h2d = alloc.copy_h2d(dev, src, count); !h2d)
             return set_internal_result(h2d);
-        // Zero-byte H2D is a validated no-op: no shadow bytes were written,
-        // so there is nothing to promote to a fhetch input.
+        // Zero-byte H2D wrote nothing, so there is nothing to tag.
         if (count == 0)
             return HAZE_SUCCESS;
         return set_internal_result(haze::tag_h2d_input(dev));
@@ -188,7 +184,7 @@ extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexce
     const haze::DevAddr dev = haze::to_dev_addr(dev_ptr);
     if (auto result = haze::allocator().memset(dev, value, count); !result)
         return set_internal_result(result);
-    // A zero-byte memset changed nothing — keep the epoch binding too.
+    // Zero-byte memset changed nothing — keep the epoch binding.
     if (count == 0)
         return HAZE_SUCCESS;
     haze::epoch().invalidate(dev);

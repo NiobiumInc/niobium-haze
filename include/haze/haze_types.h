@@ -97,12 +97,6 @@ typedef enum {
     HAZE_ERROR_INTERNAL = 1024, // haze invariant broke or backend failed; see HAZE_DEBUG log
 } hazeError_t;
 
-// Deprecated alias: the pre-rename spelling of HAZE_ERROR_SIZE_MISMATCH.
-// "alloc too small" misled — the same code also fires for a TOO-LARGE
-// allocation and for an oversized memcpy/memset count. Same value (7),
-// source-compatible; new code should use HAZE_ERROR_SIZE_MISMATCH.
-#define HAZE_ERROR_ALLOC_TOO_SMALL HAZE_ERROR_SIZE_MISMATCH
-
 // ---------------------------------------------------------------------------
 // DMA direction
 // Numbering matches CUDA's cudaMemcpyKind value-for-value so callers

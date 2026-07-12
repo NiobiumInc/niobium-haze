@@ -28,10 +28,8 @@ namespace haze {
 
 namespace {
 
-// Power of two within the device envelope (2^kMinRingDimExponent ..
-// 2^kMaxRingDimExponent). The upper bound also protects the
-// n * sizeof(uint64_t) size math below from wrapping (a 2^61+ input
-// used to wrap poly_bytes to 0 and report success).
+// Power of two within the device envelope; the upper bound also keeps
+// n * sizeof(uint64_t) from wrapping.
 bool is_supported_ring_dim(uint64_t n) noexcept {
     if (n < (uint64_t{1} << kMinRingDimExponent) || n > (uint64_t{1} << kMaxRingDimExponent))
         return false;
@@ -58,10 +56,8 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
                               "set_ring_dimension: configured; hazeDeviceReset to change");
         return std::unexpected(HazeInternalError::ConfigLocked);
     }
-    // The polynomial size is baked into every live allocation's shadow
-    // sizing — changing it under them would leave stale-sized entries
-    // (formerly a heap overread on D2H). The contract is "set before the
-    // first hazeMalloc"; enforce it instead of diverging silently.
+    // Live allocations bake in the polynomial size; changing it under them
+    // left stale-sized shadows (formerly a heap overread on D2H).
     if (ring_dim_ != n && DeviceAllocator::instance().has_live_allocations()) {
         record_internal_error(HazeInternalError::ConfigLocked,
                               "set_ring_dimension: allocations live; free them or reset first");

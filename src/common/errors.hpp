@@ -16,10 +16,8 @@
 #include <expected>
 #include <haze/haze_types.h>
 
-// Thread-local last-error state, mirroring CUDA's sticky-error model:
-// failures overwrite it, successful calls leave it untouched, and the
-// public hazeGetLastError reads-and-clears. set_error is the inline
-// writer used at every C ABI failure path.
+// Thread-local last error with CUDA sticky semantics: failures overwrite,
+// successes leave it untouched, hazeGetLastError reads-and-clears.
 extern thread_local hazeError_t g_last_error;
 
 [[nodiscard]] inline hazeError_t set_error(hazeError_t err) noexcept {
@@ -35,9 +33,7 @@ namespace haze {
 enum class HazeInternalError : std::uint8_t {
     InvalidArgument,            // params struct field violates the API contract
     NotConfigured,              // ring_dim / modulus not set when required
-    ConfigLocked,               // configuration frozen (hazeConfigureDevice / live
-                                // allocations / backend already initialized);
-                                // conflicting re-set rejected
+    ConfigLocked,               // configuration frozen; conflicting re-set rejected
     UnknownAddress,             // DevAddr not in the allocator's table
     NoData,                     // address allocated but no H2D / compute output present
     PolySizeMismatch,           // size != configured polynomial size (ring_dim * 8)
@@ -66,11 +62,8 @@ void record_internal_error(HazeInternalError err, const char *context = nullptr)
 
 } // namespace haze
 
-// Translate an internal-error result at the C ABI boundary. Lives at
-// namespace scope so api/ shims can write
-// `return set_internal_result(core_call(...));` directly. Success does
-// NOT touch g_last_error — the sticky-error model (CUDA parity) keeps
-// the last failure readable until hazeGetLastError clears it.
+// Translate an internal-error result at the C ABI boundary; success does
+// not touch the sticky g_last_error.
 [[nodiscard]] inline hazeError_t
 set_internal_result(std::expected<void, haze::HazeInternalError> result) noexcept {
     if (!result)

@@ -21,9 +21,8 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 bool decode_result_values(const fhetch::Polynomial &p, std::vector<uint64_t> &out) noexcept {
-    // int_data() throws std::runtime_error for an invalid or non-integer
-    // polynomial; contain it here — this runs inside the noexcept flush
-    // path (EpochState::write_trace_and_replay_locked).
+    // int_data() throws for invalid/non-integer polynomials; this runs
+    // inside the noexcept flush path.
     try {
         if (!p)
             return false;

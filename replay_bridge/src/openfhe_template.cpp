@@ -505,8 +505,7 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // backend's first-compute bring-up stays authoritative when it does run).
         {
             const std::string target_arg = "--target=" + haze::config().target();
-            // argv[0] mirrors backend.cpp's bring-up: the configured program
-            // name, not a hard-coded "haze".
+            // argv[0] mirrors backend.cpp's bring-up.
             std::string prog_storage = haze::config().program_name();
             std::string target_storage = target_arg;
             std::string no_ring_check_storage = "--no-ring-dim-check";
@@ -523,15 +522,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 
         *picked_modulus = first_tower_modulus(built->cc);
 
-        // Plant the CONFIGURED program name (default "haze") so
-        // cryptocontext.dat lands in the same directory the trace will;
-        // libhaze's later init re-applies the same values, so this stays
-        // idempotent. Hard-coding "haze" here used to orphan
-        // cryptocontext.dat under cwd/haze/ whenever the app had called
-        // hazeSetProgramInfo with a custom name — the trace then landed in
-        // cwd/<name>/ and the replay driver could not load the crypto
-        // context. set_program_info() also resets the program directory to
-        // cwd/<name>, which the pinned-directory re-apply below undoes.
+        // Use the CONFIGURED program name so cryptocontext.dat lands in the
+        // same directory the trace will (a hard-coded "haze" orphaned it
+        // whenever the app set a custom name).
         niobium::compiler().set_program_info(haze::config().program_name(),
                                              haze::config().program_version(),
                                              haze::config().program_description());
@@ -621,10 +614,8 @@ inline Format openfhe_to_fhetch_format(::Format fmt) {
     return fmt == ::Format::COEFFICIENT ? Format::Coefficient : Format::Evaluation;
 }
 
-// Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error.
-// noexcept: the callers (fhetch::result overloads) run inside libhaze's
-// noexcept flush path, and cereal throws on a corrupt/truncated .ct —
-// contain everything here.
+// Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error
+// (cereal throws on a corrupt .ct, and callers sit in the noexcept flush path).
 lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) noexcept {
     try {
         auto dir = niobium::compiler().get_program_directory();
@@ -663,8 +654,7 @@ std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly &np) {
 
 } // namespace
 
-// Each overload is called from libhaze's noexcept flush path; a throw out
-// of OpenFHE / fhetch value plumbing must become `false`, never terminate.
+// Called from the noexcept flush path: any throw must become `false`.
 
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, Polynomial &p) {

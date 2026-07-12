@@ -43,9 +43,8 @@ extern "C" hazeError_t hazeSetProgramInfo(const char *name, const char *version,
 extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
     if (target == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // The target is baked into compiler().init() argv at first-compute
-    // bring-up and never re-read; accepting a later change would silently
-    // ignore it. Fail fast instead — hazeDeviceReset re-opens the window.
+    // The target is baked into compiler().init() at bring-up and never
+    // re-read; fail fast instead of silently ignoring the change.
     if (haze::backend().is_initialized()) {
         haze::record_internal_error(haze::HazeInternalError::ConfigLocked,
                                     "hazeSetTarget: backend already initialized");
