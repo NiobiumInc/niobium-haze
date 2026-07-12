@@ -257,7 +257,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) promotes H2D'd sources and registers the output gr
     }
 
     // No compute op ran, so the D2D fan-out is the only haze_mrp_out_* group;
-    // confirm register_mrp_output_group_locked made it readable as an MRP.
+    // confirm record_mrp_group_locked made it readable as an MRP.
     haze::test::check_mrp_against_per_residue(base, res);
 
     haze::test::free_all_residues(dst);

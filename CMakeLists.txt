@@ -189,6 +189,7 @@ add_library(haze_objs OBJECT
   src/core/device.cpp
   src/core/epoch.cpp
   src/core/mrp_polymap.cpp
+  src/core/mrp_registry.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
   # Shared leaf utilities.
@@ -435,6 +436,7 @@ add_executable(haze_tests
   test/test_replay_bridge_program_dir.cpp
   test/test_hardware_format.cpp
   test/test_invariant_regressions.cpp
+  test/test_mrp_registry.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.
