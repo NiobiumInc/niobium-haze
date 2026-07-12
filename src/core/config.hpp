@@ -49,46 +49,52 @@ class Config {
     static Config &instance() noexcept;
 
     // FHE parameters (existing public API).
-    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept;
-    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept;
+    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept
+        HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept
+        HAZE_EXCLUDES(mutex_);
     std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
-                                                                 uint64_t generator) noexcept;
-    std::expected<void, HazeInternalError> configure_device() noexcept;
+                                                                 uint64_t generator) noexcept
+        HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> configure_device() noexcept HAZE_EXCLUDES(mutex_);
 
-    uint64_t ring_dim() const noexcept;
-    uint64_t modulus(int idx) const noexcept;
+    uint64_t ring_dim() const noexcept HAZE_EXCLUDES(mutex_);
+    uint64_t modulus(int idx) const noexcept HAZE_EXCLUDES(mutex_);
 
     // Program / target metadata fed to the compiler during init. Defaults:
     // name="haze", version="0.1", description="HAZE runtime", target=kLocalTarget.
     std::expected<void, HazeInternalError> set_program_info(const char *name, const char *version,
-                                                            const char *description) noexcept;
-    std::expected<void, HazeInternalError> set_target(const char *target) noexcept;
-    std::string program_name() const noexcept;
-    std::string program_version() const noexcept;
-    std::string program_description() const noexcept;
-    std::string target() const noexcept;
+                                                            const char *description) noexcept
+        HAZE_EXCLUDES(mutex_);
+    std::expected<void, HazeInternalError> set_target(const char *target) noexcept
+        HAZE_EXCLUDES(mutex_);
+    std::string program_name() const noexcept HAZE_EXCLUDES(mutex_);
+    std::string program_version() const noexcept HAZE_EXCLUDES(mutex_);
+    std::string program_description() const noexcept HAZE_EXCLUDES(mutex_);
+    std::string target() const noexcept HAZE_EXCLUDES(mutex_);
 
     // Data-representation toggles (Montgomery form, bit-reversed order), off by
     // default; the local simulator rejects non-ordinary traces at init.
-    void set_montgomery(bool enable) noexcept;
-    void set_bit_reversal(bool enable) noexcept;
-    bool montgomery() const noexcept;
-    bool bit_reversal() const noexcept;
+    void set_montgomery(bool enable) noexcept HAZE_EXCLUDES(mutex_);
+    void set_bit_reversal(bool enable) noexcept HAZE_EXCLUDES(mutex_);
+    bool montgomery() const noexcept HAZE_EXCLUDES(mutex_);
+    bool bit_reversal() const noexcept HAZE_EXCLUDES(mutex_);
 
     // Centered (reduced-noise) FBC variant matching OpenFHE WITH_REDUCED_NOISE,
     // off by default; the HazeEngine constructor enables it for bit-exact parity.
-    void set_reduced_noise(bool enable) noexcept;
-    bool reduced_noise() const noexcept;
+    void set_reduced_noise(bool enable) noexcept HAZE_EXCLUDES(mutex_);
+    bool reduced_noise() const noexcept HAZE_EXCLUDES(mutex_);
 
     // Optional output-directory override. When set, the backend forwards it to
-    // niobium::compiler().set_program_directory() at init, so the project dir
+    // niobium::compiler().set_program_directory() at init, so the program dir
     // (.fhetch + inputs + templates + cryptocontext) lands at this exact path
     // instead of the cwd/<program_name> default. Unset by default.
-    std::expected<void, HazeInternalError> set_program_directory(const char *dir) noexcept;
-    bool has_program_directory() const noexcept;
-    std::string program_directory() const noexcept;
+    std::expected<void, HazeInternalError> set_program_directory(const char *dir) noexcept
+        HAZE_EXCLUDES(mutex_);
+    bool has_program_directory() const noexcept HAZE_EXCLUDES(mutex_);
+    std::string program_directory() const noexcept HAZE_EXCLUDES(mutex_);
 
-    void reset() noexcept;
+    void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     Config(const Config &) = delete;
     Config &operator=(const Config &) = delete;
@@ -97,23 +103,23 @@ class Config {
     Config() = default;
 
     mutable HazeMutex mutex_;
-    uint64_t ring_dim_ = 0;
-    std::vector<uint64_t> moduli_;
-    std::vector<uint64_t> twiddle_generators_;
-    bool configured_ = false;
+    uint64_t ring_dim_ HAZE_GUARDED_BY(mutex_) = 0;
+    std::vector<uint64_t> moduli_ HAZE_GUARDED_BY(mutex_);
+    std::vector<uint64_t> twiddle_generators_ HAZE_GUARDED_BY(mutex_);
+    bool configured_ HAZE_GUARDED_BY(mutex_) = false;
 
     // Defaults applied lazily on first read.
-    std::string program_name_;
-    std::string program_version_;
-    std::string program_description_;
-    std::string target_;
-    std::string program_dir_;
-    bool program_info_set_ = false;
-    bool target_set_ = false;
-    bool program_dir_set_ = false;
-    bool montgomery_ = false;
-    bool bit_reversal_ = false;
-    bool reduced_noise_ = false;
+    std::string program_name_ HAZE_GUARDED_BY(mutex_);
+    std::string program_version_ HAZE_GUARDED_BY(mutex_);
+    std::string program_description_ HAZE_GUARDED_BY(mutex_);
+    std::string target_ HAZE_GUARDED_BY(mutex_);
+    std::string program_dir_ HAZE_GUARDED_BY(mutex_);
+    bool program_info_set_ HAZE_GUARDED_BY(mutex_) = false;
+    bool target_set_ HAZE_GUARDED_BY(mutex_) = false;
+    bool program_dir_set_ HAZE_GUARDED_BY(mutex_) = false;
+    bool montgomery_ HAZE_GUARDED_BY(mutex_) = false;
+    bool bit_reversal_ HAZE_GUARDED_BY(mutex_) = false;
+    bool reduced_noise_ HAZE_GUARDED_BY(mutex_) = false;
 };
 
 inline Config &config() noexcept {

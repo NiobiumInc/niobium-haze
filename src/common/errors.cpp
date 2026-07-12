@@ -25,13 +25,14 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::InvalidArgument:
         return HAZE_ERROR_INVALID_VALUE;
     case HazeInternalError::NotConfigured:
+    case HazeInternalError::ConfigLocked:
         return HAZE_ERROR_CONFIGERR;
     case HazeInternalError::UnknownAddress:
         return HAZE_ERROR_UNKNOWN_ADDRESS;
     case HazeInternalError::NoData:
         return HAZE_ERROR_NO_DATA;
-    case HazeInternalError::AllocTooSmall:
-        return HAZE_ERROR_ALLOC_TOO_SMALL;
+    case HazeInternalError::PolySizeMismatch:
+        return HAZE_ERROR_SIZE_MISMATCH;
     case HazeInternalError::SourceUnavailable:
         return HAZE_ERROR_SOURCE_UNAVAILABLE;
     case HazeInternalError::OutputNotFlushed:
@@ -66,12 +67,14 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "invalid argument";
     case HazeInternalError::NotConfigured:
         return "not configured";
+    case HazeInternalError::ConfigLocked:
+        return "configuration locked (already configured / in use); conflicting re-set rejected";
     case HazeInternalError::UnknownAddress:
         return "unknown address";
     case HazeInternalError::NoData:
         return "no data";
-    case HazeInternalError::AllocTooSmall:
-        return "allocation too small";
+    case HazeInternalError::PolySizeMismatch:
+        return "size does not match configured polynomial size (ring_dim * sizeof(uint64_t))";
     case HazeInternalError::BackendInitFailed:
         return "backend init failed";
     case HazeInternalError::BackendReplayFailed:
@@ -93,7 +96,7 @@ const char *internal_error_name(HazeInternalError err) noexcept {
     case HazeInternalError::PoolMapDesync:
         return "pool/map desync";
     case HazeInternalError::SourceUnavailable:
-        return "compute / D2D source has no shadow data and no poly_map_ binding";
+        return "compute / D2D source was never written: hazeMemcpy(H2D) or compute into it first";
     case HazeInternalError::OutputNotFlushed:
         return "D2H read of address with no materialized bytes (tag output + flush before D2H)";
     case HazeInternalError::UnsupportedDataFormat:

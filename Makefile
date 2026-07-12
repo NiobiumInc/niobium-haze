@@ -14,8 +14,6 @@
 #                            does not need to be initialised.
 #   OPENFHE_INSTALL_DIR      Where OpenFHE is installed (libs + headers).
 #                            Defaults to <fhetch>/vendor/lib/openfhe.
-#   JSON_INCLUDE_DIR         nlohmann/json single_include directory.
-#                            Empty -> use niobium-fhetch's vendored copy.
 #   EXTERNAL_OPENFHE         1 if a parent built OpenFHE and pointed
 #                            OPENFHE_INSTALL_DIR at it; we skip the openfhe
 #                            build target chain.
@@ -80,8 +78,6 @@ endif
 # + OPENFHE_INSTALL_DIR=<path>.
 OPENFHE_DIR         ?= $(FHETCH_DIR)/vendor/openfhe
 OPENFHE_INSTALL_DIR ?= $(FHETCH_DIR)/vendor/lib/openfhe
-JSON_INCLUDE_DIR    ?=
-
 EXTERNAL_OPENFHE ?= 0
 ifeq ($(EXTERNAL_OPENFHE),1)
   OPENFHE_BUILD_DEP :=
@@ -109,7 +105,6 @@ endif
 
 # CMake -D flags emitted only when the corresponding override is set.
 CMAKE_FHETCH_DIR_FLAG       := $(if $(NIOBIUM_HAZE_FHETCH_DIR),-DNIOBIUM_HAZE_FHETCH_DIR="$(NIOBIUM_HAZE_FHETCH_DIR)")
-CMAKE_JSON_INCLUDE_DIR_FLAG := $(if $(JSON_INCLUDE_DIR),-DJSON_INCLUDE_DIR="$(JSON_INCLUDE_DIR)")
 
 # Path to a built niobium-compiler checkout (must contain
 # build/nbcc_fhetch_replay). Haze does NOT vendor the compiler — set this
@@ -261,8 +256,7 @@ config: $(OPENFHE_BUILD_DEP) $(STOCK_OPENFHE_BUILD_DEP) ## Configure haze (uses 
 		-DOPENFHE_INSTALL_DIR="$(OPENFHE_INSTALL_DIR)" \
 		-DHAZE_BUILD_E2E_TESTS=$(HAZE_BUILD_E2E_TESTS) \
 		-DHAZE_TEST_OPENFHE_DIR="$(STOCK_OPENFHE_INSTALL_DIR)" \
-		$(CMAKE_FHETCH_DIR_FLAG) \
-		$(CMAKE_JSON_INCLUDE_DIR_FLAG)
+		$(CMAKE_FHETCH_DIR_FLAG)
 
 build: config ## Build haze (uses MODE)
 	cmake --build "$(BUILD_DIR)" -j $(NUM_CPUS) --config $(CMAKE_CONFIG)

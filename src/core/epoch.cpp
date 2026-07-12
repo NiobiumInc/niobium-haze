@@ -27,7 +27,6 @@
 #include <expected>
 #include <haze/replay_bridge.h>
 #include <ios>
-#include <niobium/compiler.h>
 #include <niobium/fhetch_api.h>
 #include <span>
 #include <sstream>
@@ -46,15 +45,32 @@ EpochState &EpochState::instance() noexcept {
 
 void EpochState::ensure_recording_locked() {
     // EpochSession initializes the backend before locking; the
-    // is_initialized() check guards future code paths that might bypass
-    // EpochSession. start_epoch() before start() memorizes the
-    // polynomial-ID base so post-materialize resets snap back to it;
-    // without it, IDs drift.
+    // is_initialized() check guards the failed-init case (recording_
+    // stays false and require_recording_locked reports the failure).
+    // start_epoch() before start() memorizes the polynomial-ID base so
+    // post-materialize resets snap back to it; without it, IDs drift.
     if (backend().is_initialized() && !recording_) {
-        niobium::compiler().start_epoch();
+        CompilerBackend::start_epoch();
         CompilerBackend::start_recording();
         recording_ = true;
     }
+}
+
+std::expected<void, HazeInternalError> EpochState::require_recording_locked() const noexcept {
+    if (recording_)
+        return {};
+    // Distinguish the two ways ensure_recording_locked can refuse: an
+    // unsupported data-format + local-target combination (user-actionable,
+    // NOT_SUPPORTED per the haze.h contract) vs. the backend init throwing.
+    if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
+        record_internal_error(HazeInternalError::UnsupportedDataFormat,
+                              "require_recording_locked (montgomery/bit_reversal require a "
+                              "transport target such as FUNC_SIM)");
+        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
+    }
+    record_internal_error(HazeInternalError::BackendInitFailed,
+                          "require_recording_locked: backend init failed; compute cannot record");
+    return std::unexpected(HazeInternalError::BackendInitFailed);
 }
 
 void EpochState::evict_mrp_group_locked(const std::string &name) noexcept {
@@ -142,6 +158,11 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
         addr_modulus_.insert_or_assign(addr, modulus);
     else
         addr_modulus_.erase(addr);
+    // The addr now names an unmaterialized result: drop any stale shadow
+    // bytes (e.g. an earlier H2D upload) so a D2H before tag+flush errors
+    // with OutputNotFlushed instead of silently returning the old bytes.
+    // Epoch -> allocator is the permitted lock direction.
+    allocator().evict_shadow(addr);
 }
 
 uint64_t EpochState::recorded_modulus_locked(DevAddr addr) const noexcept {
@@ -201,6 +222,13 @@ std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr ds
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr addr) noexcept {
+    // Recording could not start (backend init failed or refused). H2D is
+    // still a valid shadow write — pure H2D-then-D2H round trips need no
+    // backend — so skip the fhetch tag rather than failing the memcpy;
+    // a later compute on this addr fails at require_recording_locked.
+    if (!recording_) {
+        return {};
+    }
     // Both guards below cover invariants that the H2D entry point has
     // already enforced (copy_h2d requires alloc_set_ membership and a
     // configured poly_bytes_, so by the time this runs ring_dim is set
@@ -368,18 +396,22 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
     }
 
     // No outputs to materialize — recording was opened (e.g., by H2D's
-    // eager-tag) but no compute followed. The shadow buffer holds the
-    // current bytes; skip the write/replay entirely so the bridge crypto
-    // context isn't a prerequisite for compute-free D2H reads.
+    // eager-tag) but no compute output was tagged. TRUE no-op: leave the
+    // recording, poly bindings, and counters untouched. Anything else
+    // desyncs haze from the vendor compiler — the vendor's start() no-ops
+    // while a recording is running, so a half-clear here would leave the
+    // old trace nodes buffered and the next flush would write BOTH epochs'
+    // nodes into one trace (and tagging a pre-flush result would report
+    // SourceUnavailable because its binding was dropped). Compute-free D2H
+    // reads keep working either way — they never touch the recording.
     if (pending_outputs_.empty() && pending_mrp_groups_.empty()) {
-        clear_state_locked();
         return {};
     }
 
     if (auto tagged = tag_pending_outputs_locked(); !tagged)
         return std::unexpected(tagged.error());
 
-    return do_materialize_locked(run_replay);
+    return write_trace_and_replay_locked(run_replay);
 }
 
 std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
@@ -387,23 +419,23 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
     return finalize_locked(/*run_replay=*/true);
 }
 
-std::expected<void, HazeInternalError> EpochState::materialize_only() noexcept {
+std::expected<void, HazeInternalError> EpochState::write_program() noexcept {
     HazeLockGuard lock(mutex_);
     return finalize_locked(/*run_replay=*/false);
 }
 
-std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool run_replay) {
+std::expected<void, HazeInternalError> EpochState::write_trace_and_replay_locked(bool run_replay) {
     if (!recording_) {
         return {};
     }
 
     // Step 1: write the trace. The replay_bridge post-recording hook
-    // runs inside stop_epoch; we drain its failure flag right after.
-    const bool stop_ok = CompilerBackend::stop_epoch();
+    // runs inside the vendor stop(); we drain its failure flag right after.
+    const bool stop_ok = CompilerBackend::stop_recording();
     if (!stop_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::do_materialize_locked (stop_epoch)");
+                              "EpochState::write_trace_and_replay_locked (stop_recording)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
     if (hazeReplayBridgeTakeHookHadError() != 0) {
@@ -414,7 +446,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
         return std::unexpected(HazeInternalError::BridgeHookFailed);
     }
 
-    // hazeWriteProgram() stops here: step 1 has written the full project dir
+    // hazeWriteProgram() stops here: step 1 has written the full program dir
     // (.fhetch + inputs + templates + cryptocontext), ready to ship for
     // out-of-process replay (e.g. on the FPGA host). There is no in-process
     // result to read back, so skip replay + shadow population.
@@ -430,7 +462,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
     if (!replay_ok) {
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
-                              "EpochState::do_materialize_locked (replay)");
+                              "EpochState::write_trace_and_replay_locked (replay)");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 
@@ -447,7 +479,7 @@ std::expected<void, HazeInternalError> EpochState::do_materialize_locked(bool ru
             return std::unexpected(HazeInternalError::BackendOutputMissing);
         }
         std::vector<uint64_t> values;
-        if (!extract_polynomial_values(result_poly, name, values)) {
+        if (!decode_result_values(result_poly, values)) {
             std::ostringstream body;
             body << "failed to extract values for output '" << name << "' at addr 0x" << std::hex
                  << to_uintptr(addr) << std::dec;
@@ -483,7 +515,7 @@ void EpochState::clear_state_locked() noexcept {
     mrp_out_name_counter_ = 0;
     // Mirror clears to libnbfhetch so a failed materialise can't leak
     // captures into the next epoch; pairs with EpochSession's setup.
-    niobium::compiler().clear_captured();
+    CompilerBackend::clear_captured();
 }
 
 std::string EpochState::mrp_group_name_locked(bool output, DevAddr leading) {
@@ -518,7 +550,7 @@ std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size
 }
 
 std::expected<void, HazeInternalError> write_program() noexcept {
-    return epoch().materialize_only();
+    return epoch().write_program();
 }
 
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
@@ -542,10 +574,29 @@ std::expected<void, HazeInternalError> flush() noexcept {
 }
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
-                                                             size_t /*count*/) noexcept {
+                                                             size_t count) noexcept {
     // D2D is a recorded pass-through copy; the source is already tagged (H2D
     // eager-tag or a prior compute), so the copy carries no real modulus.
+    // The recorded IR copies whole polynomials — validate dst liveness and
+    // an exact-polynomial count up front (see epoch.hpp for the contract).
+    if (auto live = allocator().require_allocated(dst); !live)
+        return std::unexpected(live.error());
+    if (count == 0)
+        return {}; // zero-byte copy: validated success no-op, nothing recorded
+    const size_t poly_bytes = allocator().polynomial_size();
+    if (count > poly_bytes) {
+        record_internal_error(HazeInternalError::PolySizeMismatch, "copy_device_to_device");
+        return std::unexpected(HazeInternalError::PolySizeMismatch);
+    }
+    if (count < poly_bytes) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "copy_device_to_device: partial D2D is not expressible in the "
+                              "recorded IR (count must equal the polynomial size)");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return std::unexpected(rec.error());
     return epoch().copy_result_locked(dst, src);
 }
 

@@ -206,10 +206,6 @@ target_include_directories(haze_objs
     # control surface). The bridge target isn't defined until the
     # add_subdirectory below, so name its public include dir directly here.
     ${CMAKE_CURRENT_SOURCE_DIR}/replay_bridge/include
-    # niobium-fhetch's JSON_INCLUDE_DIR cache var is PRIVATE on its
-    # target, so haze (a downstream consumer) doesn't inherit it.
-    # polynomial_io.cpp uses nlohmann/json — same vendored copy.
-    ${JSON_INCLUDE_DIR}
 )
 
 target_compile_definitions(haze_objs PRIVATE HAZE_BUILDING_LIBRARY)
@@ -438,6 +434,7 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
   test/test_hardware_format.cpp
+  test/test_invariant_regressions.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
   # `ops.cpp` is the shared per-mode operation library these tests build on.

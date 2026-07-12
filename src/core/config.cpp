@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 #include "core/allocator.hpp"
+#include "core/device.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -27,8 +28,14 @@ namespace haze {
 
 namespace {
 
+// Power of two within the device envelope (2^kMinRingDimExponent ..
+// 2^kMaxRingDimExponent). The upper bound also protects the
+// n * sizeof(uint64_t) size math below from wrapping (a 2^61+ input
+// used to wrap poly_bytes to 0 and report success).
 bool is_supported_ring_dim(uint64_t n) noexcept {
-    return (n != 0) && ((n & (n - 1)) == 0);
+    if (n < (uint64_t{1} << kMinRingDimExponent) || n > (uint64_t{1} << kMaxRingDimExponent))
+        return false;
+    return (n & (n - 1)) == 0;
 }
 
 } // namespace
@@ -46,8 +53,20 @@ std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) no
     // order is Config -> Allocator; the allocator never calls back into
     // Config, so this direction cannot deadlock.
     HazeLockGuard lock(mutex_);
-    if (configured_ && ring_dim_ != n)
-        return std::unexpected(HazeInternalError::NotConfigured);
+    if (configured_ && ring_dim_ != n) {
+        record_internal_error(HazeInternalError::ConfigLocked,
+                              "set_ring_dimension: configured; hazeDeviceReset to change");
+        return std::unexpected(HazeInternalError::ConfigLocked);
+    }
+    // The polynomial size is baked into every live allocation's shadow
+    // sizing — changing it under them would leave stale-sized entries
+    // (formerly a heap overread on D2H). The contract is "set before the
+    // first hazeMalloc"; enforce it instead of diverging silently.
+    if (ring_dim_ != n && DeviceAllocator::instance().has_live_allocations()) {
+        record_internal_error(HazeInternalError::ConfigLocked,
+                              "set_ring_dimension: allocations live; free them or reset first");
+        return std::unexpected(HazeInternalError::ConfigLocked);
+    }
     ring_dim_ = n;
     DeviceAllocator::instance().set_polynomial_size(n * sizeof(uint64_t));
     return {};
@@ -62,7 +81,7 @@ std::expected<void, HazeInternalError> Config::set_modulus(int idx, uint64_t mod
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= moduli_.size() || moduli_[i] != modulus)
-            return std::unexpected(HazeInternalError::NotConfigured);
+            return std::unexpected(HazeInternalError::ConfigLocked);
         return {};
     }
     // Reject sparse writes — every index from 0 to idx-1 must already
@@ -88,7 +107,7 @@ std::expected<void, HazeInternalError> Config::set_twiddle_generator(int idx,
     if (configured_) {
         const auto i = static_cast<size_t>(idx);
         if (i >= twiddle_generators_.size() || twiddle_generators_[i] != generator)
-            return std::unexpected(HazeInternalError::NotConfigured);
+            return std::unexpected(HazeInternalError::ConfigLocked);
         return {};
     }
     if (std::cmp_less_equal(twiddle_generators_.size(), idx)) {

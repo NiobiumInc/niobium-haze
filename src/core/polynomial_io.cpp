@@ -13,73 +13,21 @@
 #include "core/polynomial_io.hpp"
 
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <niobium/fhetch_api.h>
-#include <nlohmann/json.hpp>
-#include <string>
-#include <string_view>
 #include <vector>
 
 namespace haze {
 
 namespace fhetch = niobium::fhetch;
-namespace fs = std::filesystem;
-using nlohmann::json;
 
-namespace {
-
-// Walk a JSON tree to find the first "values" array. fhetch's
-// save_polynomial_json output structure is opaque to HAZE — using a
-// recursive walk keeps us tolerant of layout changes.
-const json *find_values_array(const json &node) {
-    if (node.is_object()) {
-        if (auto it = node.find("values"); it != node.end() && it->is_array()) {
-            return &*it;
-        }
-        for (const auto &kv : node.items()) {
-            if (const json *found = find_values_array(kv.value()))
-                return found;
-        }
-    } else if (node.is_array()) {
-        for (const auto &v : node) {
-            if (const json *found = find_values_array(v))
-                return found;
-        }
-    }
-    return nullptr;
-}
-
-} // namespace
-
-bool extract_polynomial_values(const fhetch::Polynomial &p, std::string_view tag,
-                               std::vector<uint64_t> &out) {
-    const auto tmp =
-        fs::temp_directory_path() / (std::string("haze_result_") + std::string(tag) + ".json");
-    struct RemoveOnExit {
-        fs::path path;
-        ~RemoveOnExit() { fs::remove(path); }
-    } cleanup{tmp};
-
-    if (!fhetch::save_polynomial_json(p, tmp))
-        return false;
-
-    std::ifstream f(tmp);
-    if (!f)
-        return false;
-
-    json doc;
+bool decode_result_values(const fhetch::Polynomial &p, std::vector<uint64_t> &out) noexcept {
+    // int_data() throws std::runtime_error for an invalid or non-integer
+    // polynomial; contain it here — this runs inside the noexcept flush
+    // path (EpochState::write_trace_and_replay_locked).
     try {
-        f >> doc;
-    } catch (...) {
-        return false;
-    }
-
-    const json *values = find_values_array(doc);
-    if (values == nullptr)
-        return false;
-    try {
-        out = values->get<std::vector<uint64_t>>();
+        if (!p)
+            return false;
+        out = p.int_data();
     } catch (...) {
         return false;
     }

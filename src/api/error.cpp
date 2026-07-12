@@ -39,10 +39,10 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
         return "unknown device address";
     case HAZE_ERROR_NO_DATA:
         return "no data at device address";
-    case HAZE_ERROR_ALLOC_TOO_SMALL:
-        return "allocation size below polynomial size";
+    case HAZE_ERROR_SIZE_MISMATCH:
+        return "size does not match configured polynomial size (ring_dim * sizeof(uint64_t))";
     case HAZE_ERROR_SOURCE_UNAVAILABLE:
-        return "compute / D2D source has no shadow data and no poly_map_ binding";
+        return "compute / D2D source was never written: hazeMemcpy(H2D) or compute into it first";
     case HAZE_ERROR_NOT_FLUSHED:
         return "D2H of an untagged / unflushed address (tag output + hazeFlush first)";
     case HAZE_ERROR_INTERNAL:

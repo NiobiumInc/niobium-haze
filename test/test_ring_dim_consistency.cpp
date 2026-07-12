@@ -58,7 +58,7 @@ inline void h2d(void *dev, const std::vector<uint64_t> &src) {
 } // namespace
 
 // (1) Construction-time ring_dim is preserved end-to-end at the canonical N.
-// The pertinent property is that stop_epoch() doesn't fire RootOfUnity
+// The pertinent property is that stop_recording() doesn't fire RootOfUnity
 // with a bogus 2*N — a Polynomial reaching tag_input with ring_dim ≠
 // 4096 would surface as an `m=962` abort from OpenFHE's NTT-table
 // generation.

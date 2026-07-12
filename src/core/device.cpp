@@ -14,6 +14,7 @@
 
 #include "common/errors.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <expected>
@@ -26,13 +27,15 @@ inline constexpr int kDeviceCount = 1;
 inline constexpr size_t kHbmSize = 16ULL * 1024 * 1024 * 1024; // 16 GB
 inline constexpr int kNumRegisters = 64;
 inline constexpr int kNumHbmBanks = 8;
-// Ring dimension exponents 10..16 → N = 1024..65536.
-inline constexpr int kSupportedRingDimExponents[] = {10, 11, 12, 13, 14, 15, 16};
-inline constexpr int kNumSupportedRingDims =
-    static_cast<int>(sizeof(kSupportedRingDimExponents) / sizeof(kSupportedRingDimExponents[0]));
+// Ring dimension exponents kMinRingDimExponent..kMaxRingDimExponent
+// (N = 1024..65536); the envelope constants live in device.hpp so
+// Config::set_ring_dimension validates against the same range.
+inline constexpr int kNumSupportedRingDims = kMaxRingDimExponent - kMinRingDimExponent + 1;
 
-// Single-device runtime: only one piece of mutable state.
-int g_active_device = 0;
+// Single-device runtime: only one piece of mutable state. Atomic so a
+// hazeGetDevice racing a hazeDeviceReset reads a coherent value without
+// needing a lock (relaxed: no ordering is implied with other state).
+std::atomic<int> g_active_device{0};
 } // namespace
 
 int device_count() noexcept {
@@ -40,7 +43,7 @@ int device_count() noexcept {
 }
 
 int device_active() noexcept {
-    return g_active_device;
+    return g_active_device.load(std::memory_order_relaxed);
 }
 
 std::expected<void, HazeInternalError> device_set_active(int device) noexcept {
@@ -65,7 +68,7 @@ std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *pr
     prop->numRegisters = kNumRegisters;
     prop->numSupportedRingDims = kNumSupportedRingDims;
     for (int i = 0; i < kNumSupportedRingDims; i++) {
-        prop->supportedRingDimExponents[i] = kSupportedRingDimExponents[i];
+        prop->supportedRingDimExponents[i] = kMinRingDimExponent + i;
     }
     prop->maxCiphertextModuli = kMaxCiphertextModuli;
     prop->numHBMBanks = kNumHbmBanks;
@@ -73,7 +76,7 @@ std::expected<void, HazeInternalError> device_fill_properties(hazeDeviceProp *pr
 }
 
 void device_reset() noexcept {
-    g_active_device = 0;
+    g_active_device.store(0, std::memory_order_relaxed);
 }
 
 } // namespace haze

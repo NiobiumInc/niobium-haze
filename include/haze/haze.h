@@ -46,7 +46,7 @@ HAZE_API hazeError_t hazeDeviceCanAccessPeer(int *can_access, int device, int pe
 // the configured polynomial size (= ring_dim * sizeof(uint64_t)). Calls
 // before hazeSetRingDimension return HAZE_ERROR_CONFIGERR; calls with a
 // size that does not match the configured polynomial size return
-// HAZE_ERROR_INVALID_VALUE. Non-polynomial host-side scratch should use
+// HAZE_ERROR_SIZE_MISMATCH. Non-polynomial host-side scratch should use
 // hazeHostAlloc (or ordinary host allocation).
 //
 // Async variants (hazeMallocAsync, hazeFreeAsync, hazeMemcpyAsync,
@@ -80,7 +80,16 @@ HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
 // compute -> hazeTagOutput(ptr) -> hazeFlush() -> hazeMemcpy(D2H). A D2H of an
 // address that was not tagged-and-flushed returns HAZE_ERROR_NOT_FLUSHED. A
 // plain H2D-then-D2H round-trip needs no tag/flush — the uploaded bytes are
-// returned as-is.
+// returned as-is. Writing a compute result or D2D copy into an address drops
+// any bytes previously uploaded there: a D2H of that address errors with
+// HAZE_ERROR_NOT_FLUSHED until it is tagged and flushed (never returns the
+// stale pre-compute bytes).
+//
+// D2D copies whole polynomials: `count` must equal the configured polynomial
+// size (a partial device-to-device copy is not expressible in the recorded
+// IR); other counts return HAZE_ERROR_SIZE_MISMATCH (count > polynomial) or
+// HAZE_ERROR_INVALID_VALUE (partial). H2D/D2H accept count <= polynomial
+// size. A zero `count` (memcpy or memset) is a success no-op, per CUDA.
 
 HAZE_API hazeError_t hazeMemcpy(void *dst, const void *src, size_t count,
                                 hazeMemcpyKind kind) HAZE_NOEXCEPT;
@@ -101,35 +110,37 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
-// Per-residue (MRP) allocation. hazeMallocMrp reserves `count` device
+// Per-residue (MRP) allocation. hazeMallocMrp reserves `num_residues` device
 // polynomials for one MRP group and writes their addresses into
-// `ptrs[0..count)`. `count` is the group's residue count (the `base_len`
-// passed to the MRP compute ops); `size` is the bytes per residue and must
-// equal the configured polynomial size (ring_dim * sizeof(uint64_t)) — same
-// rule and same error (HAZE_ERROR_ALLOC_TOO_SMALL) as hazeMalloc, and
+// `ptrs[0..num_residues)`. `num_residues` is the group's residue count (the
+// `base_len` passed to the MRP compute ops); `size` is the bytes per residue
+// and must equal the configured polynomial size (ring_dim * sizeof(uint64_t))
+// — same rule and same error (HAZE_ERROR_SIZE_MISMATCH) as hazeMalloc, and
 // hazeSetRingDimension must precede the first allocation (else
 // HAZE_ERROR_CONFIGERR). The group is reserved under a single allocator lock
-// rather than `count` separate hazeMalloc calls. Like hazeMalloc/hazeFree,
-// these are pure allocator operations and are not recorded into the trace.
+// rather than `num_residues` separate hazeMalloc calls. Like
+// hazeMalloc/hazeFree, these are pure allocator operations and are not
+// recorded into the trace.
 //
 // Partial-failure rollback: if the i-th reservation fails, the 0..i-1 already
 // reserved are freed and the error returned, so nothing leaks and `ptrs` is
-// left unwritten. On success every ptrs[j] is non-null. `count == 0` is a
-// success no-op (empty group), but `ptrs == NULL` is checked first, so
-// (NULL, 0) returns HAZE_ERROR_INVALID_VALUE; a `count` above the device
-// modulus envelope (hazeDeviceProp::maxCiphertextModuli) is rejected the same
-// way rather than attempting an unbounded reservation.
-HAZE_API hazeError_t hazeMallocMrp(void **ptrs, size_t count, size_t size) HAZE_NOEXCEPT;
+// left unwritten. On success every ptrs[j] is non-null. `num_residues == 0`
+// is a success no-op (empty group), but `ptrs == NULL` is checked first, so
+// (NULL, 0) returns HAZE_ERROR_INVALID_VALUE; a `num_residues` above the
+// device modulus envelope (hazeDeviceProp::maxCiphertextModuli) is rejected
+// the same way rather than attempting an unbounded reservation.
+HAZE_API hazeError_t hazeMallocMrp(void **ptrs, size_t num_residues, size_t size) HAZE_NOEXCEPT;
 
-// Free the `count`-residue MRP group in `ptrs[0..count)` (addresses from
-// hazeMallocMrp or any `count` hazeMalloc results) under a single allocator
-// lock. Every address is freed even if one fails; the first error is
-// returned. NULL entries are skipped, matching hazeFree(NULL). Freeing an
-// address that is not currently allocated (e.g. a double free) returns
-// HAZE_ERROR_UNKNOWN_ADDRESS. `count == 0` is a no-op, but `ptrs == NULL` is
-// checked first so (NULL, 0) returns HAZE_ERROR_INVALID_VALUE; a `count`
-// above the device modulus envelope is rejected the same way.
-HAZE_API hazeError_t hazeFreeMrp(void *const *ptrs, size_t count) HAZE_NOEXCEPT;
+// Free the `num_residues`-residue MRP group in `ptrs[0..num_residues)`
+// (addresses from hazeMallocMrp or any `num_residues` hazeMalloc results)
+// under a single allocator lock. Every address is freed even if one fails;
+// the first error is returned. NULL entries are skipped, matching
+// hazeFree(NULL). Freeing an address that is not currently allocated (e.g. a
+// double free) returns HAZE_ERROR_UNKNOWN_ADDRESS. `num_residues == 0` is a
+// no-op, but `ptrs == NULL` is checked first so (NULL, 0) returns
+// HAZE_ERROR_INVALID_VALUE; a `num_residues` above the device modulus
+// envelope is rejected the same way.
+HAZE_API hazeError_t hazeFreeMrp(void *const *ptrs, size_t num_residues) HAZE_NOEXCEPT;
 
 // Declare `ptr` an output of the in-flight recording (tagging any one residue
 // of an MRP value tags the whole value). HAZE_ERROR_SOURCE_UNAVAILABLE if `ptr`
@@ -192,6 +203,11 @@ HAZE_API hazeError_t hazeSetProgramDirectory(const char *dir) HAZE_NOEXCEPT;
  *
  * Defaults to "local" if hazeSetTarget is not called.
  *
+ * The target is baked into the compiler backend when the first H2D or compute
+ * call brings it up; calling hazeSetTarget after that point returns
+ * HAZE_ERROR_CONFIGERR (it can no longer take effect — previously it was
+ * silently ignored). Call hazeDeviceReset to re-target.
+ *
  * Behaviour-by-target dispatch happens inside hazeFlush(), which finalises the
  * recording, runs the replay, and populates the tagged outputs' shadow buffers;
  * a subsequent hazeMemcpy(D2H) then reads them. */
@@ -214,7 +230,11 @@ HAZE_API hazeError_t hazeSetTarget(const char *target) HAZE_NOEXCEPT;
  *     exactly one is recordable (for trace inspection via hazeWriteProgram)
  *     but rejected at replay.
  *
- * Off by default; set before the first H2D or compute. */
+ * Off by default; set before the first H2D or compute. Unlike hazeSetTarget,
+ * post-init calls are deliberately accepted rather than rejected — toggling a
+ * format the active target can't run is detected at the next compute/flush
+ * (HAZE_ERROR_NOT_SUPPORTED) and toggling it back off restores the in-flight
+ * recording untouched. */
 HAZE_API hazeError_t hazeSetMontgomery(int enable) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetBitReversal(int enable) HAZE_NOEXCEPT;
 

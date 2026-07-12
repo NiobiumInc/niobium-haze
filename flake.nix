@@ -184,7 +184,6 @@
               "-DBUILD_SHARED_LIBS=OFF"
               "-DNIOBIUM_FHETCH_OPENFHE_STATIC=ON"
               "-DOPENFHE_INSTALL_DIR=${openfhe}"
-              "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
             ];
             # TODO(niobium-fhetch): emit NiobiumFhetchConfig.cmake upstream.
             # It currently installs only NiobiumFhetchTargets.cmake, so
@@ -211,7 +210,6 @@
             # in compile_commands.json with the right -isystem paths for clang-tidy.
             "-DHAZE_BUILD_E2E_TESTS=ON"
             "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
-            "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
           ];
 
           # ctcache packaged from the pinned input. Its entry point is a bash
@@ -299,9 +297,6 @@
               # SHARED into that exe only; never absorbed into libhaze.so).
               "-DHAZE_BUILD_E2E_TESTS=ON"
               "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
-              # polynomial_io.cpp uses nlohmann/json. fhetch's JSON_INCLUDE_DIR
-              # only propagates via add_subdirectory, not find_package; pass it.
-              "-DJSON_INCLUDE_DIR=${fhetchSrc}/vendor/json/single_include"
               # TODO(haze): add install() rules upstream. Without them cmake
               # skips its install RPATH rewrite, so bake the install RPATH at
               # build time (@loader_path on darwin, $ORIGIN on linux). The stock

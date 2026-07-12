@@ -14,28 +14,19 @@
 
 #include <cstdint>
 #include <niobium/fhetch_api.h>
-#include <string_view>
 #include <vector>
 
 namespace haze {
 
-// Read the integer-component values out of a fhetch::Polynomial.
+// Read the integer-component values out of a fhetch::Polynomial via
+// Polynomial::int_data(). Replaces the old save_polynomial_json +
+// temp-file + JSON-parse round-trip, which collided across concurrent
+// haze processes (deterministic /tmp filenames) and could throw
+// filesystem errors through the noexcept flush path.
 //
-// fhetch::Polynomial's data is opaque (PolynomialImpl is forward-declared
-// in the public header). The only public path to inspect a replayed
-// polynomial's values today is to round-trip through
-// fhetch::save_polynomial_json and parse the file. This wrapper hides
-// the round-trip + parse behind a single call so the materialization
-// engine doesn't need to carry that detail.
-//
-// TODO(niobium-fhetch): rewire to Polynomial::int_data() (added
-// upstream in fhetch_api.h) and drop the JSON round-trip. Deferred —
-// the rewire is a separate task.
-//
-// `tag` distinguishes the temp filename when multiple extractions
-// happen in the same epoch. Returns true on success and populates `out`
-// with the values; false on any I/O or parse failure.
-bool extract_polynomial_values(const niobium::fhetch::Polynomial &p, std::string_view tag,
-                               std::vector<uint64_t> &out);
+// Returns true on success and populates `out` with the values; false if
+// the polynomial is invalid, non-integer, or empty. Never throws.
+bool decode_result_values(const niobium::fhetch::Polynomial &p,
+                          std::vector<uint64_t> &out) noexcept;
 
 } // namespace haze

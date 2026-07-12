@@ -14,6 +14,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/allocator.hpp"
 #include "core/config.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
@@ -25,16 +26,22 @@
 
 namespace haze {
 
-// Each compute prelude opens an EpochSession, resolves the modulus, copies
-// sources from the polymap, dispatches the FHETCH op, and stores the result.
-// Sources are returned by value so in-place ops (dst == src1 [== src2]) stay
-// correct.
+// Each compute prelude validates the destination, opens an EpochSession,
+// confirms the recording actually started (require_recording_locked — a
+// failed backend init must surface here, not as a silent HAZE_SUCCESS),
+// resolves the modulus, copies sources from the polymap, dispatches the
+// FHETCH op, and stores the result. Sources are returned by value so
+// in-place ops (dst == src1 [== src2]) stay correct.
 
 // Polynomial-polynomial-modulus. Used by hazeAdd, hazeSub, hazeMul.
 template <auto OpFn>
 std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, DevAddr src2,
                                                     int mod_idx) noexcept {
+    if (auto live = allocator().require_allocated(dst); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -52,7 +59,11 @@ std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, D
 template <auto OpFn>
 std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, uint64_t scalar,
                                                     int mod_idx) noexcept {
+    if (auto live = allocator().require_allocated(dst); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -67,7 +78,11 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
 // Polynomial-modulus. Used by hazeNTT, hazeINTT.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
+    if (auto live = allocator().require_allocated(dst); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     const uint64_t q = config().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -85,7 +100,11 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
                                                    uint64_t index) noexcept {
+    if (auto live = allocator().require_allocated(dst); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     auto p = epoch().lookup_or_create_locked(src);
     if (!p)
         return std::unexpected(p.error());
@@ -108,7 +127,13 @@ template <auto OpFn>
 std::expected<void, HazeInternalError>
 binary_pp_op_mrp(void *const *dst, const void *const *src1, const void *const *src2,
                  const uint64_t *base, std::size_t base_len) noexcept {
+    if (auto v = validate_moduli_base(base, base_len); !v)
+        return v;
+    if (auto live = require_allocated_array(dst, base_len); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     auto m1 = build_mrp_locked(src1, base, base_len);
     if (!m1)
         return std::unexpected(m1.error());
@@ -128,7 +153,13 @@ template <auto OpFn>
 std::expected<void, HazeInternalError>
 binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scalars,
                  const uint64_t *base, std::size_t base_len) noexcept {
+    if (auto v = validate_moduli_base(base, base_len); !v)
+        return v;
+    if (auto live = require_allocated_array(dst, base_len); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
         return std::unexpected(m.error());
@@ -145,7 +176,13 @@ template <auto OpFn>
 std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const void *const *src,
                                                       const uint64_t *base,
                                                       std::size_t base_len) noexcept {
+    if (auto v = validate_moduli_base(base, base_len); !v)
+        return v;
+    if (auto live = require_allocated_array(dst, base_len); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
         return std::unexpected(m.error());
@@ -162,7 +199,13 @@ template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op_mrp(void *const *dst, const void *const *src,
                                                        uint64_t index, const uint64_t *base,
                                                        std::size_t base_len) noexcept {
+    if (auto v = validate_moduli_base(base, base_len); !v)
+        return v;
+    if (auto live = require_allocated_array(dst, base_len); !live)
+        return live;
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
     auto m = build_mrp_locked(src, base, base_len);
     if (!m)
         return std::unexpected(m.error());
