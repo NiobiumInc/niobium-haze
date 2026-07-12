@@ -44,13 +44,14 @@ extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
     if (target == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     // The target is baked into compiler().init() at bring-up and never
-    // re-read; fail fast instead of silently ignoring the change.
-    if (haze::backend().is_initialized()) {
+    // re-read; fail fast instead of silently ignoring the change. The gate is
+    // serialized against init so a set racing bring-up cannot slip through.
+    if (!haze::backend().try_set_target(target)) {
         haze::record_internal_error(haze::HazeInternalError::ConfigLocked,
                                     "hazeSetTarget: backend already initialized");
         return set_error(HAZE_ERROR_CONFIGERR);
     }
-    return set_internal_result(haze::config().set_target(target));
+    return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeSetProgramDirectory(const char *dir) noexcept {

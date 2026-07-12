@@ -44,12 +44,10 @@ EpochState &EpochState::instance() noexcept {
 }
 
 void EpochState::ensure_recording_locked() {
-    // On failed init recording_ stays false and require_recording_locked
+    // On any failure recording_ stays false and require_recording_locked
     // reports it; start_epoch() before start() keeps polynomial IDs stable.
     if (backend().is_initialized() && !recording_) {
-        CompilerBackend::start_epoch();
-        CompilerBackend::start_recording();
-        recording_ = true;
+        recording_ = CompilerBackend::start_epoch() && CompilerBackend::start_recording();
     }
 }
 
@@ -403,12 +401,25 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
 
 std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcept {
     HazeLockGuard lock(mutex_);
-    return finalize_locked(/*run_replay=*/true);
+    return finalize_guarded_locked(/*run_replay=*/true);
 }
 
 std::expected<void, HazeInternalError> EpochState::write_program() noexcept {
     HazeLockGuard lock(mutex_);
-    return finalize_locked(/*run_replay=*/false);
+    return finalize_guarded_locked(/*run_replay=*/false);
+}
+
+std::expected<void, HazeInternalError> EpochState::finalize_guarded_locked(bool run_replay) {
+    // Catch-all so a vendor throw (fhetch tag_output / MRP assembly) inside
+    // the flush chain becomes an error, not std::terminate under the lock.
+    try {
+        return finalize_locked(run_replay);
+    } catch (...) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "finalize threw; epoch state cleared");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
 }
 
 std::expected<void, HazeInternalError> EpochState::write_trace_and_replay_locked(bool run_replay) {
@@ -517,7 +528,12 @@ std::string EpochState::mrp_group_name_locked(bool output, DevAddr leading) {
 
 std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
-    return tag_output_locked(addr);
+    try {
+        return tag_output_locked(addr);
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed, "tag_output threw");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
 }
 
 void EpochState::reset() noexcept {

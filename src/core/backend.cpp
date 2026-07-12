@@ -117,23 +117,36 @@ bool CompilerBackend::is_initialized() const noexcept {
     return initialized_.load(std::memory_order_acquire);
 }
 
-void CompilerBackend::start_epoch() noexcept {
+bool CompilerBackend::start_epoch() noexcept {
     // Catch so a vendor throw cannot cross this noexcept frame.
     try {
         niobium::compiler().start_epoch();
+        return true;
     } catch (...) {
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "CompilerBackend::start_epoch");
+        return false;
     }
 }
 
-void CompilerBackend::start_recording() noexcept {
+bool CompilerBackend::start_recording() noexcept {
     try {
         niobium::compiler().start();
+        return true;
     } catch (...) {
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "CompilerBackend::start_recording");
+        return false;
     }
+}
+
+bool CompilerBackend::try_set_target(const char *target) noexcept {
+    // init_mutex_ serializes against ensure_initialized, closing the window
+    // where a set racing first-compute bring-up would be baked over.
+    HazeLockGuard lock(init_mutex_);
+    if (initialized_.load(std::memory_order_relaxed))
+        return false;
+    return config().set_target(target).has_value();
 }
 
 bool CompilerBackend::stop_recording() noexcept {
