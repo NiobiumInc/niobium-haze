@@ -10,10 +10,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -397,6 +399,15 @@ TEST_CASE("D2D copy evicts stale dst shadow until flush", "[integration]") {
     REQUIRE(hazeMemcpy(out.data(), devs[1], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
             HAZE_ERROR_NOT_FLUSHED);
     hazeGetLastError();
+
+    // Same transport limitation as "hazeMemcpy(D2D) promotes an H2D'd source":
+    // a raw-H2D source has no modulus to recover, so the copy stays sentinel
+    // and isn't replayable off-process; the eviction above is already pinned.
+    if (const char *target = std::getenv("HAZE_TARGET");
+        target != nullptr && target[0] != '\0' && std::string_view{target} != "local") {
+        haze::test::free_all_residues(devs);
+        SKIP("sentinel-modulus D2D copy is not replayable on transport targets");
+    }
 
     REQUIRE(hazeTagOutput(devs[1]) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
