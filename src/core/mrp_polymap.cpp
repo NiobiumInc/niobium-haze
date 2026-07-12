@@ -108,8 +108,7 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
     }
     if (len > 1) {
         auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
-        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
-                                                        std::move(group_name));
+        return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
     }
     return {};
 }
@@ -187,8 +186,7 @@ copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t 
     }
     if (len > 1) {
         auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
-        return epoch().register_mrp_output_group_locked(addrs, std::span(base, len),
-                                                        std::move(group_name));
+        return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
     }
     return {};
 }

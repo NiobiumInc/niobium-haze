@@ -2,7 +2,7 @@
 //
 // MRP output-group latest-write-wins tests.
 //
-// register_mrp_output_group_locked semantics exercised here:
+// record_mrp_group_locked semantics exercised here:
 //   1. Identical re-registration → no-op dedup; exactly one group exported.
 //   2. Same dst[0], different shape → group replaced; flushed probe reflects
 //      the latest residue count and moduli — whether the tag lands before or
@@ -156,7 +156,7 @@ TEST_CASE("MRP group reuse: identical in-place re-registration is a dedup no-op"
 // TC2 (core repro): same dst[0] re-registered with fewer residues exports
 // the latest shape, NOT the original 3-residue stale group.
 //
-// This test MUST FAIL when the fix in register_mrp_output_group_locked is
+// This test MUST FAIL when the fix in record_mrp_group_locked is
 // reverted: on the broken code the 3-residue group is still registered and
 // exported, so check_mrp_against_per_residue with base2 finds no matching
 // group.
@@ -258,7 +258,7 @@ TEST_CASE("MRP group reuse: same dst[0] re-registered with fewer residues export
 // TC2b: tag BEFORE the replacement — the pending promotion follows it.
 //
 // hazeTagOutput runs before the second op, while the group is still the
-// 3-residue shape. pending_mrp_groups_ stores names (not membership
+// 3-residue shape. the pending MRP-group set stores names (not membership
 // snapshots), so the flush exports the replacement 2-residue shape under the
 // same name. The dropped member a2 keeps the per-residue tag it got when the
 // 3-residue group was promoted, and exports its latest binding (op1's value)

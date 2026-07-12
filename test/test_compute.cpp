@@ -1510,8 +1510,8 @@ TEST_CASE("MRP output round-trip: hazeMulMrp result via fhetch::result(name, MRP
 }
 
 // ============================================================================
-// Regression: invalidate() must drop pending_mrp_groups_ entries for the freed
-// addr so the stale group can't surface (or get silently rebound on recycle).
+// Regression: invalidate() must drop pending MRP-group entries (MrpGroupRegistry::pending_) for the
+// freed addr so the stale group can't surface (or get silently rebound on recycle).
 // ============================================================================
 
 TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[integration]") {
@@ -1533,7 +1533,7 @@ TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[
     auto intt_dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     d.intt(intt_dst, haze::test::to_const(d_a));
 
-    // Pre-fix: leaks a stale pending_mrp_groups_ entry. At the flush below,
+    // Pre-fix: leaks a stale pending MRP-group entry. At the flush below,
     // replay_and_populate's group walk hits MissingPolyMapBinding ->
     // HAZE_ERROR_INTERNAL because poly_map_[intt_dst...] are gone.
     haze::test::free_all_residues(intt_dst);
