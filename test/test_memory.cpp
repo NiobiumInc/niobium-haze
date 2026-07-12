@@ -44,7 +44,7 @@ TEST_CASE("hazeMalloc with size != polynomial bytes is rejected", "[unit]") {
     REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
     void *p = nullptr;
     // ring_dim=4096 → polynomial bytes = 32768; 8KB request fails.
-    REQUIRE(hazeMalloc(&p, 8192) == HAZE_ERROR_ALLOC_TOO_SMALL);
+    REQUIRE(hazeMalloc(&p, 8192) == HAZE_ERROR_SIZE_MISMATCH);
     hazeGetLastError();
 }
 
@@ -327,7 +327,7 @@ TEST_CASE("hazeMallocMrp with wrong size is rejected and allocates nothing", "[u
     void *ptrs[3] = {reinterpret_cast<void *>(0xA), reinterpret_cast<void *>(0xB),
                      reinterpret_cast<void *>(0xC)};
     // ring_dim=4096 -> polynomial bytes = 32768; an 8KB request fails.
-    REQUIRE(hazeMallocMrp(ptrs, 3, 8192) == HAZE_ERROR_ALLOC_TOO_SMALL);
+    REQUIRE(hazeMallocMrp(ptrs, 3, 8192) == HAZE_ERROR_SIZE_MISMATCH);
     hazeGetLastError();
     // Validation fails before any reservation: ptrs untouched, nothing live.
     REQUIRE(ptrs[0] == reinterpret_cast<void *>(0xA));

@@ -378,9 +378,12 @@ Materialization is triggered by `hazeFlush`, which calls
 `EpochState::replay_and_populate()`:
 
 1. `tag_pending_outputs_locked()` tags the explicitly-declared outputs (and
-   their MRP groups) for `fhetch::tag_output`. No-op when no recording is in
-   flight, so plain H2D-then-D2H round-trips elide it for free.
-2. `CompilerBackend::stop_epoch()` writes the per-epoch `.fhetch` trace.
+   their MRP groups) for `fhetch::tag_output`. When no recording is in
+   flight — or a recording is open but nothing was tagged — the flush is a
+   TRUE no-op (the open recording, bindings, and counters are preserved so a
+   later tag + flush still materializes everything recorded so far); plain
+   H2D-then-D2H round-trips elide it for free.
+2. `CompilerBackend::stop_recording()` writes the per-epoch `.fhetch` trace.
 3. `CompilerBackend::replay()` dispatches per the configured target.
 4. `niobium::fhetch::result(...)` is called for each tagged output to read
    the simulator-computed polynomial back, and `update_shadow` writes the
@@ -399,9 +402,11 @@ CUDA-shape parity but do not flush and do not model ordering.
   `hazeMalloc` / `hazeFree` contract. Allocation size is implicit
   (always `poly_bytes_`) under the single-size invariant.
 - `shadow_data_`: sparse byte payload. Entry exists only when the address
-  carries user-written or materialized bytes. H2D / memset / D2D /
+  carries user-written or materialized bytes. H2D / memset /
   `update_shadow` create entries; `extract_polynomial_components` (used
-  when promoting bytes to a FHETCH input) and `hazeFree` evict them.
+  when promoting bytes to a FHETCH input), `hazeFree`, and
+  `store_compute_result_locked` (a compute result or D2D copy re-binding
+  the address must not leave stale pre-compute bytes readable) evict them.
   Reads from a missing entry return `OutputNotFlushed` (D2H of an untagged /
   unflushed addr) or `SourceUnavailable` (compute / D2D extract path — using an
   addr that was never written is a contract violation).
@@ -422,11 +427,12 @@ addresses above FHETCH's synthetic address range (< `0x1000000000`).
 
 ### Lock order
 
-`EpochState::mutex_` may call into `DeviceAllocator` (epoch → allocator).
-The reverse direction is forbidden — allocator-side code must never call
-back into `EpochState` while holding `mutex_` or it will deadlock. The
-constraint is enforced architecturally (no back-call exists in source);
-clang TSA catches violations of the per-mutex `HAZE_REQUIRES` /
+The full DAG is documented canonically in `src/common/thread_safety.hpp`:
+epoch → {config, allocator}; config → allocator; backend-init → config.
+The allocator is a leaf — allocator-side code must never call back into
+`EpochState` (or any other component) while holding its lock or it will
+deadlock. The constraint is enforced architecturally (no back-call exists
+in source); clang TSA catches violations of the per-mutex `HAZE_REQUIRES` /
 `HAZE_EXCLUDES` contracts at compile time.
 
 `HazeMutex` (a thin annotated wrapper around `std::mutex`) and
@@ -440,7 +446,11 @@ new locks.
 in via `vendor/niobium-fhetch`). Haze interacts with it through a small
 control surface (`CompilerBackend`):
 
-- `init` / `start_recording` / `start_epoch` / `stop_epoch` / `replay`.
+- `init` / `start_epoch` / `start_recording` / `stop_recording` /
+  `clear_captured` / `replay` / `reset_compiler`. Control-plane calls to
+  `niobium::compiler()` route through these wrappers only (`backend.cpp` is
+  the sole first-party TU that includes `niobium/compiler.h`, besides the
+  replay bridge's own init path).
 - The recording-side IR (`fhetch::sr_*`, `tag_input`, `tag_output`,
   `result`) is emitted directly from `epoch.cpp`, bypassing the backend
   wrapper.

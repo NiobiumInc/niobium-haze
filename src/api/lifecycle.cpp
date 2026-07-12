@@ -28,13 +28,13 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
-#include <niobium/compiler.h>
 
 namespace haze {
 
 void reset_all() noexcept {
     // Clear all internal state first, since we may depend on external object state when clearing
-    // otherwise.
+    // otherwise. hazeReplayBridgeReset queries the compiler's live program
+    // directory, so the vendor-compiler reset must stay LAST.
     epoch().reset();
     backend().reset();
     allocator().reset();
@@ -45,7 +45,7 @@ void reset_all() noexcept {
     hazeReplayBridgeReset();
 
     // Clear any external state next
-    niobium::compiler().reset();
+    CompilerBackend::reset_compiler();
 }
 
 } // namespace haze

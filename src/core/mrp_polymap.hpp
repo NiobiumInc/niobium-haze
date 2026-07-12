@@ -29,6 +29,20 @@ namespace haze {
 // MRP; store_mrp_locked decomposes one back into per-addr stores. Both run
 // under the EpochSession lock (HAZE_REQUIRES enforces it via clang TSA).
 
+// Validate a caller-supplied CRT base: len in [1, kMaxCiphertextModuli]
+// (an absurd len would throw std::length_error out of a reserve inside a
+// noexcept frame), every prime non-zero (a 0 reaches % 0 in the FBC math
+// — SIGFPE), and no duplicates (fhetch keys MRP residues by modulus, so a
+// duplicate silently aliases residues; in hazeModDown it over-runs the
+// caller's dst array). InvalidArgument on any violation.
+std::expected<void, HazeInternalError> validate_moduli_base(const uint64_t *base,
+                                                            std::size_t len) noexcept;
+
+// UnknownAddress unless every ptrs[0..len) is a live device allocation.
+// Fast-fail guard for MRP destination arrays before any IR is recorded.
+std::expected<void, HazeInternalError> require_allocated_array(void *const *ptrs,
+                                                               std::size_t len) noexcept;
+
 std::expected<niobium::fhetch::MRP, HazeInternalError>
 build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len)
     HAZE_REQUIRES(epoch().mutex());
@@ -48,10 +62,9 @@ std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const 
                                                         std::size_t count,
                                                         std::size_t len) noexcept;
 
-std::expected<void, HazeInternalError> copy_device_to_device_mrp(void *const *dst,
-                                                                 const void *const *src,
-                                                                 const uint64_t *base,
-                                                                 std::size_t len) noexcept;
+std::expected<void, HazeInternalError>
+copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t count,
+                          const uint64_t *base, std::size_t len) noexcept;
 
 // Build an MRS from per-modulus uint64_t scalars + their primes. Pure-data
 // helper: does not touch the polymap, so no lock contract.

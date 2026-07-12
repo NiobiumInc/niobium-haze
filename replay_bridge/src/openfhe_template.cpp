@@ -10,8 +10,9 @@
 // runs outside any lock, on_post_recording runs under EpochState::mutex_.
 
 #include "ciphertext-ser.h"
+#include "common/errors.hpp" // set_error — bridge entries feed hazeGetLastError too
 #include "common/log.hpp"
-#include "core/config.hpp" // haze::config() — honor a caller-pinned program directory
+#include "core/config.hpp" // haze::config() — honor caller-pinned program name/directory
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "openfhe.h"
@@ -80,7 +81,7 @@ enum class BridgeError : uint8_t {
 };
 
 // Flag the post-recording hook sets on any per-record failure; haze
-// drains it via hazeReplayBridgeTakeHookHadError after stop_epoch.
+// drains it via hazeReplayBridgeTakeHookHadError after stop_recording.
 std::atomic<bool> &hook_had_error_flag() noexcept {
     static std::atomic<bool> flag{false};
     return flag;
@@ -492,7 +493,7 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
                                                          uint64_t desired_modulus,
                                                          uint64_t *picked_modulus) noexcept {
     if (picked_modulus == nullptr)
-        return HAZE_ERROR_INVALID_VALUE;
+        return set_error(HAZE_ERROR_INVALID_VALUE);
 
     try {
         // The record-time capture builds a local OpenFHE context regardless of the
@@ -504,7 +505,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // backend's first-compute bring-up stays authoritative when it does run).
         {
             const std::string target_arg = "--target=" + haze::config().target();
-            std::string prog_storage = "haze";
+            // argv[0] mirrors backend.cpp's bring-up: the configured program
+            // name, not a hard-coded "haze".
+            std::string prog_storage = haze::config().program_name();
             std::string target_storage = target_arg;
             std::string no_ring_check_storage = "--no-ring-dim-check";
             std::string no_prime_check_storage = "--no-prime-check";
@@ -516,15 +519,22 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 
         auto built = build_context(ring_dim, {desired_modulus});
         if (!built)
-            return to_haze_error(built.error());
+            return set_error(to_haze_error(built.error()));
 
         *picked_modulus = first_tower_modulus(built->cc);
 
-        // Plant program_name so cryptocontext.dat lands under haze/ rather
-        // than the compiler's default program name; libhaze's later init is
-        // idempotent. set_program_info() also resets the project directory to
-        // cwd/<name>.
-        niobium::compiler().set_program_info("haze", "", "");
+        // Plant the CONFIGURED program name (default "haze") so
+        // cryptocontext.dat lands in the same directory the trace will;
+        // libhaze's later init re-applies the same values, so this stays
+        // idempotent. Hard-coding "haze" here used to orphan
+        // cryptocontext.dat under cwd/haze/ whenever the app had called
+        // hazeSetProgramInfo with a custom name — the trace then landed in
+        // cwd/<name>/ and the replay driver could not load the crypto
+        // context. set_program_info() also resets the program directory to
+        // cwd/<name>, which the pinned-directory re-apply below undoes.
+        niobium::compiler().set_program_info(haze::config().program_name(),
+                                             haze::config().program_version(),
+                                             haze::config().program_description());
 
         // Honor a caller-pinned program directory. hazeSetProgramDirectory()
         // stores the directory in haze::config(); the backend only forwards it to
@@ -549,9 +559,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return HAZE_SUCCESS;
     } catch (const std::exception &e) {
         haze::log_error("replay_bridge", std::string{"init threw: "} + e.what());
-        return HAZE_ERROR_INTERNAL;
+        return set_error(HAZE_ERROR_INTERNAL);
     } catch (...) {
-        return HAZE_ERROR_INTERNAL;
+        return set_error(HAZE_ERROR_INTERNAL);
     }
 }
 
@@ -612,19 +622,31 @@ inline Format openfhe_to_fhetch_format(::Format fmt) {
 }
 
 // Deserialize <program_dir>/serialized_probes/<name>.ct; nullptr on error.
-lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) {
-    auto dir = niobium::compiler().get_program_directory();
-    auto ct_path = dir / "serialized_probes" / (name + ".ct");
-    if (!std::filesystem::exists(ct_path)) {
-        haze::log_error("fhetch::result", "'" + name + "' not found at " + ct_path.string());
+// noexcept: the callers (fhetch::result overloads) run inside libhaze's
+// noexcept flush path, and cereal throws on a corrupt/truncated .ct —
+// contain everything here.
+lbcrypto::Ciphertext<DCRTPoly> load_serialized_probe(const std::string &name) noexcept {
+    try {
+        auto dir = niobium::compiler().get_program_directory();
+        auto ct_path = dir / "serialized_probes" / (name + ".ct");
+        if (!std::filesystem::exists(ct_path)) {
+            haze::log_error("fhetch::result", "'" + name + "' not found at " + ct_path.string());
+            return nullptr;
+        }
+        lbcrypto::Ciphertext<DCRTPoly> ct;
+        if (!lbcrypto::Serial::DeserializeFromFile(ct_path.string(), ct,
+                                                   lbcrypto::SerType::BINARY)) {
+            haze::log_error("fhetch::result", "failed to deserialize " + ct_path.string());
+            return nullptr;
+        }
+        return ct;
+    } catch (const std::exception &e) {
+        haze::log_error("fhetch::result", "'" + name + "' load threw: " + e.what());
+        return nullptr;
+    } catch (...) {
+        haze::log_error("fhetch::result", "'" + name + "' load threw (unknown)");
         return nullptr;
     }
-    lbcrypto::Ciphertext<DCRTPoly> ct;
-    if (!lbcrypto::Serial::DeserializeFromFile(ct_path.string(), ct, lbcrypto::SerType::BINARY)) {
-        haze::log_error("fhetch::result", "failed to deserialize " + ct_path.string());
-        return nullptr;
-    }
-    return ct;
 }
 
 // Pull one residue's coefficients out of a NativePoly.
@@ -641,64 +663,52 @@ std::vector<uint64_t> native_poly_values(const lbcrypto::NativePoly &np) {
 
 } // namespace
 
+// Each overload is called from libhaze's noexcept flush path; a throw out
+// of OpenFHE / fhetch value plumbing must become `false`, never terminate.
+
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, Polynomial &p) {
-    auto ct = load_serialized_probe(name);
-    if (!ct)
-        return false;
+    try {
+        auto ct = load_serialized_probe(name);
+        if (!ct)
+            return false;
 
-    const auto &elements = ct->GetElements();
-    if (elements.empty()) {
-        haze::log_error("fhetch::result", "'" + name + "' has no DCRTPoly elements");
+        const auto &elements = ct->GetElements();
+        if (elements.empty()) {
+            haze::log_error("fhetch::result", "'" + name + "' has no DCRTPoly elements");
+            return false;
+        }
+        const auto &towers = elements[0].GetAllElements();
+        if (towers.empty()) {
+            haze::log_error("fhetch::result", "'" + name + "' has no NativePoly towers");
+            return false;
+        }
+        const auto &np = towers[0];
+        auto values = native_poly_values(np);
+        p = Polynomial::from_data(values, values.size(), openfhe_to_fhetch_format(np.GetFormat()));
+        return true;
+    } catch (const std::exception &e) {
+        haze::log_error("fhetch::result", "'" + name + "' (Polynomial) threw: " + e.what());
+        return false;
+    } catch (...) {
         return false;
     }
-    const auto &towers = elements[0].GetAllElements();
-    if (towers.empty()) {
-        haze::log_error("fhetch::result", "'" + name + "' has no NativePoly towers");
-        return false;
-    }
-    const auto &np = towers[0];
-    auto values = native_poly_values(np);
-    p = Polynomial::from_data(values, values.size(), openfhe_to_fhetch_format(np.GetFormat()));
-    return true;
 }
 
 NIOBIUM_FHETCH_RESULT_API
 bool result(const std::string &name, MRP &m) {
-    auto ct = load_serialized_probe(name);
-    if (!ct)
-        return false;
+    try {
+        auto ct = load_serialized_probe(name);
+        if (!ct)
+            return false;
 
-    const auto &elements = ct->GetElements();
-    if (elements.empty())
-        return false;
-    const auto &towers = elements[0].GetAllElements();
-    if (towers.empty())
-        return false;
+        const auto &elements = ct->GetElements();
+        if (elements.empty())
+            return false;
+        const auto &towers = elements[0].GetAllElements();
+        if (towers.empty())
+            return false;
 
-    std::vector<std::pair<Polynomial, uint64_t>> pairs;
-    pairs.reserve(towers.size());
-    for (const auto &np : towers) {
-        auto values = native_poly_values(np);
-        auto poly =
-            Polynomial::from_data(values, values.size(), openfhe_to_fhetch_format(np.GetFormat()));
-        pairs.emplace_back(std::move(poly), np.GetModulus().ConvertToInt());
-    }
-    m = MRP::from_pairs(pairs);
-    return true;
-}
-
-NIOBIUM_FHETCH_RESULT_API
-bool result(const std::string &name, MRPArray &arr) {
-    auto ct = load_serialized_probe(name);
-    if (!ct)
-        return false;
-
-    const auto &elements = ct->GetElements();
-    MRPArray out(elements.size());
-    for (size_t i = 0; i < elements.size(); ++i) {
-        const auto &dcrt = elements[i];
-        const auto &towers = dcrt.GetAllElements();
         std::vector<std::pair<Polynomial, uint64_t>> pairs;
         pairs.reserve(towers.size());
         for (const auto &np : towers) {
@@ -707,10 +717,46 @@ bool result(const std::string &name, MRPArray &arr) {
                                               openfhe_to_fhetch_format(np.GetFormat()));
             pairs.emplace_back(std::move(poly), np.GetModulus().ConvertToInt());
         }
-        out[i] = MRP::from_pairs(pairs);
+        m = MRP::from_pairs(pairs);
+        return true;
+    } catch (const std::exception &e) {
+        haze::log_error("fhetch::result", "'" + name + "' (MRP) threw: " + e.what());
+        return false;
+    } catch (...) {
+        return false;
     }
-    arr = std::move(out);
-    return true;
+}
+
+NIOBIUM_FHETCH_RESULT_API
+bool result(const std::string &name, MRPArray &arr) {
+    try {
+        auto ct = load_serialized_probe(name);
+        if (!ct)
+            return false;
+
+        const auto &elements = ct->GetElements();
+        MRPArray out(elements.size());
+        for (size_t i = 0; i < elements.size(); ++i) {
+            const auto &dcrt = elements[i];
+            const auto &towers = dcrt.GetAllElements();
+            std::vector<std::pair<Polynomial, uint64_t>> pairs;
+            pairs.reserve(towers.size());
+            for (const auto &np : towers) {
+                auto values = native_poly_values(np);
+                auto poly = Polynomial::from_data(values, values.size(),
+                                                  openfhe_to_fhetch_format(np.GetFormat()));
+                pairs.emplace_back(std::move(poly), np.GetModulus().ConvertToInt());
+            }
+            out[i] = MRP::from_pairs(pairs);
+        }
+        arr = std::move(out);
+        return true;
+    } catch (const std::exception &e) {
+        haze::log_error("fhetch::result", "'" + name + "' (MRPArray) threw: " + e.what());
+        return false;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace niobium::fhetch

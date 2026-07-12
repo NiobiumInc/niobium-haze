@@ -15,6 +15,7 @@
 
 #include "common/errors.hpp"
 #include "core/config.hpp"
+#include "core/device.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
 
@@ -53,7 +54,11 @@ std::expected<void, HazeInternalError> validate(const hazeBasisConvertParams &p)
                               "hazeBasisConvert: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    return {};
+    // Bound lengths, reject zero moduli (FBC math divides by them) and
+    // duplicates (residues are keyed by modulus).
+    if (auto v = validate_moduli_base(p.src_base, p.src_base_len); !v)
+        return v;
+    return validate_moduli_base(p.dst_base, p.dst_base_len);
 }
 
 std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noexcept {
@@ -63,6 +68,14 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
                               "hazeModDown: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
+    // Duplicate-free bases are load-bearing here: a duplicated rescale
+    // prime strips only one unique src prime, so the result would carry
+    // MORE residues than (src_base_len - rescale_base_len) and the store
+    // loop would run off the end of the caller's dst pointer array.
+    if (auto v = validate_moduli_base(p.src_base, p.src_base_len); !v)
+        return v;
+    if (auto v = validate_moduli_base(p.rescale_base, p.rescale_base_len); !v)
+        return v;
     // rescale_base must be a *proper* subset of src_base — equal-length
     // would leave dst empty (upstream fhetch asserts the same).
     if (p.rescale_base_len >= p.src_base_len) {
@@ -91,12 +104,48 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
         record_internal_error(HazeInternalError::InvalidArgument, "hazeModUp: empty or null base");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
+    if (auto v = validate_moduli_base(p.src_base, p.src_base_len); !v)
+        return v;
+    if (auto v = validate_moduli_base(p.p_base, p.p_base_len); !v)
+        return v;
+    // Each digit lifts to src_base ∪ p_base; a prime in both would give the
+    // union a duplicate residue key.
+    std::unordered_set<uint64_t> src_set(p.src_base, p.src_base + p.src_base_len);
+    for (size_t j = 0; j < p.p_base_len; ++j) {
+        if (src_set.contains(p.p_base[j])) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "hazeModUp: p_base and src_base share a prime");
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
+    }
+    if (p.digit_count > static_cast<size_t>(kMaxCiphertextModuli)) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeModUp: digit_count above device modulus envelope");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     // digit_bases is a flat concatenation; the per-digit lengths must sum
     // to digit_bases_total_len. Catch caller miscounts before slicing
-    // out-of-bounds.
+    // out-of-bounds. Every digit prime must also come from src_base:
+    // mr_subset(x, digit) indexes x by modulus and THROWS std::out_of_range
+    // on a foreign prime — inside a noexcept frame that is std::terminate.
     size_t sum = 0;
+    size_t offset = 0;
     for (size_t i = 0; i < p.digit_count; ++i) {
-        sum += p.digit_base_lens[i];
+        const size_t dlen = p.digit_base_lens[i];
+        sum += dlen;
+        if (sum > p.digit_bases_total_len) {
+            break; // mismatch reported below without reading past digit_bases
+        }
+        if (auto v = validate_moduli_base(p.digit_bases + offset, dlen); !v)
+            return v;
+        for (size_t j = 0; j < dlen; ++j) {
+            if (!src_set.contains(p.digit_bases[offset + j])) {
+                record_internal_error(HazeInternalError::InvalidArgument,
+                                      "hazeModUp: digit base prime not in src_base");
+                return std::unexpected(HazeInternalError::InvalidArgument);
+            }
+        }
+        offset += dlen;
     }
     if (sum != p.digit_bases_total_len) {
         record_internal_error(HazeInternalError::InvalidArgument,
@@ -115,6 +164,8 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     }
 
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
 
     auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
     if (!src_mrp) {
@@ -140,6 +191,8 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
 
     auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
     if (!src_mrp) {
@@ -163,6 +216,8 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     }
 
     EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
 
     auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
     if (!src_mrp) {

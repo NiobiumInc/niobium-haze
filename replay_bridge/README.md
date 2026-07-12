@@ -49,7 +49,7 @@ flowchart TB
   haze -->|"sr_*, tag_input, tag_output"| fhetch
 
   app -->|"3. hazeTagOutput + hazeFlush"| haze
-  haze -->|"stop_epoch"| fhetch
+  haze -->|"stop_recording → stop()"| fhetch
   fhetch ==>|"3. writes .fhetch trace"| trace
   fhetch -->|"4. fires on_post_recording"| bridge
 

@@ -13,6 +13,7 @@
 #include "core/config.hpp"
 
 #include "common/errors.hpp"
+#include "core/backend.hpp"
 
 #include <cstdint>
 #include <haze/haze.h>
@@ -40,6 +41,16 @@ extern "C" hazeError_t hazeSetProgramInfo(const char *name, const char *version,
 }
 
 extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
+    if (target == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    // The target is baked into compiler().init() argv at first-compute
+    // bring-up and never re-read; accepting a later change would silently
+    // ignore it. Fail fast instead — hazeDeviceReset re-opens the window.
+    if (haze::backend().is_initialized()) {
+        haze::record_internal_error(haze::HazeInternalError::ConfigLocked,
+                                    "hazeSetTarget: backend already initialized");
+        return set_error(HAZE_ERROR_CONFIGERR);
+    }
     return set_internal_result(haze::config().set_target(target));
 }
 
@@ -49,15 +60,15 @@ extern "C" hazeError_t hazeSetProgramDirectory(const char *dir) noexcept {
 
 extern "C" hazeError_t hazeSetMontgomery(int enable) noexcept {
     haze::config().set_montgomery(enable != 0);
-    return set_error(HAZE_SUCCESS);
+    return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeSetBitReversal(int enable) noexcept {
     haze::config().set_bit_reversal(enable != 0);
-    return set_error(HAZE_SUCCESS);
+    return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeSetReducedNoise(int enable) noexcept {
     haze::config().set_reduced_noise(enable != 0);
-    return set_error(HAZE_SUCCESS);
+    return HAZE_SUCCESS;
 }

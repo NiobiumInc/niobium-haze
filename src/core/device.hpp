@@ -26,6 +26,14 @@ namespace haze {
 // `count` rather than attempting an unbounded reservation.
 inline constexpr int kMaxCiphertextModuli = 64;
 
+// Supported ring-dimension envelope (reported as
+// hazeDeviceProp::supportedRingDimExponents: N = 2^10 .. 2^16). Config
+// validates hazeSetRingDimension against the same range so a dimension
+// the device can't run — or one whose byte size would overflow
+// n * sizeof(uint64_t) — is rejected at the setter.
+inline constexpr int kMinRingDimExponent = 10;
+inline constexpr int kMaxRingDimExponent = 16;
+
 // Single-device runtime state. Only one device exists; the only valid
 // device index is 0. Free functions instead of a class — a class adds
 // nothing over a one-int counter and a couple of getters.

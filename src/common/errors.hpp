@@ -16,8 +16,10 @@
 #include <expected>
 #include <haze/haze_types.h>
 
-// Thread-local last-error state. set_error is the inline writer used at
-// every C ABI boundary; the public hazeGetLastError reads and clears.
+// Thread-local last-error state, mirroring CUDA's sticky-error model:
+// failures overwrite it, successful calls leave it untouched, and the
+// public hazeGetLastError reads-and-clears. set_error is the inline
+// writer used at every C ABI failure path.
 extern thread_local hazeError_t g_last_error;
 
 [[nodiscard]] inline hazeError_t set_error(hazeError_t err) noexcept {
@@ -33,17 +35,20 @@ namespace haze {
 enum class HazeInternalError : std::uint8_t {
     InvalidArgument,            // params struct field violates the API contract
     NotConfigured,              // ring_dim / modulus not set when required
+    ConfigLocked,               // configuration frozen (hazeConfigureDevice / live
+                                // allocations / backend already initialized);
+                                // conflicting re-set rejected
     UnknownAddress,             // DevAddr not in the allocator's table
     NoData,                     // address allocated but no H2D / compute output present
-    AllocTooSmall,              // allocation size < polynomial size
+    PolySizeMismatch,           // size != configured polynomial size (ring_dim * 8)
     BackendInitFailed,          // niobium::compiler() initialization threw
-    BackendReplayFailed,        // niobium::compiler() stop_epoch / replay returned false or threw
+    BackendReplayFailed,        // niobium::compiler() stop / replay returned false or threw
     BackendShapeMismatch,       // backend returned a result with unexpected shape / length
     MrpGroupAddrModuliMismatch, // MRP group registration: addrs / moduli span lengths differ
     MissingPolyMapBinding,      // pending output / MRP group addr is not in poly_map_
     ShadowSizeMismatch,         // shadow buffer length disagrees with ring_dim invariant
     BackendOutputMissing,       // fhetch::result(name, ...) returned false
-    BackendOutputDecodeFailed,  // extract_polynomial_values returned false
+    BackendOutputDecodeFailed,  // decode_result_values returned false
     BridgeHookFailed,           // replay_bridge post-recording hook reported failures
     PoolMapDesync,              // pool_free_ entry has no `alloc_set_` peer
     SourceUnavailable,          // compute / D2D source has no shadow data and no poly_map_ binding
@@ -63,8 +68,12 @@ void record_internal_error(HazeInternalError err, const char *context = nullptr)
 
 // Translate an internal-error result at the C ABI boundary. Lives at
 // namespace scope so api/ shims can write
-// `return set_internal_result(core_call(...));` directly.
+// `return set_internal_result(core_call(...));` directly. Success does
+// NOT touch g_last_error — the sticky-error model (CUDA parity) keeps
+// the last failure readable until hazeGetLastError clears it.
 [[nodiscard]] inline hazeError_t
 set_internal_result(std::expected<void, haze::HazeInternalError> result) noexcept {
-    return set_error(result ? HAZE_SUCCESS : haze::to_public_error(result.error()));
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    return HAZE_SUCCESS;
 }

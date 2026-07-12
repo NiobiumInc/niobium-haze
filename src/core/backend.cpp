@@ -96,7 +96,7 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // Optional explicit output dir: when set via hazeSetProgramDirectory,
         // the project (.fhetch + inputs + templates + cryptocontext) lands
         // here instead of cwd/<program_name>. Must precede the first compute
-        // op so it's in effect when stop_epoch() writes the trace.
+        // op so it's in effect when stop_recording() writes the trace.
         if (config().has_program_directory())
             niobium::compiler().set_program_directory(config().program_directory());
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
@@ -117,16 +117,58 @@ bool CompilerBackend::is_initialized() const noexcept {
     return initialized_.load(std::memory_order_acquire);
 }
 
-void CompilerBackend::start_recording() noexcept {
-    niobium::compiler().start();
+void CompilerBackend::start_epoch() noexcept {
+    // start_epoch is vendor-side bookkeeping (address-counter snapshot);
+    // catch so an unexpected vendor throw cannot cross a noexcept frame.
+    try {
+        niobium::compiler().start_epoch();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "CompilerBackend::start_epoch");
+    }
 }
 
-bool CompilerBackend::stop_epoch() noexcept {
+void CompilerBackend::start_recording() noexcept {
+    try {
+        niobium::compiler().start();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "CompilerBackend::start_recording");
+    }
+}
+
+bool CompilerBackend::stop_recording() noexcept {
     // Use stop() (not stop_epoch()): stop() writes both the .fhetch trace
     // and fhetch_replay.json that nbcc_fhetch_replay needs for HTTP dispatch.
     // Haze is single-epoch per epoch().reset(), so stop() also matches
-    // semantically.
-    return niobium::compiler().stop();
+    // semantically. stop() does filesystem I/O (create_directories, trace
+    // write) that can throw — e.g. an unwritable program directory — so
+    // catch here: this frame is reached through noexcept hazeFlush.
+    try {
+        return niobium::compiler().stop();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "CompilerBackend::stop_recording");
+        return false;
+    }
+}
+
+void CompilerBackend::clear_captured() noexcept {
+    try {
+        niobium::compiler().clear_captured();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "CompilerBackend::clear_captured");
+    }
+}
+
+void CompilerBackend::reset_compiler() noexcept {
+    try {
+        niobium::compiler().reset();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "CompilerBackend::reset_compiler");
+    }
 }
 
 bool CompilerBackend::replay() noexcept {

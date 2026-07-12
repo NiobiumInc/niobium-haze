@@ -86,15 +86,22 @@ typedef enum {
     HAZE_ERROR_NOT_SUPPORTED = 3,      // operation is not implemented for this build / target
     HAZE_ERROR_CONFIGERR = 4,          // ring_dim / modulus / target not configured
     HAZE_ERROR_UNKNOWN_ADDRESS = 5,    // DevAddr not in the allocator's table
-    HAZE_ERROR_NO_DATA = 6,            // address allocated but never written
-    HAZE_ERROR_ALLOC_TOO_SMALL = 7,    // allocation size < polynomial size
-    HAZE_ERROR_SOURCE_UNAVAILABLE = 8, // compute / D2D source has no shadow + no poly_map_
+    HAZE_ERROR_NO_DATA = 6,            // reserved / not normally returned; see SOURCE_UNAVAILABLE
+    HAZE_ERROR_SIZE_MISMATCH = 7,      // size != configured polynomial size (ring_dim * 8 bytes)
+    HAZE_ERROR_SOURCE_UNAVAILABLE = 8, // compute / D2D read from an address that was never
+                                       // written (H2D) and holds no recorded result
     HAZE_ERROR_NOT_FLUSHED = 9, // D2H of an untagged / unflushed address: tag output + hazeFlush
     // Catch-all sits last as a single high bit (2^10). User-actionable codes are
     // added sequentially above and must stay below it, so `err & HAZE_ERROR_INTERNAL`
     // detects an internal error without enumerating every code.
     HAZE_ERROR_INTERNAL = 1024, // haze invariant broke or backend failed; see HAZE_DEBUG log
 } hazeError_t;
+
+// Deprecated alias: the pre-rename spelling of HAZE_ERROR_SIZE_MISMATCH.
+// "alloc too small" misled — the same code also fires for a TOO-LARGE
+// allocation and for an oversized memcpy/memset count. Same value (7),
+// source-compatible; new code should use HAZE_ERROR_SIZE_MISMATCH.
+#define HAZE_ERROR_ALLOC_TOO_SMALL HAZE_ERROR_SIZE_MISMATCH
 
 // ---------------------------------------------------------------------------
 // DMA direction
