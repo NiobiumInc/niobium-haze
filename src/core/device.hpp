@@ -19,24 +19,20 @@
 
 namespace haze {
 
-// Device ciphertext-modulus envelope (reported as
-// hazeDeviceProp::maxCiphertextModuli). Also the upper bound on an MRP
-// group's residue count: a valid group cannot span more residues than the
-// device supports moduli, so the C-ABI batch entry points reject a larger
-// `count` rather than attempting an unbounded reservation.
+// Device ciphertext-modulus envelope (reported as hazeDeviceProp::maxCiphertextModuli)
+// and the upper bound on an MRP group's residue count, so the C-ABI batch entry
+// points reject a larger `count` rather than attempting an unbounded reservation.
 inline constexpr int kMaxCiphertextModuli = 64;
 
 // Supported ring-dimension envelope (reported as
-// hazeDeviceProp::supportedRingDimExponents: N = 2^10 .. 2^16). Config
-// validates hazeSetRingDimension against the same range so a dimension
-// the device can't run — or one whose byte size would overflow
-// n * sizeof(uint64_t) — is rejected at the setter.
+// hazeDeviceProp::supportedRingDimExponents: N = 2^10 .. 2^16); hazeConfigureDevice
+// validates the ring dimension against the same range, rejecting a dimension the
+// device can't run or one whose n * sizeof(uint64_t) would overflow.
 inline constexpr int kMinRingDimExponent = 10;
 inline constexpr int kMaxRingDimExponent = 16;
 
-// Single-device runtime state. Only one device exists; the only valid
-// device index is 0. Free functions instead of a class — a class adds
-// nothing over a one-int counter and a couple of getters.
+// Single-device runtime state (only device index 0 is valid); free functions
+// instead of a class, which adds nothing over a counter and a few getters.
 
 int device_count() noexcept;
 int device_active() noexcept;

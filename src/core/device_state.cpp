@@ -12,7 +12,14 @@
 // from the Product.
 #include "core/device_state.hpp"
 
+#include "common/errors.hpp"
+#include "core/config.hpp"
+
 #include <atomic>
+#include <cstdint>
+#include <expected>
+#include <haze/haze_types.h>
+#include <utility>
 // Plain C-ABI header (only haze_types.h + stdint.h) — pulls no C++/OpenFHE, so
 // depending on it here does not leak the bridge's OpenFHE surface into core/.
 #include <haze/replay_bridge.h>
@@ -30,7 +37,9 @@ void DeviceState::reset() noexcept {
     epoch.reset();
     backend.reset();
     allocator.reset();
-    config.reset();
+    fhe_params = {}; // back to unconfigured; hazeConfigureDevice must run again
+    replay_config = {};
+    configured = false;
     active_device.store(0, std::memory_order_relaxed);
     next_stream_id.store(1, std::memory_order_relaxed);
     next_event_id.store(1, std::memory_order_relaxed);
@@ -40,11 +49,7 @@ void DeviceState::reset() noexcept {
     CompilerBackend::reset_compiler();
 }
 
-// Single definition point for the subsystem accessors declared in each
-// class's header.
-Config &config() noexcept {
-    return device_state().config;
-}
+// Single definition point for the subsystem accessors declared in each header.
 CompilerBackend &backend() noexcept {
     return device_state().backend;
 }
@@ -53,6 +58,58 @@ DeviceAllocator &allocator() noexcept {
 }
 EpochState &epoch() noexcept {
     return device_state().epoch;
+}
+
+// Read side: the frozen configs — plain always-valid members (default until
+// configured), so these never fault; callers gate on config_finalized().
+const FheParams &fhe_params() noexcept {
+    return device_state().fhe_params;
+}
+const ReplayConfig &replay_config() noexcept {
+    return device_state().replay_config;
+}
+
+bool config_finalized() noexcept {
+    return device_state().configured;
+}
+
+std::expected<void, HazeInternalError> configure_device(const hazeFheParams &fhe,
+                                                        const hazeReplayConfig *replay) noexcept {
+    // Once the backend is brought up (first compute) it has latched the config,
+    // so a later reconfigure could not take effect — reject it rather than
+    // silently diverge. Reconfiguring before bring-up is fine (latest wins);
+    // hazeDeviceReset re-opens configuration.
+    if (backend().is_initialized()) {
+        record_internal_error(
+            HazeInternalError::ConfigLocked,
+            "hazeConfigureDevice: device already brought up; reset to reconfigure");
+        return std::unexpected(HazeInternalError::ConfigLocked);
+    }
+
+    // Validate + deep-copy the caller's structs into the immutable configs; the
+    // config types own all validation (no builder). Nothing is installed unless
+    // FheParams::create succeeds (ReplayConfig::create is infallible).
+    auto built_fhe = FheParams::create(fhe);
+    if (!built_fhe)
+        return std::unexpected(built_fhe.error());
+    ReplayConfig built_replay = ReplayConfig::create(replay);
+
+    // Apply the allocator's polynomial size only now the whole config is valid;
+    // changing the ring dimension under live allocations would leave their
+    // shadows mis-sized (a former D2H overread), so refuse that.
+    const uint64_t ring_dim = built_fhe->ring_dim();
+    if (allocator().has_live_allocations() && ring_dim != device_state().fhe_params.ring_dim()) {
+        record_internal_error(HazeInternalError::ConfigLocked,
+                              "hazeConfigureDevice: allocations live; free them or reset first");
+        return std::unexpected(HazeInternalError::ConfigLocked);
+    }
+    allocator().set_polynomial_size(ring_dim * sizeof(uint64_t));
+
+    // Commit the frozen configs — the only stored config state.
+    device_state().fhe_params = std::move(*built_fhe);
+    device_state().replay_config = std::move(built_replay);
+    device_state().configured = true;
+    return {};
 }
 
 } // namespace haze

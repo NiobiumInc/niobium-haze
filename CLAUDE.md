@@ -87,7 +87,7 @@ is unaffected.
 Symptom: a clean release build links with warnings like `object file ...
 was built for newer macOS version (26.0) than being linked (14.0)`, then
 segfaults non-deterministically inside calls that should be no-ops
-(`hazeSetRingDimension`, `hazeMalloc`). Two libc++ ABI versions are
+(`hazeConfigureDevice`, `hazeMalloc`). Two libc++ ABI versions are
 colliding in the same process.
 
 Fix: rebuild every dylib in the link graph in the same shell so each
@@ -146,7 +146,7 @@ end-to-end; any other target string (`FUNC_SIM`, `FHE_SIM`, `FPGA_TRI`,
 `fhetch_sim`) is forwarded verbatim to `nbcc_fhetch_replay` over HTTP
 transport and requires `NIOBIUM_COMPILER_ROOT` to point at a compiler
 checkout with `build/nbcc_fhetch_replay`. Resolution order for the value
-itself: explicit `hazeSetTarget()` call > `HAZE_TARGET` env var > `"local"`
+itself: explicit `hazeReplayConfig::target` > `HAZE_TARGET` env var > `"local"`
 default. `kLocalTarget` in `src/core/config.hpp` is the single source of
 truth for the local string literal — keep comparison sites going through
 that constant.
@@ -412,7 +412,7 @@ CUDA-shape parity but do not flush and do not model ordering.
   addr that was never written is a contract violation).
 
 Every `hazeMalloc` allocation must equal the configured polynomial size
-(`ring_dim * sizeof(uint64_t)`). `hazeSetRingDimension` is required before
+(`ring_dim * sizeof(uint64_t)`). `hazeConfigureDevice` is required before
 the first `hazeMalloc`. Non-polynomial scratch (pointer arrays, twiddle
 tables, kernel-arg packs) goes through `hazeHostAlloc` or ordinary host
 malloc, not `hazeMalloc`.
@@ -428,7 +428,10 @@ addresses above FHETCH's synthetic address range (< `0x1000000000`).
 ### Lock order
 
 The full DAG is documented canonically in `src/common/thread_safety.hpp`:
-epoch → {config, allocator}; config → allocator; backend-init → config.
+epoch → allocator. Config carries no lock: it is a write-only builder frozen to
+an immutable value by the explicit `hazeConfigureDevice()`, then read without
+lock or atomics (the config is mutated only by the single-threaded control
+plane, never by compute — see thread_safety.hpp for the contract).
 The allocator is a leaf — allocator-side code must never call back into
 `EpochState` (or any other component) while holding its lock or it will
 deadlock. The constraint is enforced architecturally (no back-call exists

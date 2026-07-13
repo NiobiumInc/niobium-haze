@@ -22,7 +22,8 @@ TEST_CASE("zero-copy input promotion: shadow buffer flows into Polynomial withou
     constexpr size_t bytes = ring_dim * sizeof(uint64_t);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = ring_dim};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     void *dev = nullptr;
     REQUIRE(hazeMalloc(&dev, bytes) == HAZE_SUCCESS);

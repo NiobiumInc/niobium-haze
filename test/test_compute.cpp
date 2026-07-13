@@ -18,6 +18,7 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <niobium/compiler.h>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -106,14 +107,12 @@ struct MrpDriver {
 
     uint64_t setup() {
         REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+        const uint64_t moduli[] = {kQ0, kQ1, kQ2};
+        const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
+        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
         uint64_t picked = 0;
         REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
         REQUIRE(picked != 0);
-        REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-        REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-        REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
         base = {kQ0, kQ1, kQ2};
         return kQ0;
     }
@@ -1247,12 +1246,15 @@ TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integ
 
     // Program dir must be set before the first compute (forwarded at init).
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetProgramDirectory(dir.string().c_str()) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    // Bind the program-directory string to a named local so its c_str() outlives
+    // the hazeConfigureDevice call (a temporary would dangle after this statement).
+    const std::string dir_str = dir.string();
+    const hazeReplayConfig replay = {.program_directory = dir_str.c_str()};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     void *d_a = nullptr;
     void *d_b = nullptr;
@@ -1291,9 +1293,9 @@ TEST_CASE("hazeWriteProgram writes the project trace without replaying", "[integ
 
 TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
@@ -1314,9 +1316,9 @@ TEST_CASE("hazeAdd with unknown source address returns error", "[unit]") {
 
 TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     void *d_a = nullptr;
     void *d_b = nullptr;
@@ -1342,9 +1344,9 @@ TEST_CASE("hazeAdd with invalid modulus index returns error", "[unit]") {
 
 TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     void *d_dst = nullptr;
     REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
@@ -1361,9 +1363,9 @@ TEST_CASE("hazeMul with unknown source address returns error", "[unit]") {
 
 TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     void *d_a = nullptr;
     void *d_b = nullptr;
@@ -1394,9 +1396,9 @@ TEST_CASE("hazeMul with invalid modulus index returns error", "[unit]") {
 
 TEST_CASE("hazeAddMrp rejects null arrays / zero base length", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
@@ -1417,9 +1419,9 @@ TEST_CASE("hazeAddMrp rejects null arrays / zero base length", "[unit]") {
 
 TEST_CASE("hazeAddScalarMrp rejects null scalars array", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
@@ -1432,9 +1434,9 @@ TEST_CASE("hazeAddScalarMrp rejects null scalars array", "[unit]") {
 
 TEST_CASE("hazeNTTMrp rejects null arrays / zero base length", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};
@@ -1452,9 +1454,9 @@ TEST_CASE("hazeAutomorphMrp rejects null arrays / zero base length", "[unit]") {
     // so the validation code lives in its own shim block — covered here
     // to ensure the same null-pointer guarantees apply.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
     const uint64_t base[] = {kQ0};
     void *dst_polys[] = {nullptr};

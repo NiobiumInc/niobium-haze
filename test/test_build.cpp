@@ -76,7 +76,8 @@ TEST_CASE("multi-device stubs return HAZE_ERROR_NOT_SUPPORTED", "[unit]") {
 TEST_CASE("successful stubs do not pollute error state", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Ensure a sequence of successful calls leaves hazeGetLastError as HAZE_SUCCESS.
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = 4096};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
     void *ptr = nullptr;
     REQUIRE(hazeMalloc(&ptr, 32768) == HAZE_SUCCESS);
     REQUIRE(hazeFree(ptr) == HAZE_SUCCESS);

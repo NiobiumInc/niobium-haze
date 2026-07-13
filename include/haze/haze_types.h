@@ -20,10 +20,7 @@
 // NOLINTNEXTLINE(modernize-deprecated-headers)
 #include <stdint.h>
 
-// ---------------------------------------------------------------------------
-// Symbol visibility
-// ---------------------------------------------------------------------------
-
+// Symbol visibility.
 #ifdef _WIN32
 #ifdef HAZE_BUILDING_LIBRARY
 #define HAZE_API __declspec(dllexport)
@@ -52,31 +49,20 @@
 #define HAZE_NOEXCEPT
 #endif
 
-// ---------------------------------------------------------------------------
-// Opaque handle types (distinct pointer types, not void*)
-// ---------------------------------------------------------------------------
-
+// Opaque handle types (distinct pointer types, not void*).
 typedef struct haze_stream_s *hazeStream_t;
 typedef struct haze_event_s *hazeEvent_t;
 typedef struct haze_graph_s *hazeGraph_t;
 typedef struct haze_exec_s *hazeGraphExec_t;
 
-// ---------------------------------------------------------------------------
-// Error codes
-// ---------------------------------------------------------------------------
-
-// The four typedef-enum types below are the public C ABI. C does not
-// have `enum class`, and adding a `: uint8_t` underlying type is C23-
-// only and not portable, so the C++ Core Guidelines / performance
-// recommendations that flag unscoped enums and oversized base types
-// are silenced for the entire ABI block.
+// The four typedef-enum types below are the public C ABI: C has no `enum class` and a
+// `: uint8_t` underlying type is C23-only, so the checks flagging unscoped enums and oversized
+// base types are silenced for the entire ABI block.
 // NOLINTBEGIN(cppcoreguidelines-use-enum-class,performance-enum-size)
 
-// Only user-actionable conditions get their own code. Anything that
-// signals "haze itself is broken" maps to HAZE_ERROR_INTERNAL — callers
-// can log it but can't recover; the rich classification lives in
-// haze's internal `HazeInternalError` enum and surfaces via the
-// HAZE_DEBUG=1 stderr log.
+// Only user-actionable conditions get their own code; anything signalling "haze itself is
+// broken" maps to HAZE_ERROR_INTERNAL (loggable, not recoverable), whose rich classification
+// lives in the internal `HazeInternalError` enum and surfaces via the HAZE_DEBUG=1 stderr log.
 typedef enum {
     // Values are explicit: the catch-all is a single high bit, which is not
     // sequential, so readability-enum-initial-value requires all-or-none.
@@ -91,28 +77,18 @@ typedef enum {
     HAZE_ERROR_SOURCE_UNAVAILABLE = 8, // compute / D2D read from an address that was never
                                        // written (H2D) and holds no recorded result
     HAZE_ERROR_NOT_FLUSHED = 9, // D2H of an untagged / unflushed address: tag output + hazeFlush
-    // Catch-all sits last as a single high bit (2^10). User-actionable codes are
-    // added sequentially above and must stay below it, so `err & HAZE_ERROR_INTERNAL`
-    // detects an internal error without enumerating every code.
+    // User-actionable codes stay sequential below this single high bit (2^10), so
+    // `err & HAZE_ERROR_INTERNAL` detects an internal error without enumerating every code.
     HAZE_ERROR_INTERNAL = 1024, // haze invariant broke or backend failed; see HAZE_DEBUG log
 } hazeError_t;
 
-// ---------------------------------------------------------------------------
-// DMA direction
-// Numbering matches CUDA's cudaMemcpyKind value-for-value so callers
-// porting from CUDA can cast cudaMemcpyKind to hazeMemcpyKind without
-// silently swapping directions.
-// ---------------------------------------------------------------------------
-
+// DMA direction: numbering matches CUDA's cudaMemcpyKind value-for-value, so CUDA ports can
+// cast cudaMemcpyKind to hazeMemcpyKind without silently swapping directions.
 typedef enum {
     HAZE_MEMCPY_HOST_TO_DEVICE = 1,
     HAZE_MEMCPY_DEVICE_TO_HOST = 2,
     HAZE_MEMCPY_DEVICE_TO_DEVICE = 3,
 } hazeMemcpyKind;
-
-// ---------------------------------------------------------------------------
-// Device properties.
-// ---------------------------------------------------------------------------
 
 typedef struct {
     char name[256];
@@ -124,12 +100,8 @@ typedef struct {
     int numHBMBanks;                   /* HAZE-specific */
 } hazeDeviceProp;
 
-// ---------------------------------------------------------------------------
-// Pointer attribute query result
-// ---------------------------------------------------------------------------
-
-// Memory-type values stored in hazePointerAttributes::type. Numbering
-// matches CUDA's cudaMemoryType for portability of CUDA-to-HAZE ports.
+// Memory-type values stored in hazePointerAttributes::type; numbering matches CUDA's
+// cudaMemoryType for portability of CUDA-to-HAZE ports.
 typedef enum {
     HAZE_MEMORY_TYPE_UNREGISTERED = 0,
     HAZE_MEMORY_TYPE_HOST = 1,
@@ -144,15 +116,40 @@ typedef struct {
     void *hostPointer;
 } hazePointerAttributes;
 
-// CRT basis-conversion parameter structs.
-//
-// Each struct describes a multi-residue polynomial (MRP) operation by
-// listing its prime moduli (the CRT base) and any auxiliary metadata.
-// All `*_base` arrays are arrays of `uint64_t` prime values that match
-// the primes passed to hazeSetCiphertextModulus.
-//
-// Polynomial pointers are passed via the matching public function's
-// `dst` / `src` arguments — never inside the params struct.
+// One-shot device configuration, filled by the caller and passed to
+// hazeConfigureDevice(); haze copies what it needs and retains no pointer.
+
+// FHE-scheme parameters. ring_dim is required (a power of two in the device
+// envelope). moduli lists moduli_count ciphertext-modulus primes (contiguous,
+// non-zero, unique); twiddle_generators is optional NTT metadata. A *_count of
+// 0 permits the matching pointer to be NULL.
+typedef struct {
+    uint64_t ring_dim;
+    const uint64_t *moduli;
+    size_t moduli_count;
+    const uint64_t *twiddle_generators;
+    size_t twiddle_count;
+} hazeFheParams;
+
+// Hardware/replay configuration. Every field is optional: a NULL string takes
+// its default (target "local"; program "haze" / "0.1" / "HAZE runtime";
+// program directory <cwd>/<program_name>) and the int flags default off. Pass
+// a NULL hazeReplayConfig* to hazeConfigureDevice to accept all defaults.
+typedef struct {
+    const char *target;
+    const char *program_name;
+    const char *program_version;
+    const char *program_description;
+    const char *program_directory;
+    int montgomery;
+    int bit_reversal;
+    int reduced_noise;
+} hazeReplayConfig;
+
+// CRT basis-conversion parameter structs: each describes a multi-residue polynomial (MRP)
+// operation by listing its prime moduli plus auxiliary metadata, where every `*_base` array
+// holds `uint64_t` primes matching those passed in hazeFheParams::moduli; polynomial
+// pointers travel via the matching function's `dst` / `src` arguments, never inside the struct.
 
 // hazeBasisConvert: convert an MRP from src_base to dst_base.
 //   src: array of src_base_len input poly pointers.

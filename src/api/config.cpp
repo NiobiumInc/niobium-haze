@@ -13,62 +13,17 @@
 #include "core/config.hpp"
 
 #include "common/errors.hpp"
-#include "core/backend.hpp"
 
-#include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 
-extern "C" hazeError_t hazeSetRingDimension(uint64_t n) noexcept {
-    return set_internal_result(haze::config().set_ring_dimension(n));
-}
-
-extern "C" hazeError_t hazeSetCiphertextModulus(int index, uint64_t modulus) noexcept {
-    return set_internal_result(haze::config().set_modulus(index, modulus));
-}
-
-extern "C" hazeError_t hazeSetTwiddleFactors(int index, uint64_t generator) noexcept {
-    return set_internal_result(haze::config().set_twiddle_generator(index, generator));
-}
-
-extern "C" hazeError_t hazeConfigureDevice() noexcept {
-    return set_internal_result(haze::config().configure_device());
-}
-
-extern "C" hazeError_t hazeSetProgramInfo(const char *name, const char *version,
-                                          const char *description) noexcept {
-    return set_internal_result(haze::config().set_program_info(name, version, description));
-}
-
-extern "C" hazeError_t hazeSetTarget(const char *target) noexcept {
-    if (target == nullptr)
+extern "C" hazeError_t hazeConfigureDevice(const hazeFheParams *fhe,
+                                           const hazeReplayConfig *replay) noexcept {
+    // One-shot configuration: the caller owns both structs. `fhe` is required;
+    // `replay` may be null (all defaults). configure_device builds the immutable
+    // configs through transient local builders and installs them — no config
+    // state is held before this call, and nothing is installed on failure.
+    if (fhe == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // The target is baked into compiler().init() at bring-up and never
-    // re-read; fail fast instead of silently ignoring the change. The gate is
-    // serialized against init so a set racing bring-up cannot slip through.
-    if (!haze::backend().try_set_target(target)) {
-        haze::record_internal_error(haze::HazeInternalError::ConfigLocked,
-                                    "hazeSetTarget: backend already initialized");
-        return set_error(HAZE_ERROR_CONFIGERR);
-    }
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeSetProgramDirectory(const char *dir) noexcept {
-    return set_internal_result(haze::config().set_program_directory(dir));
-}
-
-extern "C" hazeError_t hazeSetMontgomery(int enable) noexcept {
-    haze::config().set_montgomery(enable != 0);
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeSetBitReversal(int enable) noexcept {
-    haze::config().set_bit_reversal(enable != 0);
-    return HAZE_SUCCESS;
-}
-
-extern "C" hazeError_t hazeSetReducedNoise(int enable) noexcept {
-    haze::config().set_reduced_noise(enable != 0);
-    return HAZE_SUCCESS;
+    return set_internal_result(haze::configure_device(*fhe, replay));
 }

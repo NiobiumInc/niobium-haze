@@ -44,7 +44,7 @@ Concise house style for libhaze: a Rust programmer's path to Rust-grade safety i
 
 - Annotate every guarded field `HAZE_GUARDED_BY(mutex_)`; `-Wthread-safety` rejects unguarded access at compile time.
 - Mark lock-taking public methods `HAZE_EXCLUDES(mutex_)`; mark `_locked`-suffixed helpers `HAZE_REQUIRES(mutex_)` and call them only inside a guarded scope.
-- Hold the lock DAG documented in `src/common/thread_safety.hpp` (epoch → {config, allocator}; config → allocator; backend-init → config): code under `EpochState::mutex_` may re-enter `DeviceAllocator`; keep allocator code self-contained (a leaf) so it resolves device state entirely within the allocator.
+- Hold the lock DAG documented in `src/common/thread_safety.hpp` (epoch → allocator): code under `EpochState::mutex_` may re-enter `DeviceAllocator`; keep allocator code self-contained (a leaf) so it resolves device state entirely within the allocator. Config carries no lock — it is a write-only builder frozen to an immutable value at bring-up, then read without synchronization.
 - Expose a mutex reference through an accessor annotated `HAZE_RETURN_CAPABILITY(mutex_)`.
 
 ## Prefer (modern C++20/23)

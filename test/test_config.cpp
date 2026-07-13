@@ -1,102 +1,119 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
+#include <vector>
 
-// HAZE's public C API exposes setters for ring dimension, ciphertext
-// moduli, twiddle factors, program info, and target — but no
-// corresponding getters (see include/haze/haze.h:94-110). For accept
-// tests, we therefore can only assert that the call returned
-// HAZE_SUCCESS; the value's presence in internal state is not
-// observable through the public API. Each accept test below carries a
-// short note where read-back would otherwise belong.
+// HAZE takes the whole configuration in one hazeConfigureDevice call
+// (hazeFheParams + optional hazeReplayConfig) — the caller owns the structs and
+// no config state is held before the call. There are no getters, so accept
+// tests can only assert HAZE_SUCCESS. Per-argument problems (a bad ring
+// dimension, a zero modulus, too many moduli) surface as
+// HAZE_ERROR_INVALID_VALUE; whole-config invariants (duplicate moduli,
+// reconfiguring under live allocations) as HAZE_ERROR_CONFIGERR. Nothing is
+// installed on a failed configure.
 
-TEST_CASE("haze setters accept well-formed inputs", "[unit]") {
+TEST_CASE("hazeConfigureDevice accepts a well-formed config", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Ring dimension: every supported power-of-2.
-    for (uint64_t n : {4096ULL, 8192ULL, 16384ULL, 32768ULL, 65536ULL}) {
-        REQUIRE(hazeSetRingDimension(n) == HAZE_SUCCESS);
-    }
-    // Two distinct NTT-friendly primes (q ≡ 1 mod 2N) for N=4096; the
-    // same constants are used by test_basis_convert.cpp.
+    // Two distinct NTT-friendly primes (q ≡ 1 mod 2N) for N=4096; the same
+    // constants are used by test_basis_convert.cpp.
     constexpr uint64_t kQ0 = 576460752303415297ULL;
     constexpr uint64_t kQ1 = 576460752303439873ULL;
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetTwiddleFactors(0, 3) == HAZE_SUCCESS);
-    REQUIRE(hazeSetTwiddleFactors(1, 5) == HAZE_SUCCESS);
-    REQUIRE(hazeSetProgramInfo("my-program", "1.2.3", "experimental run") == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("FHE_SIM") == HAZE_SUCCESS);
-    // No public getters; HAZE_SUCCESS is the only assertion. The
-    // companion "rejects ..." TEST_CASEs cover the validation gates.
+    const uint64_t moduli[] = {kQ0, kQ1};
+    const uint64_t twiddle[] = {3, 5};
+    const hazeFheParams fhe = {.ring_dim = 4096,
+                               .moduli = moduli,
+                               .moduli_count = 2,
+                               .twiddle_generators = twiddle,
+                               .twiddle_count = 2};
+    const hazeReplayConfig replay = {.target = "FHE_SIM",
+                                     .program_name = "my-program",
+                                     .program_version = "1.2.3",
+                                     .program_description = "experimental run"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+    // No public getters; HAZE_SUCCESS is the only assertion. The "rejects ..."
+    // cases below cover the validation gates.
 }
 
-TEST_CASE("hazeSetRingDimension rejects unsupported dimensions", "[unit]") {
+TEST_CASE("hazeConfigureDevice accepts every supported ring dimension", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(0) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeSetRingDimension(3000) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeSetRingDimension(5000) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeSetRingDimension(100) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    for (uint64_t n : {4096ULL, 8192ULL, 16384ULL, 32768ULL, 65536ULL}) {
+        const hazeFheParams fhe = {.ring_dim = n};
+        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+    }
 }
 
-TEST_CASE("hazeSetCiphertextModulus rejects negative index", "[unit]") {
+TEST_CASE("hazeConfigureDevice defaults the replay config when null", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(-1, 1) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    const hazeFheParams fhe = {.ring_dim = 4096};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeSetCiphertextModulus rejects zero modulus", "[unit]") {
+TEST_CASE("hazeConfigureDevice rejects a null hazeFheParams", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, 0) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-}
-
-TEST_CASE("hazeSetTwiddleFactors rejects negative index", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTwiddleFactors(-1, 3) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeConfigureDevice(nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
 }
 
-TEST_CASE("hazeConfigureDevice fails without ring dimension", "[unit]") {
+TEST_CASE("hazeConfigureDevice rejects a null moduli array with a non-zero count", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_CONFIGERR);
+    const hazeFheParams fhe = {.ring_dim = 4096, .moduli = nullptr, .moduli_count = 2};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+}
+
+TEST_CASE("hazeConfigureDevice rejects unsupported ring dimensions", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // 0 (unset), and non-power-of-two / out-of-envelope values.
+    for (uint64_t n : {0ULL, 100ULL, 3000ULL, 5000ULL}) {
+        const hazeFheParams fhe = {.ring_dim = n};
+        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+    }
+}
+
+TEST_CASE("hazeConfigureDevice rejects a zero modulus", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {12289, 0};
+    const hazeFheParams fhe = {.ring_dim = 4096, .moduli = moduli, .moduli_count = 2};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+}
+
+TEST_CASE("hazeConfigureDevice rejects too many ciphertext moduli", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // One past the device envelope (hazeDeviceProp::maxCiphertextModuli == 64);
+    // all distinct and non-zero, so only the count trips the rejection.
+    std::vector<uint64_t> moduli(65);
+    for (std::size_t i = 0; i < moduli.size(); ++i)
+        moduli[i] = 12289 + (i * 2);
+    const hazeFheParams fhe = {
+        .ring_dim = 4096, .moduli = moduli.data(), .moduli_count = moduli.size()};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+}
+
+TEST_CASE("hazeConfigureDevice rejects duplicate ciphertext moduli", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t dup[] = {12289, 12289};
+    const hazeFheParams bad = {.ring_dim = 4096, .moduli = dup, .moduli_count = 2};
+    // Each modulus is per-slot valid but collides on the whole-config uniqueness
+    // check, which lives in build().
+    REQUIRE(hazeConfigureDevice(&bad, nullptr) == HAZE_ERROR_CONFIGERR);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_CONFIGERR);
+    // Nothing is installed on failure, so a corrected config configures cleanly.
+    const uint64_t ok[] = {12289, 40961};
+    const hazeFheParams good = {.ring_dim = 4096, .moduli = ok, .moduli_count = 2};
+    REQUIRE(hazeConfigureDevice(&good, nullptr) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeConfigureDevice succeeds when ring dimension is set", "[unit]") {
+TEST_CASE("hazeDeviceReset re-permits configuration", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeSetProgramInfo rejects null arguments", "[unit]") {
+    const hazeFheParams fhe = {.ring_dim = 4096};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetProgramInfo(nullptr, "1.0", "desc") == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeSetProgramInfo("name", nullptr, "desc") == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeSetProgramInfo("name", "1.0", nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-}
-
-TEST_CASE("hazeSetTarget rejects null", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget(nullptr) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
-}
-
-TEST_CASE("hazeDeviceReset returns success and re-permits configuration", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // After reset, configure_device should fail again until ring_dim re-set.
-    REQUIRE(hazeConfigureDevice() == HAZE_ERROR_CONFIGERR);
-    REQUIRE(hazeGetLastError() == HAZE_ERROR_CONFIGERR);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
+    // After reset a fresh configure still succeeds.
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 }

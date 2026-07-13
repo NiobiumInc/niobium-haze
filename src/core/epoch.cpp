@@ -52,9 +52,17 @@ void EpochState::ensure_recording_locked() {
 std::expected<void, HazeInternalError> EpochState::require_recording_locked() const noexcept {
     if (recording_)
         return {};
-    // Name the user-actionable refusal (montgomery/bit-reversal on local)
-    // distinctly from a backend-init failure.
-    if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
+    // No explicit hazeConfigureDevice(): the frozen config isn't built, so report
+    // that distinctly and before touching replay_config().
+    if (!config_finalized()) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "require_recording_locked: hazeConfigureDevice() not called");
+        return std::unexpected(HazeInternalError::NotConfigured);
+    }
+    // Configured but recording refused: name the montgomery/bit-reversal-on-local
+    // case distinctly from a backend-init failure.
+    const ReplayConfig &rc = replay_config();
+    if ((rc.montgomery() || rc.bit_reversal()) && rc.target_is_local()) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "require_recording_locked (montgomery/bit_reversal require a "
                               "transport target such as FUNC_SIM)");
@@ -84,7 +92,7 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
         return it->second;
     }
 
-    const uint64_t ring_dim = config().ring_dim();
+    const uint64_t ring_dim = fhe_params().ring_dim();
     auto components = allocator().extract_polynomial_components(addr, ring_dim);
     if (!components) {
         // Compute / D2D on an addr with neither shadow data nor a
@@ -182,17 +190,10 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     if (!recording_) {
         return {};
     }
-    // Both guards below cover invariants that the H2D entry point has
-    // already enforced (copy_h2d requires alloc_set_ membership and a
-    // configured poly_bytes_, so by the time this runs ring_dim is set
-    // and shadow bytes exist). Treat hits as broken-haze internal
-    // errors so we don't silently drop the input tag.
-    const uint64_t ring_dim = config().ring_dim();
-    if (ring_dim == 0) {
-        record_internal_error(HazeInternalError::NotConfigured,
-                              "tag_h2d_input_locked: ring_dim == 0 after copy_h2d");
-        return std::unexpected(HazeInternalError::NotConfigured);
-    }
+    // recording_ implies a finalized FheParams (ring_dim set and validated at
+    // build), so ring_dim is non-zero here; the read-back guard below covers the
+    // remaining shadow-size invariant.
+    const uint64_t ring_dim = fhe_params().ring_dim();
     auto components = allocator().read_polynomial_components(addr, ring_dim);
     if (!components)
         return std::unexpected(components.error());
@@ -376,18 +377,9 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {
-    // Montgomery / bit-reversed traces can't execute on the in-process
-    // simulator. ensure_initialized() already refuses first-time init for this
-    // combination (so nothing was recorded); checking again here makes the
-    // failure visible at the flush call instead of a silent no-op followed
-    // by OutputNotFlushed on the next D2H, and also covers the
-    // flags-set-after-init ordering the init-time check can't see.
-    if ((config().montgomery() || config().bit_reversal()) && config().target() == kLocalTarget) {
-        record_internal_error(HazeInternalError::UnsupportedDataFormat,
-                              "haze::flush (montgomery/bit_reversal require a transport "
-                              "target such as FUNC_SIM)");
-        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
-    }
+    // The montgomery/bit-reversal-on-local refusal is enforced at bring-up
+    // against the frozen replay config; the format can't change afterwards, so
+    // no flush-time re-check is needed.
     return epoch().replay_and_populate();
 }
 

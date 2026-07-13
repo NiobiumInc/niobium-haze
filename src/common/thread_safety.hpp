@@ -12,37 +12,37 @@
 // from the Product.
 #pragma once
 
-// Clang thread-safety analysis annotations. Compile-time, zero runtime cost.
-// Enabled by passing -Wthread-safety to clang; expand to nothing on other
-// compilers. Documented at:
-// https://clang.llvm.org/docs/ThreadSafetyAnalysis.html
+// Clang thread-safety analysis annotations: compile-time, zero runtime cost,
+// enabled by -Wthread-safety and expanding to nothing on other compilers
+// (https://clang.llvm.org/docs/ThreadSafetyAnalysis.html).
 //
-// Usage in HAZE:
-//   - Mark mutex members with HAZE_CAPABILITY("mutex").
-//   - Mark fields the mutex protects with HAZE_GUARDED_BY(mutex_).
-//   - Mark methods that require the caller to hold the lock with
-//     HAZE_REQUIRES(mutex_) — typically the *_locked variants.
-//   - Mark methods that take the lock themselves (and so must not be
-//     called with the lock already held) with HAZE_EXCLUDES(mutex_).
-//   - Mark RAII lock-holders with HAZE_SCOPED_CAPABILITY on the class,
-//     HAZE_ACQUIRE(mutex) on the constructor, HAZE_RELEASE() on the
-//     destructor.
-//   - Mark accessor methods that hand out a reference to the underlying
-//     capability with HAZE_RETURN_CAPABILITY(field).
+// Usage: HAZE_CAPABILITY marks a mutex, HAZE_GUARDED_BY the fields it protects,
+// HAZE_REQUIRES(mutex_) methods the caller must hold the lock for (the *_locked
+// variants), HAZE_EXCLUDES(mutex_) methods that take it themselves (so must not be
+// called holding it); HAZE_SCOPED_CAPABILITY + HAZE_ACQUIRE/HAZE_RELEASE annotate
+// RAII lock-holders and HAZE_RETURN_CAPABILITY accessors returning the capability.
 //
-// Lock order (canonical statement — other files reference this one).
-// HAZE's mutexes form a DAG; acquire only along its edges:
+// Lock order (canonical statement — other files reference this one); HAZE's
+// mutexes form a DAG, acquire only along its edges:
 //
-//   EpochState::mutex_           -> { Config::mutex_, DeviceAllocator::mutex_ }
-//   Config::mutex_               -> DeviceAllocator::mutex_
-//   CompilerBackend::init_mutex_ -> Config::mutex_
+//   EpochState::mutex_ -> DeviceAllocator::mutex_
 //
-// The allocator is a leaf: allocator code must not call into any other
-// component while holding its lock; TSAN is the runtime backstop.
+// Config carries no lock. The FHE params and replay config are immutable values
+// built by the single explicit hazeConfigureDevice() (from caller-owned structs,
+// via transient local builders) and installed into DeviceState; only the control
+// plane (hazeConfigureDevice, hazeDeviceReset) writes them. The contract, like
+// CUDA's device setup, is that the control plane runs single-threaded and is not
+// concurrent with compute: configure happens before the first compute, and
+// hazeDeviceReset is not called while compute is in flight. Under that contract
+// the compute path only ever READS the frozen config — never finalizes, never
+// mutates — so it needs no lock or atomics (CompilerBackend::init_mutex_'s
+// acquire/release at bring-up orders the freeze before every compute read).
+// init_mutex_ serializes bring-up but acquires no other lock. The allocator is a
+// leaf: allocator code must not call into any other component while holding its
+// lock; TSAN is the runtime backstop.
 
-// Clang's thread-safety attributes are exposed as GNU-style
-// __attribute__((...)), not C++11 [[clang::...]]. The macro names
-// here mirror the spellings shown in the clang TSA documentation.
+// Clang's thread-safety attributes are GNU-style __attribute__((...)), not C++11
+// [[clang::...]]; the macro names mirror the clang TSA documentation spellings.
 #ifdef __clang__
 #define HAZE_CAPABILITY(s) __attribute__((capability(s)))
 #define HAZE_SCOPED_CAPABILITY __attribute__((scoped_lockable))
@@ -67,11 +67,9 @@
 
 namespace haze {
 
-// Thin wrapper around std::mutex annotated as a clang TSA capability.
-// libstdc++'s std::mutex carries no annotations, so without this
-// wrapper the TSA attributes cannot identify the underlying mutex as
-// the capability they protect. Used by EpochState::mutex_ and
-// DeviceAllocator::mutex_.
+// Thin std::mutex wrapper annotated as a clang TSA capability, because libstdc++'s
+// std::mutex carries no annotations for TSA to identify; used by EpochState::mutex_
+// and DeviceAllocator::mutex_.
 class HAZE_CAPABILITY("mutex") HazeMutex {
   public:
     HazeMutex() = default;
@@ -85,11 +83,9 @@ class HAZE_CAPABILITY("mutex") HazeMutex {
     std::mutex impl_;
 };
 
-// RAII scoped lock guard for HazeMutex, equivalent to std::lock_guard
-// but with TSA annotations propagated through HazeMutex's lock/unlock.
-// libstdc++'s std::lock_guard does not carry capability annotations;
-// without this wrapper TSA cannot tell that `std::lock_guard lock(m)`
-// holds the capability for the rest of the scope.
+// RAII scoped lock guard for HazeMutex, like std::lock_guard but propagating TSA
+// annotations through HazeMutex's lock/unlock, which libstdc++'s std::lock_guard
+// lacks so TSA cannot tell it holds the capability for the scope.
 class HAZE_SCOPED_CAPABILITY HazeLockGuard {
   public:
     explicit HazeLockGuard(HazeMutex &m) HAZE_ACQUIRE(m) : mutex_(m) { mutex_.lock(); }

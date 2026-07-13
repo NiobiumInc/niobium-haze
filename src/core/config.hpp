@@ -13,8 +13,10 @@
 #pragma once
 
 #include "common/errors.hpp"
-#include "common/thread_safety.hpp"
+#include "core/device.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
@@ -24,104 +26,95 @@
 
 namespace haze {
 
-// Canonical target string dispatched through libnbfhetch's compiler.
-// kLocalTarget runs the in-process FHETCH instruction-set simulator:
-// libnbfhetch loads the .fhetch trace into fhetch_sim::Simulator,
-// executes it, and writes <program_dir>/serialized_probes/<name>.ct
-// so epoch.cpp's result-population loop fills shadow buffers with
-// computed values. No compiler-side binary or HTTP transport needed.
-//
-// Anything else (e.g. "FUNC_SIM", "FHE_SIM", "FPGA_TRI", "fhetch_sim")
-// is forwarded verbatim to nbcc_fhetch_replay over the HTTP transport
-// — those strings select a backend on the compiler side. Keep
-// kLocalTarget symbolic so a future rename in libnbfhetch flows
-// through every comparison site in haze.
+// Canonical target string dispatched through libnbfhetch's compiler:
+// kLocalTarget runs the in-process FHETCH simulator; anything else is
+// forwarded verbatim to nbcc_fhetch_replay.
 constexpr std::string_view kLocalTarget = "local";
 
-class DeviceState;
-
-// Global FHE-context configuration: ring dimension, ciphertext moduli,
-// twiddle generators, plus the program/target metadata fed to the compiler
-// at recording-init time. A DeviceState member reached via config(); the
-// mutex covers writes and reads alike (vector resizes).
-class Config {
+// Immutable FHE-scheme parameters: a thin owning wrapper over the caller's
+// hazeFheParams, deep-copied and validated by create() (the sole non-empty
+// construction path — no separate builder). Read lock-free during compute: it
+// never changes after configure, and the backend/epoch acquire fence orders the
+// copy before every read, so no lock or atomics are needed.
+class FheParams {
   public:
-    // FHE parameters (existing public API).
-    std::expected<void, HazeInternalError> set_ring_dimension(uint64_t n) noexcept
-        HAZE_EXCLUDES(mutex_);
-    std::expected<void, HazeInternalError> set_modulus(int idx, uint64_t modulus) noexcept
-        HAZE_EXCLUDES(mutex_);
-    std::expected<void, HazeInternalError> set_twiddle_generator(int idx,
-                                                                 uint64_t generator) noexcept
-        HAZE_EXCLUDES(mutex_);
-    std::expected<void, HazeInternalError> configure_device() noexcept HAZE_EXCLUDES(mutex_);
+    // Validate the caller's struct and deep-copy it into an immutable FheParams.
+    // Enforces per-argument invariants (ring_dim in the device envelope; moduli
+    // non-zero and within the modulus envelope), the whole-config invariant
+    // (moduli unique), and struct well-formedness (a NULL array with a non-zero
+    // count is InvalidArgument). Nothing partial escapes — on any failure it
+    // returns the error and no object.
+    static std::expected<FheParams, HazeInternalError> create(const hazeFheParams &raw) noexcept;
 
-    uint64_t ring_dim() const noexcept HAZE_EXCLUDES(mutex_);
-    uint64_t modulus(int idx) const noexcept HAZE_EXCLUDES(mutex_);
+    FheParams() = default; // empty pre-configure placeholder (ring_dim 0 = unconfigured)
 
-    // Program / target metadata fed to the compiler during init. Defaults:
-    // name="haze", version="0.1", description="HAZE runtime", target=kLocalTarget.
-    std::expected<void, HazeInternalError> set_program_info(const char *name, const char *version,
-                                                            const char *description) noexcept
-        HAZE_EXCLUDES(mutex_);
-    std::expected<void, HazeInternalError> set_target(const char *target) noexcept
-        HAZE_EXCLUDES(mutex_);
-    std::string program_name() const noexcept HAZE_EXCLUDES(mutex_);
-    std::string program_version() const noexcept HAZE_EXCLUDES(mutex_);
-    std::string program_description() const noexcept HAZE_EXCLUDES(mutex_);
-    std::string target() const noexcept HAZE_EXCLUDES(mutex_);
-
-    // Data-representation toggles (Montgomery form, bit-reversed order), off by
-    // default; the local simulator rejects non-ordinary traces at init.
-    void set_montgomery(bool enable) noexcept HAZE_EXCLUDES(mutex_);
-    void set_bit_reversal(bool enable) noexcept HAZE_EXCLUDES(mutex_);
-    bool montgomery() const noexcept HAZE_EXCLUDES(mutex_);
-    bool bit_reversal() const noexcept HAZE_EXCLUDES(mutex_);
-
-    // Centered (reduced-noise) FBC variant matching OpenFHE WITH_REDUCED_NOISE,
-    // off by default; the HazeEngine constructor enables it for bit-exact parity.
-    void set_reduced_noise(bool enable) noexcept HAZE_EXCLUDES(mutex_);
-    bool reduced_noise() const noexcept HAZE_EXCLUDES(mutex_);
-
-    // Optional output-directory override. When set, the backend forwards it to
-    // niobium::compiler().set_program_directory() at init, so the program dir
-    // (.fhetch + inputs + templates + cryptocontext) lands at this exact path
-    // instead of the cwd/<program_name> default. Unset by default.
-    std::expected<void, HazeInternalError> set_program_directory(const char *dir) noexcept
-        HAZE_EXCLUDES(mutex_);
-    bool has_program_directory() const noexcept HAZE_EXCLUDES(mutex_);
-    std::string program_directory() const noexcept HAZE_EXCLUDES(mutex_);
-
-    void reset() noexcept HAZE_EXCLUDES(mutex_);
-
-    Config(const Config &) = delete;
-    Config &operator=(const Config &) = delete;
+    uint64_t ring_dim() const noexcept { return ring_dim_; }
+    // 0 means "no such configured slot" (outside the contiguous [0, count) range).
+    uint64_t modulus(int idx) const noexcept {
+        if (idx < 0 || idx >= moduli_count_)
+            return 0;
+        return moduli_[static_cast<size_t>(idx)];
+    }
 
   private:
-    friend class DeviceState;
-    Config() = default;
-
-    mutable HazeMutex mutex_;
-    uint64_t ring_dim_ HAZE_GUARDED_BY(mutex_) = 0;
-    std::vector<uint64_t> moduli_ HAZE_GUARDED_BY(mutex_);
-    std::vector<uint64_t> twiddle_generators_ HAZE_GUARDED_BY(mutex_);
-    bool configured_ HAZE_GUARDED_BY(mutex_) = false;
-
-    // Defaults applied lazily on first read.
-    std::string program_name_ HAZE_GUARDED_BY(mutex_);
-    std::string program_version_ HAZE_GUARDED_BY(mutex_);
-    std::string program_description_ HAZE_GUARDED_BY(mutex_);
-    std::string target_ HAZE_GUARDED_BY(mutex_);
-    std::string program_dir_ HAZE_GUARDED_BY(mutex_);
-    bool program_info_set_ HAZE_GUARDED_BY(mutex_) = false;
-    bool target_set_ HAZE_GUARDED_BY(mutex_) = false;
-    bool program_dir_set_ HAZE_GUARDED_BY(mutex_) = false;
-    bool montgomery_ HAZE_GUARDED_BY(mutex_) = false;
-    bool bit_reversal_ HAZE_GUARDED_BY(mutex_) = false;
-    bool reduced_noise_ HAZE_GUARDED_BY(mutex_) = false;
+    uint64_t ring_dim_ = 0;
+    std::array<uint64_t, static_cast<size_t>(kMaxCiphertextModuli)> moduli_{};
+    int moduli_count_ = 0;
+    std::vector<uint64_t> twiddle_generators_; // stored for the trace; no reader yet
 };
 
-// Defined in device_state.cpp (returns the DeviceState member).
-Config &config() noexcept;
+// Immutable hardware/replay configuration (target + program metadata + the
+// data-format toggles): a thin owning wrapper over the caller's hazeReplayConfig,
+// copied by create(). Read at backend bring-up, replay dispatch, and compute.
+class ReplayConfig {
+  public:
+    // Copy the caller's struct into an immutable config; a NULL field keeps its
+    // default and a NULL struct yields all defaults. Infallible — montgomery/
+    // bit-reversal on a local target is an execution-compatibility concern checked
+    // at bring-up against the built config, not a config invariant.
+    static ReplayConfig create(const hazeReplayConfig *raw) noexcept;
+
+    ReplayConfig() = default; // defaults (target "local", program "haze"/"0.1"/...)
+
+    const std::string &target() const noexcept { return target_; }
+    bool target_is_local() const noexcept { return target_ == kLocalTarget; }
+    const std::string &program_name() const noexcept { return program_name_; }
+    const std::string &program_version() const noexcept { return program_version_; }
+    const std::string &program_description() const noexcept { return program_description_; }
+    bool has_program_directory() const noexcept { return program_dir_set_; }
+    const std::string &program_directory() const noexcept { return program_dir_; }
+    bool montgomery() const noexcept { return montgomery_; }
+    bool bit_reversal() const noexcept { return bit_reversal_; }
+    bool reduced_noise() const noexcept { return reduced_noise_; }
+
+  private:
+    std::string target_ = std::string(kLocalTarget);
+    std::string program_name_ = "haze";
+    std::string program_version_ = "0.1";
+    std::string program_description_ = "HAZE runtime";
+    std::string program_dir_;
+    bool program_dir_set_ = false;
+    bool montgomery_ = false;
+    bool bit_reversal_ = false;
+    bool reduced_noise_ = false;
+};
+
+// One-shot configuration entry point (impl in config.cpp): validate + deep-copy
+// the caller's structs into the two immutable configs (FheParams::create /
+// ReplayConfig::create) and install them into DeviceState. `replay` may be null
+// (accept all defaults). Only the frozen configs are stored, and nothing is
+// installed on failure. Called solely by hazeConfigureDevice.
+std::expected<void, HazeInternalError> configure_device(const hazeFheParams &fhe,
+                                                        const hazeReplayConfig *replay) noexcept;
+
+// Read side (defined in device_state.cpp): the frozen configs — plain
+// always-valid members (default until configured), so reads never fault.
+// Meaningful once config_finalized() is true; callers gate on it.
+const FheParams &fhe_params() noexcept;
+const ReplayConfig &replay_config() noexcept;
+// True once hazeConfigureDevice has installed the configs. Compute/bring-up/
+// bridge paths REQUIRE this; they only read the frozen config and never
+// configure themselves, so the read path never mutates config state.
+bool config_finalized() noexcept;
 
 } // namespace haze

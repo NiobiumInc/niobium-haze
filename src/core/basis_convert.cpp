@@ -36,12 +36,13 @@ namespace {
 // FBC mode from engine config: reduced_noise selects the centered variant,
 // montgomery selects the 4-op (hardware SwitchModulus) center shape.
 fhetch::FbcVariant fbc_variant() noexcept {
-    return config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
-                                    : fhetch::FbcVariant::Standard;
+    return replay_config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
+                                           : fhetch::FbcVariant::Standard;
 }
 
 fhetch::FbcCenterShape fbc_center_shape() noexcept {
-    return config().montgomery() ? fhetch::FbcCenterShape::FourOp : fhetch::FbcCenterShape::ThreeOp;
+    return replay_config().montgomery() ? fhetch::FbcCenterShape::FourOp
+                                        : fhetch::FbcCenterShape::ThreeOp;
 }
 
 // Validation helpers; each returns InvalidArgument with a debug-log
@@ -230,10 +231,10 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
 
     // Open-code fhetch::dig_decomp so the per-digit lift follows the configured FBC
     // variant. dig_decomp hardcodes FbcVariant::ReducedNoise (centered), but mod_down and
-    // basis_convert thread config()'s fbc_variant(); mod_up must too, otherwise reduced_noise
-    // cannot toggle the keyswitch mod-up and a non-reduced-noise context gets a mismatched
-    // (always-centered) digit decomposition. The per-digit target is src_base ∪ p_base (Q∥P),
-    // exactly as dig_decomp builds it, and each lifted digit's base equals that target.
+    // basis_convert thread the replay config's fbc_variant(); mod_up must too, otherwise
+    // reduced_noise cannot toggle the keyswitch mod-up and a non-reduced-noise context gets a
+    // mismatched (always-centered) digit decomposition. The per-digit target is src_base ∪ p_base
+    // (Q∥P), exactly as dig_decomp builds it, and each lifted digit's base equals that target.
     const fhetch::MRP &x = *src_mrp;
     fhetch::ModuliBase target_base = x.base();
     target_base.insert(target_base.end(), p_base.begin(), p_base.end());

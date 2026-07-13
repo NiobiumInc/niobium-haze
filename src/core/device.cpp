@@ -30,7 +30,7 @@ inline constexpr int kNumRegisters = 64;
 inline constexpr int kNumHbmBanks = 8;
 // Ring dimension exponents kMinRingDimExponent..kMaxRingDimExponent
 // (N = 1024..65536); the envelope constants live in device.hpp so
-// Config::set_ring_dimension validates against the same range.
+// FheParams::create validates the ring dimension against the same range.
 inline constexpr int kNumSupportedRingDims = kMaxRingDimExponent - kMinRingDimExponent + 1;
 
 } // namespace

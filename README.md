@@ -63,10 +63,11 @@ simulator internals, see the companion repository:
    against `libhaze`. No probes, no instrumented OpenFHE. Haze pulls
    `libnbfhetch` in transitively for the recording back-end.
 
-2. **Configure** — `hazeSetRingDimension(N)`, `hazeSetCiphertextModulus(idx, q)`
-   for each residue, and `hazeConfigureDevice()` lock in the FHE parameter set.
-   Optional: `hazeSetTarget("FUNC_SIM")` (or set `HAZE_TARGET` in the
-   environment) to pick a non-default replay target.
+2. **Configure** — fill a `hazeFheParams` (ring dimension + the ciphertext
+   moduli array) and pass it to `hazeConfigureDevice(&fhe, &replay)` in one call
+   to lock in the FHE parameter set. The optional `hazeReplayConfig` picks a
+   non-default replay target (`.target = "FUNC_SIM"`, or set `HAZE_TARGET` in the
+   environment) and other hardware/replay options; pass `NULL` for all defaults.
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable
    polynomial. Compute calls (`hazeAdd`, `hazeMul`, `hazeNTT`, `hazeAutomorph`,
@@ -133,14 +134,13 @@ int main(void) {
         576460752364240897ULL,
     };
 
-    /* ---- Configure the FHE parameter set. ---- */
-    hazeSetRingDimension(ring_dim);
-    /* Seed the CryptoContext the local simulator uses to reconstruct values. */
+    /* ---- Configure the FHE parameter set (ring dim + the modulus tower). ---- */
+    hazeFheParams fhe = {.ring_dim = ring_dim, .moduli = q, .moduli_count = kNumLimbs};
+    hazeConfigureDevice(&fhe, NULL);
+    /* Seed the CryptoContext the local simulator uses to reconstruct values;
+       requires the configure above to have run first. */
     uint64_t picked = 0;
     hazeReplayBridgeInitCryptoContext(ring_dim, q[0], &picked);
-    for (int i = 0; i < kNumLimbs; ++i)
-        hazeSetCiphertextModulus(i, q[i]);
-    hazeConfigureDevice();
 
     /* ---- Allocate the MRP groups; stage host inputs (a = 1, b = 2). ---- */
     void *d_a[kNumLimbs], *d_b[kNumLimbs], *d_dst[kNumLimbs];
@@ -275,12 +275,10 @@ int main() {
 
     // ---- Configure haze for the same chain (moduli read off the context). ----
     hazeDeviceReset();
-    hazeSetRingDimension(N);
+    hazeFheParams fhe = {.ring_dim = N, .moduli = q_base.data(), .moduli_count = towers};
+    hazeConfigureDevice(&fhe, nullptr);
     uint64_t picked = 0;
     hazeReplayBridgeInitCryptoContext(N, q_base[0], &picked);
-    for (std::size_t i = 0; i < towers; ++i)
-        hazeSetCiphertextModulus(static_cast<int>(i), q_base[i]);
-    hazeConfigureDevice();
 
     // ---- Stage each ciphertext's (c0, c1) limbs to the device as one MRP group. ----
     auto h2d = [&](const std::vector<std::vector<uint64_t>> &chain) {
@@ -698,8 +696,9 @@ niobium-haze/
   recorded `.fhetch` trace through the in-process simulator inside `libnbfhetch`
   (no external binary, no transport). The compiler-side targets (`FUNC_SIM`,
   `FHE_SIM`, `FPGA_TRI`, `fhetch_sim`) ship the same trace over HTTP to
-  `nbcc_fhetch_replay`. Switching between them is a single `hazeSetTarget`
-  call (or `HAZE_TARGET` env var); the application code does not change.
+  `nbcc_fhetch_replay`. Switching between them is a single `hazeReplayConfig`
+  field (`.target`, or the `HAZE_TARGET` env var); the application code does not
+  change.
 
 ## License
 

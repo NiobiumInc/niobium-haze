@@ -18,20 +18,16 @@
 
 namespace haze {
 
-// Control surface for the niobium::compiler() singleton. HAZE records
-// FHETCH IR via fhetch::sr_*, fhetch::tag_input, and fhetch::result;
-// those route to the linked fhetch "dummy" compiler implicitly. CompilerBackend wraps
-// only the *control* operations: init, recording lifecycle, replay.
-//
+// CompilerBackend wraps only the *control* operations (init, recording
+// lifecycle, replay) of the niobium::compiler() singleton; IR (fhetch::sr_*,
+// tag_input, result) routes to the linked compiler directly.
 class DeviceState;
 
-// Single concrete class, no virtual dispatch. Backend swap (e.g. to the
-// niobium-fhetch dummy compiler when stable) happens at link time:
-// backend.cpp calls into whichever library supplies the
-// niobium::compiler() symbol.
+// Single concrete class, no virtual dispatch; the backend swaps at link time
+// via whichever library supplies the niobium::compiler() symbol.
 class CompilerBackend {
   public:
-    // Idempotent, concurrency-safe compiler init from Config metadata;
+    // Idempotent, concurrency-safe compiler init from the replay config;
     // false on throw or unsupported config, and the compute preludes'
     // require_recording_locked gate then surfaces the failure at the ABI.
     [[nodiscard]] bool ensure_initialized() noexcept;
@@ -46,11 +42,6 @@ class CompilerBackend {
     // Begin a new recording (after init or after stop_recording).
     [[nodiscard]] static bool start_recording() noexcept;
 
-    // Reject a target change once init has baked the target in; otherwise
-    // store it. Serialized against ensure_initialized via init_mutex_ so a
-    // set racing first-compute bring-up cannot be silently ignored.
-    [[nodiscard]] bool try_set_target(const char *target) noexcept;
-
     // Finalize the recording via upstream stop() — writes the .fhetch
     // trace AND fhetch_replay.json (upstream stop_epoch() writes only the
     // trace); replay() must be invoked separately.
@@ -64,14 +55,13 @@ class CompilerBackend {
     // so live queries (bridge program-dir lookup) see pre-reset state.
     static void reset_compiler() noexcept;
 
-    // Trigger replay of the most recently recorded epoch. Behaviour
-    // depends on the configured target — see haze.h's hazeSetTarget
-    // doc for the two-tier table (local in-process simulator vs HTTP
-    // transport). Returns true on success.
+    // Replay the most recently recorded epoch, dispatched per the configured
+    // target (see haze.h's hazeConfigureDevice / hazeReplayConfig::target doc);
+    // true on success.
     static bool replay() noexcept;
 
-    // Drop cached state so the next call to ensure_initialized() starts
-    // fresh. Mainly for tests via hazeDeviceReset().
+    // Drop cached state so the next ensure_initialized() starts fresh; mainly for
+    // tests via hazeDeviceReset().
     void reset() noexcept;
 
     CompilerBackend(const CompilerBackend &) = delete;
@@ -81,12 +71,18 @@ class CompilerBackend {
     friend class DeviceState;
     CompilerBackend() = default;
 
-    // Atomic flag enables a lock-free fast path on the hot
-    // ensure_initialized check. init_mutex_ serializes the first-call
-    // path so concurrent first callers don't all run init.
+    // Atomic flag drives the lock-free fast path; init_mutex_ serializes the
+    // first-call path so concurrent first callers don't all run init.
     std::atomic<bool> initialized_{false};
     HazeMutex init_mutex_;
 };
+
+// One-shot vendor-compiler bootstrap (argv from Config, program info, pinned
+// program dir) shared by first-compute bring-up and the replay bridge's pre-init.
+// Format flags are explicit parameters because vendor init LATCHES them (set-only
+// until reset), so callers pass a guard-approved snapshot; not idempotence-guarded
+// and may throw, so callers contain both.
+void bootstrap_compiler(bool montgomery, bool bit_reversal);
 
 // Defined in device_state.cpp (returns the DeviceState member).
 CompilerBackend &backend() noexcept;

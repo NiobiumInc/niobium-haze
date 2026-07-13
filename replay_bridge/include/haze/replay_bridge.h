@@ -24,10 +24,13 @@ extern "C" {
 #endif
 
 /// Build a CKKS CryptoContext for (ring_dim, desired_modulus), write
-/// cryptocontext.dat, and return the OpenFHE-picked modulus via
-/// `picked_modulus` (non-null) so callers can align via hazeSetCiphertextModulus.
-/// Must be re-called after every hazeDeviceReset (setup_integration_compute_config
-/// enforces this; the post-recording hook is cleared by reset).
+/// cryptocontext.dat, and return the OpenFHE-picked scaffold modulus via
+/// `picked_modulus` (non-null). The scaffold prime is overwritten from the
+/// trace at synthesis and never consulted for results, so callers set the
+/// authoritative primes in hazeFheParams::moduli and only read picked_modulus
+/// for reference. Requires hazeConfigureDevice() first, and must be re-called
+/// after every hazeDeviceReset (setup_integration_compute_config enforces this;
+/// the post-recording hook is cleared by reset).
 HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64_t desired_modulus,
                                                        uint64_t *picked_modulus) HAZE_NOEXCEPT;
 

@@ -26,6 +26,7 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_INVALID_VALUE;
     case HazeInternalError::NotConfigured:
     case HazeInternalError::ConfigLocked:
+    case HazeInternalError::DuplicateModulus:
         return HAZE_ERROR_CONFIGERR;
     case HazeInternalError::UnknownAddress:
         return HAZE_ERROR_UNKNOWN_ADDRESS;
@@ -69,6 +70,8 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "not configured";
     case HazeInternalError::ConfigLocked:
         return "configuration locked (already configured / in use); conflicting re-set rejected";
+    case HazeInternalError::DuplicateModulus:
+        return "duplicate ciphertext modulus; each configured modulus must be distinct";
     case HazeInternalError::UnknownAddress:
         return "unknown address";
     case HazeInternalError::NoData:
