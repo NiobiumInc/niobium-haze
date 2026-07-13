@@ -29,7 +29,13 @@ class DeviceState {
   public:
     static DeviceState &instance() noexcept;
 
-    Config config;
+    // The frozen immutable configs, installed by hazeConfigureDevice through
+    // configure_device(). No builder is ever stored here: the caller owns the
+    // config structs and the transient build runs inside configure_device. The
+    // configs default (empty) until then; `configured` gates every read of them.
+    FheParams fhe_params;
+    ReplayConfig replay_config;
+    bool configured = false;
     CompilerBackend backend;
     DeviceAllocator allocator;
     EpochState epoch;

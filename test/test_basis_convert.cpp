@@ -20,7 +20,6 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <math/math-hal.h>
-#include <utility>
 #include <vector>
 
 static constexpr uint64_t kRingDim = 4096;
@@ -45,14 +44,12 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 static void configure_three_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0, kQ1, kQ2};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
+    const hazeReplayConfig replay = {.reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
 // Parameter validation.
@@ -545,14 +542,12 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 void configure_sixteen_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {
+        .ring_dim = kRingDim, .moduli = kBigBase, .moduli_count = kSrcLimbs + kPLimbs};
+    const hazeReplayConfig replay = {.reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
-    for (int i = 0; std::cmp_less(i, kSrcLimbs + kPLimbs); ++i) {
-        REQUIRE(hazeSetCiphertextModulus(i, kBigBase[static_cast<size_t>(i)]) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 }
 
 // Deterministic non-trivial residues. Avoids zeros (which trigger

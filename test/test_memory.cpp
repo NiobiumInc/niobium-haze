@@ -14,12 +14,21 @@
 
 // HAZE's device allocator is single-size: every allocation is one
 // polynomial of (ring_dim * sizeof(uint64_t)) bytes, configured via
-// hazeSetRingDimension. Tests here always set ring_dim before
-// allocating to make that contract explicit.
+// hazeConfigureDevice. Tests here always configure before allocating
+// to make that contract explicit.
+
+namespace {
+// Allocation-only [unit] setup: one-shot configure with just the ring dimension
+// (no moduli or replay config needed to size the single-size allocator).
+void configure_ring_dim(uint64_t ring_dim) {
+    const hazeFheParams fhe = {.ring_dim = ring_dim};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+}
+} // namespace
 
 TEST_CASE("hazeMalloc returns non-null pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *p = nullptr;
     REQUIRE(hazeMalloc(&p, 32768) == HAZE_SUCCESS);
     REQUIRE(p != nullptr);
@@ -32,7 +41,7 @@ TEST_CASE("hazeMalloc null ptr arg returns error", "[unit]") {
     hazeGetLastError();
 }
 
-TEST_CASE("hazeMalloc before hazeSetRingDimension is rejected", "[unit]") {
+TEST_CASE("hazeMalloc before hazeConfigureDevice is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS); // ensure ring_dim cleared
     void *p = nullptr;
     REQUIRE(hazeMalloc(&p, 32768) == HAZE_ERROR_CONFIGERR);
@@ -41,7 +50,7 @@ TEST_CASE("hazeMalloc before hazeSetRingDimension is rejected", "[unit]") {
 
 TEST_CASE("hazeMalloc with size != polynomial bytes is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *p = nullptr;
     // ring_dim=4096 → polynomial bytes = 32768; 8KB request fails.
     REQUIRE(hazeMalloc(&p, 8192) == HAZE_ERROR_SIZE_MISMATCH);
@@ -50,7 +59,7 @@ TEST_CASE("hazeMalloc with size != polynomial bytes is rejected", "[unit]") {
 
 TEST_CASE("distinct allocations produce non-overlapping addresses", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *p1 = nullptr;
     void *p2 = nullptr;
     REQUIRE(hazeMalloc(&p1, 32768) == HAZE_SUCCESS);
@@ -62,7 +71,7 @@ TEST_CASE("distinct allocations produce non-overlapping addresses", "[unit]") {
 
 TEST_CASE("free then re-allocate recycles pooled address", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
 
     void *p1 = nullptr;
     REQUIRE(hazeMalloc(&p1, 32768) == HAZE_SUCCESS);
@@ -79,7 +88,7 @@ TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
     constexpr size_t kBytes = kN * sizeof(uint64_t);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
+    configure_ring_dim(kN);
     void *dev = nullptr;
     REQUIRE(hazeMalloc(&dev, kBytes) == HAZE_SUCCESS);
 
@@ -99,7 +108,7 @@ TEST_CASE("H2D then D2H round-trip preserves data", "[unit]") {
 TEST_CASE("hazeMemset fills shadow buffer", "[unit]") {
     constexpr size_t kBytes = 32768;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *dev = nullptr;
     REQUIRE(hazeMalloc(&dev, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMemset(dev, 0xAB, kBytes) == HAZE_SUCCESS);
@@ -121,7 +130,7 @@ TEST_CASE("hazeHostAlloc/Free round-trip", "[unit]") {
 
 TEST_CASE("hazeMallocAsync/FreeAsync behave like sync versions", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     hazeStream_t stream = nullptr;
     REQUIRE(hazeStreamCreate(&stream) == HAZE_SUCCESS);
 
@@ -207,7 +216,7 @@ TEST_CASE("NULL stream argument uses default stream", "[unit]") {
 
 TEST_CASE("hazePointerGetAttributes reports device type for hazeMalloc'd pointer", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *dev = nullptr;
     REQUIRE(hazeMalloc(&dev, 32768) == HAZE_SUCCESS);
 
@@ -254,7 +263,7 @@ TEST_CASE("hazeMallocMrp allocates a usable group that hazeFreeMrp releases", "[
     constexpr size_t kBytes = kN * sizeof(uint64_t);
     constexpr size_t kCount = 4;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
+    configure_ring_dim(kN);
 
     void *ptrs[kCount] = {};
     REQUIRE(hazeMallocMrp(ptrs, kCount, kBytes) == HAZE_SUCCESS);
@@ -281,7 +290,7 @@ TEST_CASE("hazeMallocMrp/hazeFreeMrp round-trip recycles the group", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     constexpr size_t kCount = 3;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
 
     void *g1[kCount] = {};
     REQUIRE(hazeMallocMrp(g1, kCount, kBytes) == HAZE_SUCCESS);
@@ -297,14 +306,14 @@ TEST_CASE("hazeMallocMrp/hazeFreeMrp round-trip recycles the group", "[unit]") {
 
 TEST_CASE("hazeMallocMrp with count 0 is a success no-op", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *const sentinel = reinterpret_cast<void *>(0x5A5A);
     void *ptrs[1] = {sentinel};
     REQUIRE(hazeMallocMrp(ptrs, 0, 32768) == HAZE_SUCCESS);
     REQUIRE(ptrs[0] == sentinel); // left untouched
 }
 
-TEST_CASE("hazeMallocMrp before hazeSetRingDimension is rejected", "[unit]") {
+TEST_CASE("hazeMallocMrp before hazeConfigureDevice is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     void *ptrs[2] = {};
     REQUIRE(hazeMallocMrp(ptrs, 2, 32768) == HAZE_ERROR_CONFIGERR);
@@ -313,14 +322,14 @@ TEST_CASE("hazeMallocMrp before hazeSetRingDimension is rejected", "[unit]") {
 
 TEST_CASE("hazeMallocMrp with null ptrs is rejected", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     REQUIRE(hazeMallocMrp(nullptr, 4, 32768) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
 
 TEST_CASE("hazeMallocMrp with wrong size is rejected and allocates nothing", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     const auto &alloc = haze::allocator();
     REQUIRE(haze::test::AllocatorTestAccess::alloc_set_size(alloc) == 0);
 
@@ -339,7 +348,7 @@ TEST_CASE("hazeMallocMrp rolls back reserved polys on a mid-batch failure", "[un
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     auto &alloc = haze::allocator();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
 
     // p stays live; r is freed so the batch can recycle it as residue 0.
     void *p = nullptr;
@@ -381,7 +390,7 @@ TEST_CASE("hazeFreeMrp with count 0 is a success no-op", "[unit]") {
 TEST_CASE("hazeFreeMrp skips null entries and frees the rest", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *a = nullptr;
     void *b = nullptr;
     REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
@@ -406,7 +415,7 @@ TEST_CASE("hazeFreeMrp skips null entries and frees the rest", "[unit]") {
 
 TEST_CASE("hazeMallocMrp rejects an out-of-range count without allocating", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     const auto &alloc = haze::allocator();
     void *ptrs[1] = {reinterpret_cast<void *>(0x1234)};
 
@@ -435,7 +444,7 @@ TEST_CASE("hazeFreeMrp rejects an out-of-range count", "[unit]") {
 TEST_CASE("hazeFree of an already-freed address is rejected", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *p = nullptr;
     REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeFree(p) == HAZE_SUCCESS);
@@ -446,7 +455,7 @@ TEST_CASE("hazeFree of an already-freed address is rejected", "[unit]") {
 TEST_CASE("malloc after free does not alias a second live allocation", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *a = nullptr;
     REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeFree(a) == HAZE_SUCCESS);
@@ -462,7 +471,7 @@ TEST_CASE("malloc after free does not alias a second live allocation", "[unit]")
 TEST_CASE("hazeFreeMrp of an already-freed group is rejected and does not alias", "[unit]") {
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *g[1] = {};
     REQUIRE(hazeMallocMrp(g, 1, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeFreeMrp(g, 1) == HAZE_SUCCESS);
@@ -484,7 +493,7 @@ TEST_CASE("hazeFreeMrp frees every entry and returns the first error", "[unit]")
     constexpr size_t kBytes = 4096 * sizeof(uint64_t);
     auto &alloc = haze::allocator();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(4096) == HAZE_SUCCESS);
+    configure_ring_dim(4096);
     void *a = nullptr;
     void *bad = nullptr;
     void *b = nullptr;

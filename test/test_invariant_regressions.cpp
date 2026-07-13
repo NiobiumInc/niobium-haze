@@ -29,9 +29,8 @@ constexpr uint64_t kQ0 = 576460752303415297ULL;
 constexpr uint64_t kQ1 = 576460752303439873ULL;
 constexpr uint64_t kQ2 = 576460752303702017ULL;
 
-// A pointer that was never returned by hazeMalloc (still inside the HBM
-// range so it is plausible, not merely null). The int-to-ptr cast is the
-// point of the helper — it fabricates an unknown device handle.
+// A pointer never returned by hazeMalloc but inside the HBM range (plausible, not
+// merely null); the int-to-ptr cast fabricates an unknown device handle.
 void *fake_device_ptr() {
     return reinterpret_cast<void *>( // NOLINT(performance-no-int-to-ptr)
         uintptr_t{0x4000000000ULL} + 0x123400);
@@ -39,7 +38,8 @@ void *fake_device_ptr() {
 
 void unit_setup_4096() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = kRingDim};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 }
 
 } // namespace
@@ -50,11 +50,11 @@ void unit_setup_4096() {
 
 TEST_CASE("last error is sticky: successful calls do not clear it", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Produce a failure, then a string of successes; the failure must
-    // survive until hazeGetLastError reads-and-clears it (CUDA parity —
-    // previously any success through set_internal_result wiped it).
+    // A failure must survive a string of successes until hazeGetLastError
+    // reads-and-clears it (CUDA parity; previously any success wiped it).
     REQUIRE(hazeStreamBeginCapture(nullptr) == HAZE_ERROR_NOT_SUPPORTED);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = kRingDim};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
     void *p = nullptr;
     REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeFree(p) == HAZE_SUCCESS);
@@ -66,52 +66,73 @@ TEST_CASE("last error is sticky: successful calls do not clear it", "[unit]") {
 // Ring-dimension envelope and freeze rules.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("hazeSetRingDimension rejects out-of-envelope powers of two", "[unit]") {
+TEST_CASE("hazeConfigureDevice rejects out-of-envelope ring dimensions", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Below the device envelope (2^10 .. 2^16).
-    REQUIRE(hazeSetRingDimension(512) == HAZE_ERROR_INVALID_VALUE);
+    const hazeFheParams too_small = {.ring_dim = 512};
+    REQUIRE(hazeConfigureDevice(&too_small, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
     // Above the envelope; 2^61+ used to wrap n * sizeof(uint64_t) to 0 and
     // report success with a poisoned configuration.
-    REQUIRE(hazeSetRingDimension(uint64_t{1} << 17) == HAZE_ERROR_INVALID_VALUE);
+    const hazeFheParams too_big = {.ring_dim = uint64_t{1} << 17};
+    REQUIRE(hazeConfigureDevice(&too_big, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    REQUIRE(hazeSetRingDimension(uint64_t{1} << 62) == HAZE_ERROR_INVALID_VALUE);
+    const hazeFheParams wrap = {.ring_dim = uint64_t{1} << 62};
+    REQUIRE(hazeConfigureDevice(&wrap, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
     // The envelope bounds themselves are accepted.
-    REQUIRE(hazeSetRingDimension(uint64_t{1} << 10) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(uint64_t{1} << 16) == HAZE_SUCCESS);
+    const hazeFheParams lo = {.ring_dim = uint64_t{1} << 10};
+    REQUIRE(hazeConfigureDevice(&lo, nullptr) == HAZE_SUCCESS);
+    const hazeFheParams hi = {.ring_dim = uint64_t{1} << 16};
+    REQUIRE(hazeConfigureDevice(&hi, nullptr) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeSetRingDimension is frozen while allocations are live", "[unit]") {
+TEST_CASE("hazeConfigureDevice cannot change the ring dimension while allocations are live",
+          "[unit]") {
     unit_setup_4096();
     void *p = nullptr;
     REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
     // A different dimension would leave p's shadow sized under the old one
     // (previously a heap overread on the next D2H).
-    REQUIRE(hazeSetRingDimension(8192) == HAZE_ERROR_CONFIGERR);
+    const hazeFheParams grow = {.ring_dim = 8192};
+    REQUIRE(hazeConfigureDevice(&grow, nullptr) == HAZE_ERROR_CONFIGERR);
     hazeGetLastError();
-    // Re-setting the same value stays a no-op success.
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    // Reconfiguring the same dimension stays a success.
+    const hazeFheParams same = {.ring_dim = kRingDim};
+    REQUIRE(hazeConfigureDevice(&same, nullptr) == HAZE_SUCCESS);
     REQUIRE(hazeFree(p) == HAZE_SUCCESS);
     // With nothing live the dimension is changeable again.
-    REQUIRE(hazeSetRingDimension(8192) == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice(&grow, nullptr) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeSetTarget after backend bring-up is rejected", "[unit]") {
-    unit_setup_4096();
-    void *p = nullptr;
-    REQUIRE(hazeMalloc(&p, kBytes) == HAZE_SUCCESS);
-    // First H2D brings up the compiler backend with the current target.
+TEST_CASE("hazeConfigureDevice after bring-up is rejected", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig local = {.target = "local"};
+    REQUIRE(hazeConfigureDevice(&fhe, &local) == HAZE_SUCCESS);
+    void *a = nullptr;
+    void *b = nullptr;
+    void *c = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
     std::vector<uint64_t> data(kRingDim, 7);
-    REQUIRE(hazeMemcpy(p, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    // The target can no longer take effect; previously this was silently
-    // ignored and replay ran against the stale baked-in target.
-    REQUIRE(hazeSetTarget("FUNC_SIM") == HAZE_ERROR_CONFIGERR);
+    REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    // The first compute brings the backend up, latching the config.
+    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    // A reconfigure could no longer take effect (backend already up); previously
+    // a stale target here silently replayed against the baked-in one.
+    const hazeReplayConfig other = {.target = "FUNC_SIM"};
+    REQUIRE(hazeConfigureDevice(&fhe, &other) == HAZE_ERROR_CONFIGERR);
     hazeGetLastError();
-    REQUIRE(hazeFree(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
     // hazeDeviceReset re-opens the window.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
+    REQUIRE(hazeConfigureDevice(&fhe, &local) == HAZE_SUCCESS);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +223,9 @@ TEST_CASE("hazeMemcpy(D2D) validates dst liveness and count", "[unit]") {
 TEST_CASE("montgomery on local target fails at first compute; shadow round-trips survive",
           "[unit][hwfmt]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("local") == HAZE_SUCCESS);
-    REQUIRE(hazeSetMontgomery(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = kRingDim};
+    const hazeReplayConfig replay = {.target = "local", .montgomery = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
 
     void *a = nullptr;
     void *b = nullptr;
@@ -217,9 +238,9 @@ TEST_CASE("montgomery on local target fails at first compute; shadow round-trips
     std::vector<uint64_t> data(kRingDim, 9);
     REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    // ...but compute must fail loudly (haze.h: the first compute or flush
-    // reports NOT_SUPPORTED). Previously it returned HAZE_SUCCESS while the
-    // op was silently dropped.
+    // ...but compute must fail loudly (haze.h: first compute or flush reports
+    // NOT_SUPPORTED); previously it returned HAZE_SUCCESS and silently dropped the
+    // op.
     REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_ERROR_NOT_SUPPORTED);
     hazeGetLastError();
     // The compute-free D2H round-trip still works.
@@ -342,10 +363,9 @@ TEST_CASE("untagged flush is a true no-op: recording and bindings survive", "[in
     auto dst = haze::test::allocate_dst_residues(1, kBytes);
     REQUIRE(hazeAdd(dst[0], devs[0], devs[1], 0, nullptr) == HAZE_SUCCESS);
 
-    // Nothing tagged: this must not tear down the in-flight recording.
-    // Previously it half-cleared haze state (tagging dst afterwards failed
-    // with SOURCE_UNAVAILABLE) while the vendor recorder kept the old nodes,
-    // contaminating the next epoch's trace.
+    // Nothing tagged: this must not tear down the in-flight recording. Previously
+    // it half-cleared haze state (a later tag failed with SOURCE_UNAVAILABLE)
+    // while the vendor recorder kept the old nodes, contaminating the next epoch.
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
     REQUIRE(hazeTagOutput(dst[0]) == HAZE_SUCCESS);
@@ -424,15 +444,16 @@ TEST_CASE("bridge honors a custom program name for cryptocontext.dat", "[integra
     // program name orphaned cryptocontext.dat under cwd/haze/ while the
     // trace landed in cwd/<name>/ — replay then found no crypto context.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    haze::test::apply_target_from_env();
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetProgramInfo("haze_custom_prog_review", "0.0", "invariant-review case") ==
-            HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig replay = {.target = haze::test::target_from_env(),
+                                     .program_name = "haze_custom_prog_review",
+                                     .program_version = "0.0",
+                                     .program_description = "invariant-review case",
+                                     .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t scaffold = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     const uint64_t q = kQ0;
     auto a = haze::test::make_residue(q, 11, kRingDim);
@@ -462,9 +483,10 @@ TEST_CASE("failed materialize clears the epoch: retag fails, next flush is a no-
     // every environment (spawn failure without a compiler; unknown-target
     // error with one), exercising the materialize error path end to end.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetTarget("HAZE_TEST_NO_SUCH_TARGET") == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, kQ0) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig replay = {.target = "HAZE_TEST_NO_SUCH_TARGET"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
 
     void *a = nullptr;
     void *b = nullptr;
@@ -520,4 +542,40 @@ TEST_CASE("hazeDeviceReset restarts stream/event ids and the active device", "[u
     int dev = -1;
     REQUIRE(hazeGetDevice(&dev) == HAZE_SUCCESS);
     REQUIRE(dev == 0);
+}
+
+TEST_CASE("ciphertext-modulus count is bounded by the device envelope", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    hazeDeviceProp prop{};
+    REQUIRE(hazeGetDeviceProperties(&prop, 0) == HAZE_SUCCESS);
+    const auto max = static_cast<std::size_t>(prop.maxCiphertextModuli);
+    std::vector<uint64_t> moduli(max + 1);
+    for (std::size_t i = 0; i < moduli.size(); ++i)
+        moduli[i] = kQ0 + (2 * i);
+
+    // Exactly `max` distinct primes configure cleanly...
+    const hazeFheParams full = {.ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max};
+    REQUIRE(hazeConfigureDevice(&full, nullptr) == HAZE_SUCCESS);
+    // ...and one past the envelope is rejected (previously an unbounded vector
+    // grew; now it guards a fixed array).
+    const hazeFheParams over = {
+        .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max + 1};
+    REQUIRE(hazeConfigureDevice(&over, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("bridge pre-init requires an explicit configure", "[unit][hwfmt]") {
+    // The bridge pre-init reads the frozen replay config via bootstrap_compiler,
+    // so it must run after hazeConfigureDevice(); calling it earlier is rejected.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    uint64_t scaffold = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_ERROR_CONFIGERR);
+    hazeGetLastError();
+    // After the explicit configure it succeeds.
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }

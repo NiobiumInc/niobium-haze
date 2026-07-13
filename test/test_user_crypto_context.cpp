@@ -35,7 +35,6 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     using namespace lbcrypto;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDim) == HAZE_SUCCESS);
 
     // Caller-built CC with a non-default scaling technique (FIXEDAUTO) and a
     // chain deeper than the 3-residue MRP add below, so the primes come from a
@@ -63,12 +62,12 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     for (std::size_t i = 0; i < 3; ++i)
         base.push_back(eparams[i]->GetModulus().ConvertToInt());
 
+    const hazeFheParams fhe = {
+        .ring_dim = kRingDim, .moduli = base.data(), .moduli_count = base.size()};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base.front(), &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);
-    for (std::size_t i = 0; i < 3; ++i)
-        REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     // Build per-residue inputs + expected output for hazeAddMrp.
     std::vector<std::vector<uint64_t>> a(3);

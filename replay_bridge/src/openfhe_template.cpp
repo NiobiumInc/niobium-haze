@@ -12,7 +12,7 @@
 #include "ciphertext-ser.h"
 #include "common/errors.hpp" // set_error — bridge entries feed hazeGetLastError too
 #include "common/log.hpp"
-#include "core/config.hpp" // haze::config() — honor caller-pinned program name/directory
+#include "core/config.hpp" // haze::replay_config() — honor caller-pinned program name/directory
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "openfhe.h"
@@ -495,6 +495,12 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
     if (picked_modulus == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
 
+    // Configuration must be finalized (hazeConfigureDevice) first; this pre-init
+    // reads the frozen replay config, never the write-only builder.
+    if (!haze::config_finalized())
+        return set_error(HAZE_ERROR_CONFIGERR);
+    const haze::ReplayConfig &rc = haze::replay_config();
+
     try {
         // The record-time capture builds a local OpenFHE context regardless of the
         // replay target, so disable the compiler's hardware ring-dim/prime checks
@@ -504,9 +510,9 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // default target instead of the configured one (init() re-applies, so the
         // backend's first-compute bring-up stays authoritative when it does run).
         {
-            const std::string target_arg = "--target=" + haze::config().target();
+            const std::string target_arg = "--target=" + rc.target();
             // argv[0] mirrors backend.cpp's bring-up.
-            std::string prog_storage = haze::config().program_name();
+            std::string prog_storage = rc.program_name();
             std::string target_storage = target_arg;
             std::string no_ring_check_storage = "--no-ring-dim-check";
             std::string no_prime_check_storage = "--no-prime-check";
@@ -525,12 +531,11 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // Use the CONFIGURED program name so cryptocontext.dat lands in the
         // same directory the trace will (a hard-coded "haze" orphaned it
         // whenever the app set a custom name).
-        niobium::compiler().set_program_info(haze::config().program_name(),
-                                             haze::config().program_version(),
-                                             haze::config().program_description());
+        niobium::compiler().set_program_info(rc.program_name(), rc.program_version(),
+                                             rc.program_description());
 
         // Honor a caller-pinned program directory. hazeSetProgramDirectory()
-        // stores the directory in haze::config(); the backend only forwards it to
+        // stores the directory in the replay config; the backend only forwards it to
         // the compiler at first-compute bring-up (core/backend.cpp), which happens
         // AFTER this init writes cryptocontext.dat. Without re-applying it here,
         // set_program_info()'s cwd/<name> reset orphans cryptocontext.dat under
@@ -540,8 +545,8 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // never pin a directory (cwd/<name> default), so the divergence stayed
         // hidden until a library integrator (FIDESlib's HazeEngine) pinned a custom
         // run directory.
-        if (haze::config().has_program_directory())
-            niobium::compiler().set_program_directory(haze::config().program_directory());
+        if (rc.has_program_directory())
+            niobium::compiler().set_program_directory(rc.program_directory());
 
         niobium::compiler().capture_crypto_context(built->cc);
 

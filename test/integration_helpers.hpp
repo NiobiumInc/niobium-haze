@@ -18,59 +18,57 @@
 
 namespace haze::test {
 
-// The library no longer reads HAZE_TARGET; the suite still uses it as the
-// parameter selecting the replay target (set by make test-transport). Bridge it
-// to the explicit setter after a device reset, before the first configure/record.
-inline void apply_target_from_env() {
-    if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
-        REQUIRE(hazeSetTarget(t) == HAZE_SUCCESS);
+// The library doesn't read HAZE_TARGET; the suite uses it to select the replay
+// target (set by make test-transport). NULL (unset/empty) means the "local"
+// default; pass the result straight into hazeReplayConfig::target.
+inline const char *target_from_env() {
+    const char *t = std::getenv("HAZE_TARGET");
+    return (t != nullptr && t[0] != '\0') ? t : nullptr;
 }
 
-// MODULUS CONTRACT (single source of truth): the values passed to
-// hazeSetCiphertextModulus ARE the .fhetch trace moduli, and both replay paths
-// reconstruct under them; hazeReplayBridgeInitCryptoContext's scaffold prime is
-// overwritten with the trace primes at synthesis (bridge switch_tower_modulus)
-// and never consulted for results. So tests set the
-// slot to the intended prime and oracle against it (verified by "trace modulus
-// is authoritative ..." in test_hardware_format.cpp). Modulus-less SRP ops are
-// trace-authoritative too — haze recovers and binds the source modulus — except
-// a copy of a never-modulus-bound (raw H2D) address, which has none.
+// MODULUS CONTRACT (single source of truth): the primes in hazeFheParams::moduli
+// ARE the .fhetch trace moduli, and both replay paths reconstruct under them;
+// hazeReplayBridgeInitCryptoContext's scaffold prime is overwritten with the
+// trace primes at synthesis (bridge switch_tower_modulus) and never consulted
+// for results, so tests set the slot to the intended prime and oracle against it
+// (verified by "trace modulus is authoritative ..." in test_hardware_format.cpp).
+// Modulus-less SRP ops are trace-authoritative too (haze recovers and binds the
+// source modulus) except a copy of a never-modulus-bound (raw H2D) address,
+// which has none.
 
-// Combined integration setup: reset, ring dim, bridge CC init, set the
-// ciphertext modulus, configure device. Returns the modulus it set so callers
-// generate inputs and oracles against the same (authoritative) value.
+// Combined integration setup: reset, one-shot configure (ring dim + single
+// modulus, reduced-noise on, target from env), then bridge CC init. Returns the
+// configured modulus so callers generate inputs and oracles against the same
+// (authoritative) value. `mod_idx` must be 0 (single-prime helper; multi-prime
+// cases use setup_integration_mrp3_config).
 inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
                                                  uint64_t modulus = 576460752303415297ULL,
                                                  int mod_idx = 0) {
+    REQUIRE(mod_idx == 0);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    apply_target_from_env();
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {modulus};
+    const hazeFheParams fhe = {.ring_dim = ring_dim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig replay = {.target = target_from_env(), .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(mod_idx, modulus) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return modulus;
 }
 
-// Three-prime variant for MRP cases: all three slots set before the single
-// hazeConfigureDevice, each to its intended (trace-authoritative) prime: slot
-// 0 the requested modulus, slots 1 and 2 the suite's NTT-friendly companion
-// primes. Returns the configured base, index-aligned with the modulus slots.
+// Three-prime variant for MRP cases: slot 0 the requested modulus, slots 1 and 2
+// the suite's NTT-friendly companion primes, all in one hazeConfigureDevice.
+// Returns the configured base, index-aligned with the modulus slots.
 inline std::vector<uint64_t>
 setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 576460752303415297ULL) {
     constexpr uint64_t kQ1 = 576460752303439873ULL;
     constexpr uint64_t kQ2 = 576460752303702017ULL;
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    apply_target_from_env();
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {modulus, kQ1, kQ2};
+    const hazeFheParams fhe = {.ring_dim = ring_dim, .moduli = moduli, .moduli_count = 3};
+    const hazeReplayConfig replay = {.target = target_from_env(), .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, modulus) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
     return {modulus, kQ1, kQ2};
 }
 
@@ -81,9 +79,8 @@ inline uint64_t add_mod(uint64_t a, uint64_t b, uint64_t q) {
     return (s >= q) ? s - q : s;
 }
 
-// Deterministic non-trivial residue. Avoids zeros and all-equal
-// coefficients across primes so per-residue bugs cannot hide behind a
-// trivial input.
+// Deterministic non-trivial residue: avoids zeros and all-equal coefficients
+// across primes so per-residue bugs cannot hide behind a trivial input.
 inline std::vector<uint64_t> make_residue(uint64_t prime, uint64_t seed, std::size_t n) {
     std::vector<uint64_t> r(n);
     for (std::size_t k = 0; k < n; ++k) {

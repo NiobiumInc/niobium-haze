@@ -50,7 +50,7 @@ size_t DeviceAllocator::polynomial_size() const noexcept {
 
 std::expected<void, HazeInternalError>
 DeviceAllocator::validate_poly_size_locked(size_t bytes) const noexcept {
-    // Polynomial size must be configured (via Config::set_ring_dimension)
+    // Polynomial size must be configured (via hazeConfigureDevice)
     // before any allocation. HAZE's device space is FHETCH-addressable
     // storage — without a known polynomial size we cannot serve it.
     if (poly_bytes_ == 0) {
@@ -59,11 +59,8 @@ DeviceAllocator::validate_poly_size_locked(size_t bytes) const noexcept {
         return std::unexpected(HazeInternalError::NotConfigured);
     }
 
-    // Strict single-size contract: every allocation is one polynomial.
-    // Non-polynomial scratch is not a HAZE concern (use host memory or
-    // a future off-device allocator). Mismatches surface here so the
-    // consumer is forced to either use the right size or a different
-    // allocator.
+    // Strict single-size contract: every allocation is one polynomial (non-poly
+    // scratch uses host memory), so a size mismatch is rejected here.
     if (bytes != poly_bytes_) {
         record_internal_error(HazeInternalError::PolySizeMismatch,
                               "DeviceAllocator::allocate: size != polynomial bytes");
@@ -94,10 +91,9 @@ void DeviceAllocator::evict_shadow(DevAddr addr) noexcept {
 }
 
 std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked() noexcept {
-    // Recycle from the free list when available. Both the shadow_data_ entry
-    // and alloc_set_ membership were dropped at hazeFree time, so a pooled
-    // DevAddr must NOT currently be live; if it is, pool_free_ and alloc_set_
-    // have desynced (a double-push or a live addr wrongly pooled).
+    // Recycle from the free list; a pooled DevAddr must not be live (its shadow and
+    // alloc_set_ membership were dropped at hazeFree), so a live one means
+    // pool_free_/alloc_set_ desynced.
     if (!pool_free_.empty()) {
         DevAddr addr = pool_free_.back();
         pool_free_.pop_back();
@@ -106,14 +102,12 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked()
                                   "DeviceAllocator::allocate (recycled addr already live)");
             return std::unexpected(HazeInternalError::PoolMapDesync);
         }
-        // Re-establish liveness for the recycled addr.
         alloc_set_.insert(addr);
         return addr;
     }
 
-    // Fresh allocation: bump the address counter by exactly poly_bytes_.
-    // No shadow bytes are allocated. shadow_data_ stays empty for this
-    // DevAddr until the first H2D / memset / D2D / update_shadow.
+    // Fresh allocation: bump next_addr_ by poly_bytes_; no shadow bytes until the
+    // first H2D/memset/D2D/update_shadow.
     DevAddr addr{next_addr_};
     next_addr_ += poly_bytes_;
     alloc_set_.insert(addr);
@@ -122,14 +116,12 @@ std::expected<DevAddr, HazeInternalError> DeviceAllocator::allocate_one_locked()
 
 std::expected<void, HazeInternalError> DeviceAllocator::free_one_locked(DevAddr addr) noexcept {
     if (!alloc_set_.contains(addr)) {
-        // Not live: an unknown address or a double free. Reject rather than
-        // re-pool it — re-pooling would later hand the same DevAddr out to two
-        // live allocations (aliasing).
+        // Not live (unknown addr or double free): reject rather than re-pool, which
+        // would later alias the same DevAddr across two live allocations.
         record_internal_error(HazeInternalError::UnknownAddress, "DeviceAllocator::free");
         return std::unexpected(HazeInternalError::UnknownAddress);
     }
-    // Lifetime ends here: drop liveness and the shadow bytes, and pool the
-    // DevAddr for the next allocate() to recycle.
+    // Lifetime ends: drop liveness and shadow bytes, pool the DevAddr for recycling.
     alloc_set_.erase(addr);
     shadow_data_.erase(addr);
     pool_free_.push_back(addr);
@@ -160,9 +152,8 @@ DeviceAllocator::allocate_many(size_t count, size_t bytes) noexcept {
     for (size_t i = 0; i < count; ++i) {
         auto addr = allocate_one_locked();
         if (!addr) {
-            // Roll back everything reserved in THIS call so nothing leaks and
-            // no partially-populated result escapes. Each `done` was just
-            // reserved, so free_one_locked cannot fail on it.
+            // Roll back everything reserved in this call so nothing leaks; each was
+            // just reserved, so free_one_locked cannot fail.
             for (DevAddr done : out) {
                 [[maybe_unused]] const auto rolled_back = free_one_locked(done);
             }
@@ -203,11 +194,8 @@ DeviceAllocator::free_many(std::span<const DevAddr> addrs) noexcept {
 
 std::expected<std::vector<uint64_t>, HazeInternalError>
 DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept {
-    if (ring_dim == 0) {
-        record_internal_error(HazeInternalError::NotConfigured,
-                              "DeviceAllocator::extract_polynomial_components: ring_dim == 0");
-        return std::unexpected(HazeInternalError::NotConfigured);
-    }
+    // ring_dim is validated non-zero at FheParams::build(); callers only reach
+    // here post-finalize, so no ring_dim==0 guard is needed.
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(addr)) {
         record_internal_error(HazeInternalError::UnknownAddress,
@@ -222,9 +210,8 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
     }
     auto data_it = shadow_data_.find(addr);
     if (data_it == shadow_data_.end()) {
-        // Address allocated but never written. epoch::lookup_or_create_locked
-        // translates this to SourceUnavailable — compute / D2D on an
-        // uninitialized buffer is a contract violation.
+        // Allocated but never written; lookup_or_create_locked surfaces this as
+        // SourceUnavailable (compute/D2D on an uninitialized buffer is a violation).
         record_internal_error(HazeInternalError::NoData,
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::NoData);
@@ -236,20 +223,15 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
                               "DeviceAllocator::extract_polynomial_components");
         return std::unexpected(HazeInternalError::ShadowSizeMismatch);
     }
-    // Detach the shadow's storage so the caller's from_data() can move
-    // it straight into a Polynomial; frees the HAZE-side entry
-    // mid-program, before hazeFree.
+    // Detach the storage so the caller can move it into a Polynomial, freeing the
+    // HAZE-side entry mid-program.
     auto node = shadow_data_.extract(data_it);
     return std::move(node.mapped());
 }
 
 std::expected<std::vector<uint64_t>, HazeInternalError>
 DeviceAllocator::read_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept {
-    if (ring_dim == 0) {
-        record_internal_error(HazeInternalError::NotConfigured,
-                              "DeviceAllocator::read_polynomial_components: ring_dim == 0");
-        return std::unexpected(HazeInternalError::NotConfigured);
-    }
+    // ring_dim is validated non-zero at FheParams::build() (see extract).
     HazeLockGuard lock(mutex_);
     if (!alloc_set_.contains(addr)) {
         record_internal_error(HazeInternalError::UnknownAddress,
@@ -288,9 +270,8 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, co
     // Zero-byte copy: success no-op, no fabricated shadow entry.
     if (count == 0)
         return {};
-    // Lazy-create or overwrite the shadow entry. Sized to the full
-    // allocation so partial writes leave the tail at zero (matches
-    // prior eager-zero semantics for the unwritten tail).
+    // Lazy-create or overwrite the shadow entry, sized to the full allocation so a
+    // partial write leaves the tail zeroed.
     auto &shadow = shadow_data_[dst];
     const size_t want_elems = poly_bytes_ / sizeof(uint64_t);
     if (shadow.size() != want_elems) {
@@ -332,8 +313,8 @@ std::expected<void, HazeInternalError> DeviceAllocator::copy_to_host(void *dst, 
         return {}; // zero-byte read: success no-op, no shadow required
     auto data_it = shadow_data_.find(src);
     if (data_it == shadow_data_.end()) {
-        // No materialized bytes (never written, or a computed result not tagged
-        // + flushed): an error rather than the old silent zero read.
+        // No materialized bytes (never written, or a computed result not tagged +
+        // flushed): an error rather than a silent zero read.
         record_internal_error(
             HazeInternalError::OutputNotFlushed,
             "DeviceAllocator::copy_to_host: no shadow bytes (tag output + flush?)");
@@ -370,10 +351,8 @@ DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs, const void *pt
     if (attrs == nullptr)
         return std::unexpected(HazeInternalError::InvalidArgument);
     *attrs = {};
-    // Resolve classification under one locked snapshot, then fill the
-    // attribute fields outside the lock. Snapshotting closes the window
-    // where a concurrent free() / unregister between membership check
-    // and attribute write could flip the answer.
+    // Resolve classification under one locked snapshot, then fill fields outside the
+    // lock, closing the window where a concurrent free()/unregister could flip it.
     enum class Classification : uint8_t { Unknown, Device, Host };
     auto classification = Classification::Unknown;
     if (ptr != nullptr) {
@@ -387,10 +366,9 @@ DeviceAllocator::pointer_attributes(hazePointerAttributes *attrs, const void *pt
     switch (classification) {
     case Classification::Device:
         attrs->type = HAZE_MEMORY_TYPE_DEVICE;
-        // hazePointerAttributes mirrors cudaPointerAttributes: the
-        // devicePointer / hostPointer fields are non-const void*, but
-        // the input here is const void*. The cast is contained to the
-        // two assignments at the C-ABI boundary.
+        // hazePointerAttributes mirrors cudaPointerAttributes: its devicePointer/
+        // hostPointer are non-const void*, so const_cast the const input at this
+        // C-ABI boundary.
         attrs->devicePointer =
             const_cast<void *>(ptr); // NOLINT(cppcoreguidelines-pro-type-const-cast)
         break;

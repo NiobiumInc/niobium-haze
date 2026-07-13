@@ -17,11 +17,11 @@
 // project doesn't land under the "niobium_trace" default). set_program_info()
 // also resets the project directory to cwd/<name>. A library integrator (e.g.
 // FIDESlib's HazeEngine) pins a custom project directory via
-// hazeSetProgramDirectory() BEFORE calling the bridge; if the bridge's rename
-// resets it, cryptocontext.dat is written under cwd/haze/ while the .fhetch
-// trace lands in the pinned dir. nbcc_fhetch_replay --project=<pinned> then
-// fails with "Cannot load crypto context — skipping probe serialization" and
-// returns no probes, so the transport readback fails.
+// hazeReplayConfig::program_directory BEFORE calling the bridge; if the bridge's
+// rename resets it, cryptocontext.dat is written under cwd/haze/ while the
+// .fhetch trace lands in the pinned dir. nbcc_fhetch_replay --project=<pinned>
+// then fails with "Cannot load crypto context — skipping probe serialization"
+// and returns no probes, so the transport readback fails.
 //
 // The existing suites never set a custom program directory (they use the
 // cwd/<name> default), so cryptocontext.dat and the trace always coincided and
@@ -46,21 +46,22 @@ constexpr uint64_t kQ = 576460752303415297ULL; // standard CKKS test prime
 
 TEST_CASE("replay bridge honors a caller-pinned program directory", "[replay_bridge]") {
     // A project directory that is NOT the cwd/<program_name> default — exactly
-    // what a library integrator pins via hazeSetProgramDirectory().
+    // what a library integrator pins via hazeReplayConfig::program_directory.
     const fs::path pinned = fs::temp_directory_path() / "haze_replay_bridge_progdir_test";
     std::error_code ec;
     fs::remove_all(pinned, ec);
     REQUIRE(fs::create_directories(pinned, ec));
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kN) == HAZE_SUCCESS);
     // Pin the project directory BEFORE the bridge init, mirroring the HazeEngine
-    // bring-up order (hazeSetProgramDirectory precedes the first compute call).
-    // This stores the directory in haze::config(); the compiler only learns it at
-    // bring-up, so niobium::compiler().get_program_directory() is still the default
-    // here — the bridge init is what must propagate it.
-    REQUIRE(hazeSetProgramDirectory(pinned.c_str()) == HAZE_SUCCESS);
-
+    // bring-up order (the replay config's program_directory precedes the first
+    // compute call). hazeConfigureDevice freezes the directory into the replay
+    // config; the compiler only learns it at bring-up, so
+    // niobium::compiler().get_program_directory() is still the default here — the
+    // bridge init is what must propagate it.
+    const hazeFheParams fhe = {.ring_dim = kN};
+    const hazeReplayConfig replay = {.program_directory = pinned.c_str()};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ, &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);

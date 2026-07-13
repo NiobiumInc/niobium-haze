@@ -177,8 +177,7 @@ class EpochState {
     void ensure_output_tag_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Lock order: see the canonical DAG in common/thread_safety.hpp
-    // (epoch → {config, allocator}). Allocator-side code must never
-    // call back into EpochState while holding its own lock.
+    // (epoch → allocator only; config scalars are read lock-free).
     HazeMutex mutex_;
     // Every poly in flight this epoch (inputs and outputs land here).
     // pending_outputs_ is the addr-keyed subset that names the outputs.

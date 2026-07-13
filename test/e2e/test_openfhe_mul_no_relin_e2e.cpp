@@ -109,8 +109,6 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     INFO("policy: " << P::kName);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
 
     CCParams<CryptoContextCKKSRNS> params;
     params.SetMultiplicativeDepth(2);
@@ -126,7 +124,6 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     auto keys = cc->KeyGen();
 
     const uint64_t ring_dim = cc->GetRingDimension();
-    REQUIRE(hazeSetRingDimension(ring_dim) == HAZE_SUCCESS);
 
     const auto &eparams = cc->GetCryptoParameters()->GetElementParams()->GetParams();
     std::vector<uint64_t> base;
@@ -137,14 +134,15 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     REQUIRE(!base.empty());
 
     // Pure-C bridge: seed haze's context from the first Q prime, then convey the
-    // full chain via hazeSetCiphertextModulus.
+    // full chain via hazeFheParams::moduli.
+    const hazeFheParams fhe = {
+        .ring_dim = ring_dim, .moduli = base.data(), .moduli_count = base.size()};
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    const hazeReplayConfig replay = {.reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, base.front(), &picked) == HAZE_SUCCESS);
     REQUIRE(picked != 0);
-    for (std::size_t i = 0; i < base.size(); ++i) {
-        REQUIRE(hazeSetCiphertextModulus(static_cast<int>(i), base[i]) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     INFO("ring_dim=" << ring_dim << " towers=" << base.size());
     REQUIRE(base.size() >= 2);

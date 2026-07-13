@@ -41,11 +41,22 @@ bool CompilerBackend::ensure_initialized() noexcept {
     if (initialized_.load(std::memory_order_relaxed))
         return true;
 
+    // Configuration must be finalized by an explicit hazeConfigureDevice()
+    // first; bring-up only READS the frozen config — it never finalizes, so the
+    // compute path never mutates config state (hence needs no lock for it).
+    if (!config_finalized()) {
+        record_internal_error(HazeInternalError::NotConfigured,
+                              "CompilerBackend::ensure_initialized: hazeConfigureDevice() "
+                              "not called before first compute");
+        return false;
+    }
+    const ReplayConfig &rc = replay_config();
+
     // The local simulator runs ordinary-form traces only; reject the
     // Montgomery / bit-reversal toggles here so the error names the real cause.
-    const bool montgomery = config().montgomery();
-    const bool bit_reversal = config().bit_reversal();
-    if ((montgomery || bit_reversal) && config().target() == kLocalTarget) {
+    const bool montgomery = rc.montgomery();
+    const bool bit_reversal = rc.bit_reversal();
+    if ((montgomery || bit_reversal) && rc.target_is_local()) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
                               "require a transport target such as FUNC_SIM)");
@@ -55,16 +66,15 @@ bool CompilerBackend::ensure_initialized() noexcept {
     // niobium::compiler() can throw (bad_alloc, config errors); catch here
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
-        const std::string program_name = config().program_name();
-        const std::string program_version = config().program_version();
-        const std::string program_description = config().program_description();
-        const std::string target = config().target();
+        const std::string &program_name = rc.program_name();
+        const std::string &program_version = rc.program_version();
+        const std::string &program_description = rc.program_description();
 
         // Synthesize a minimal argv to pass --target= (and the Montgomery /
         // bit-reversal flags) to compiler().init() — no setters are exposed.
         // init copies argv during the call, so function-local storage is safe.
         std::string prog_storage = program_name;
-        std::string target_arg_storage = "--target=" + target;
+        std::string target_arg_storage = "--target=" + rc.target();
         std::string montgomery_arg_storage = "--montgomery";
         std::string bitrev_arg_storage = "--bit_reversal";
         std::string no_ring_check_storage = "--no-ring-dim-check";
@@ -92,8 +102,8 @@ bool CompilerBackend::ensure_initialized() noexcept {
         // the project (.fhetch + inputs + templates + cryptocontext) lands
         // here instead of cwd/<program_name>. Must precede the first compute
         // op so it's in effect when stop_recording() writes the trace.
-        if (config().has_program_directory())
-            niobium::compiler().set_program_directory(config().program_directory());
+        if (rc.has_program_directory())
+            niobium::compiler().set_program_directory(rc.program_directory());
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.
@@ -133,15 +143,6 @@ bool CompilerBackend::start_recording() noexcept {
                               "CompilerBackend::start_recording");
         return false;
     }
-}
-
-bool CompilerBackend::try_set_target(const char *target) noexcept {
-    // init_mutex_ serializes against ensure_initialized, closing the window
-    // where a set racing first-compute bring-up would be baked over.
-    HazeLockGuard lock(init_mutex_);
-    if (initialized_.load(std::memory_order_relaxed))
-        return false;
-    return config().set_target(target).has_value();
 }
 
 bool CompilerBackend::stop_recording() noexcept {

@@ -13,16 +13,12 @@
 #include "core/config.hpp"
 
 #include "common/errors.hpp"
-#include "common/thread_safety.hpp"
-#include "core/allocator.hpp"
 #include "core/device.hpp"
 
+#include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <expected>
-#include <string>
-#include <utility>
-#include <vector>
+#include <haze/haze_types.h>
 
 namespace haze {
 
@@ -38,204 +34,58 @@ bool is_supported_ring_dim(uint64_t n) noexcept {
 
 } // namespace
 
-std::expected<void, HazeInternalError> Config::set_ring_dimension(uint64_t n) noexcept {
-    if (!is_supported_ring_dim(n))
+std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParams &raw) noexcept {
+    // Struct well-formedness: a non-zero count with a null array would be
+    // dereferenced below.
+    if ((raw.moduli_count > 0 && raw.moduli == nullptr) ||
+        (raw.twiddle_count > 0 && raw.twiddle_generators == nullptr))
         return std::unexpected(HazeInternalError::InvalidArgument);
-    // Hold the Config lock across the allocator update so no observer
-    // ever sees (new ring_dim, old pool poly_bytes) or vice versa. Lock
-    // order is Config -> Allocator; the allocator never calls back into
-    // Config, so this direction cannot deadlock.
-    HazeLockGuard lock(mutex_);
-    if (configured_ && ring_dim_ != n) {
-        record_internal_error(HazeInternalError::ConfigLocked,
-                              "set_ring_dimension: configured; hazeDeviceReset to change");
-        return std::unexpected(HazeInternalError::ConfigLocked);
+    // Per-argument: ring_dim in the device envelope; modulus count within it.
+    if (!is_supported_ring_dim(raw.ring_dim))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    if (raw.moduli_count > static_cast<size_t>(kMaxCiphertextModuli))
+        return std::unexpected(HazeInternalError::InvalidArgument);
+
+    FheParams p;
+    p.ring_dim_ = raw.ring_dim;
+    for (size_t i = 0; i < raw.moduli_count; ++i) {
+        const uint64_t qi = raw.moduli[i];
+        if (qi == 0) // per-argument: moduli non-zero
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        for (size_t j = 0; j < i; ++j) // whole-config: moduli unique
+            if (raw.moduli[j] == qi) {
+                record_internal_error(HazeInternalError::DuplicateModulus,
+                                      "FheParams::create: duplicate modulus");
+                return std::unexpected(HazeInternalError::DuplicateModulus);
+            }
+        p.moduli_[i] = qi;
     }
-    // Live allocations bake in the polynomial size; changing it under them
-    // left stale-sized shadows (formerly a heap overread on D2H).
-    if (ring_dim_ != n && allocator().has_live_allocations()) {
-        record_internal_error(HazeInternalError::ConfigLocked,
-                              "set_ring_dimension: allocations live; free them or reset first");
-        return std::unexpected(HazeInternalError::ConfigLocked);
+    p.moduli_count_ = static_cast<int>(raw.moduli_count);
+    p.twiddle_generators_.assign(raw.twiddle_generators,
+                                 raw.twiddle_generators + raw.twiddle_count);
+    return p;
+}
+
+ReplayConfig ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
+    ReplayConfig rc; // defaults; a NULL struct or NULL field keeps them
+    if (raw == nullptr)
+        return rc;
+    if (raw->target != nullptr)
+        rc.target_ = raw->target;
+    if (raw->program_name != nullptr)
+        rc.program_name_ = raw->program_name;
+    if (raw->program_version != nullptr)
+        rc.program_version_ = raw->program_version;
+    if (raw->program_description != nullptr)
+        rc.program_description_ = raw->program_description;
+    if (raw->program_directory != nullptr) {
+        rc.program_dir_ = raw->program_directory;
+        rc.program_dir_set_ = true;
     }
-    ring_dim_ = n;
-    allocator().set_polynomial_size(n * sizeof(uint64_t));
-    return {};
-}
-
-std::expected<void, HazeInternalError> Config::set_modulus(int idx, uint64_t modulus) noexcept {
-    if (idx < 0)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    if (modulus == 0)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    HazeLockGuard lock(mutex_);
-    if (configured_) {
-        const auto i = static_cast<size_t>(idx);
-        if (i >= moduli_.size() || moduli_[i] != modulus)
-            return std::unexpected(HazeInternalError::ConfigLocked);
-        return {};
-    }
-    // Reject sparse writes — every index from 0 to idx-1 must already
-    // have been set with a non-zero modulus. Without this constraint,
-    // skipping an index leaves a 0 in the table which Config::modulus()
-    // returns indistinguishably from "out of range," and the compute
-    // templates would conflate the two failure modes.
-    if (std::cmp_less(moduli_.size(), idx))
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    if (std::cmp_equal(moduli_.size(), idx)) {
-        moduli_.push_back(modulus);
-    } else {
-        moduli_[static_cast<size_t>(idx)] = modulus;
-    }
-    return {};
-}
-
-std::expected<void, HazeInternalError> Config::set_twiddle_generator(int idx,
-                                                                     uint64_t generator) noexcept {
-    if (idx < 0)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    HazeLockGuard lock(mutex_);
-    if (configured_) {
-        const auto i = static_cast<size_t>(idx);
-        if (i >= twiddle_generators_.size() || twiddle_generators_[i] != generator)
-            return std::unexpected(HazeInternalError::ConfigLocked);
-        return {};
-    }
-    if (std::cmp_less_equal(twiddle_generators_.size(), idx)) {
-        twiddle_generators_.resize(static_cast<size_t>(idx) + 1, 0);
-    }
-    twiddle_generators_[static_cast<size_t>(idx)] = generator;
-    return {};
-}
-
-std::expected<void, HazeInternalError> Config::configure_device() noexcept {
-    HazeLockGuard lock(mutex_);
-    if (ring_dim_ == 0)
-        return std::unexpected(HazeInternalError::NotConfigured);
-    configured_ = true;
-    return {};
-}
-
-uint64_t Config::ring_dim() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return ring_dim_;
-}
-
-uint64_t Config::modulus(int idx) const noexcept {
-    HazeLockGuard lock(mutex_);
-    if (idx < 0 || static_cast<size_t>(idx) >= moduli_.size())
-        return 0;
-    return moduli_[static_cast<size_t>(idx)];
-}
-
-std::expected<void, HazeInternalError>
-Config::set_program_info(const char *name, const char *version, const char *description) noexcept {
-    if (name == nullptr || version == nullptr || description == nullptr)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    HazeLockGuard lock(mutex_);
-    program_name_ = name;
-    program_version_ = version;
-    program_description_ = description;
-    program_info_set_ = true;
-    return {};
-}
-
-std::expected<void, HazeInternalError> Config::set_target(const char *target) noexcept {
-    if (target == nullptr)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    HazeLockGuard lock(mutex_);
-    target_ = target;
-    target_set_ = true;
-    return {};
-}
-
-std::expected<void, HazeInternalError> Config::set_program_directory(const char *dir) noexcept {
-    if (dir == nullptr)
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    HazeLockGuard lock(mutex_);
-    program_dir_ = dir;
-    program_dir_set_ = true;
-    return {};
-}
-
-bool Config::has_program_directory() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return program_dir_set_;
-}
-
-std::string Config::program_directory() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return program_dir_;
-}
-
-std::string Config::program_name() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return program_info_set_ ? program_name_ : std::string{"haze"};
-}
-
-std::string Config::program_version() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return program_info_set_ ? program_version_ : std::string{"0.1"};
-}
-
-std::string Config::program_description() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return program_info_set_ ? program_description_ : std::string{"HAZE runtime"};
-}
-
-std::string Config::target() const noexcept {
-    // Default kLocalTarget runs the in-process FHETCH simulator.
-    HazeLockGuard lock(mutex_);
-    return target_set_ ? target_ : std::string{kLocalTarget};
-}
-
-void Config::set_montgomery(bool enable) noexcept {
-    HazeLockGuard lock(mutex_);
-    montgomery_ = enable;
-}
-
-void Config::set_bit_reversal(bool enable) noexcept {
-    HazeLockGuard lock(mutex_);
-    bit_reversal_ = enable;
-}
-
-bool Config::montgomery() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return montgomery_;
-}
-
-bool Config::bit_reversal() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return bit_reversal_;
-}
-
-void Config::set_reduced_noise(bool enable) noexcept {
-    HazeLockGuard lock(mutex_);
-    reduced_noise_ = enable;
-}
-
-bool Config::reduced_noise() const noexcept {
-    HazeLockGuard lock(mutex_);
-    return reduced_noise_;
-}
-
-void Config::reset() noexcept {
-    HazeLockGuard lock(mutex_);
-    ring_dim_ = 0;
-    moduli_.clear();
-    twiddle_generators_.clear();
-    configured_ = false;
-    program_name_.clear();
-    program_version_.clear();
-    program_description_.clear();
-    target_.clear();
-    program_dir_.clear();
-    program_info_set_ = false;
-    target_set_ = false;
-    program_dir_set_ = false;
-    montgomery_ = false;
-    bit_reversal_ = false;
-    reduced_noise_ = false;
+    rc.montgomery_ = raw->montgomery != 0;
+    rc.bit_reversal_ = raw->bit_reversal != 0;
+    rc.reduced_noise_ = raw->reduced_noise != 0;
+    return rc;
 }
 
 } // namespace haze

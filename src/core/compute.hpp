@@ -41,7 +41,7 @@ std::expected<void, HazeInternalError> binary_pp_op(DevAddr dst, DevAddr src1, D
     EpochSession session;
     if (auto rec = epoch().require_recording_locked(); !rec)
         return rec;
-    const uint64_t q = config().modulus(mod_idx);
+    const uint64_t q = fhe_params().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
     auto p1 = epoch().lookup_or_create_locked(src1);
@@ -63,7 +63,7 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
     EpochSession session;
     if (auto rec = epoch().require_recording_locked(); !rec)
         return rec;
-    const uint64_t q = config().modulus(mod_idx);
+    const uint64_t q = fhe_params().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
     auto p = epoch().lookup_or_create_locked(src);
@@ -82,7 +82,7 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
     EpochSession session;
     if (auto rec = epoch().require_recording_locked(); !rec)
         return rec;
-    const uint64_t q = config().modulus(mod_idx);
+    const uint64_t q = fhe_params().modulus(mod_idx);
     if (q == 0)
         return std::unexpected(HazeInternalError::InvalidArgument);
     auto p = epoch().lookup_or_create_locked(src);

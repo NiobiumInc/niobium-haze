@@ -367,12 +367,13 @@ void Allocs::free_all() noexcept {
 OpCtx make_ctx(const CtxParams &params) {
     using namespace lbcrypto;
 
-    // The library reads no env: bridge the HAZE_TARGET test parameter to the
-    // explicit setter, and enable the reduced-noise FBC so haze matches the
-    // WITH_REDUCED_NOISE OpenFHE oracle. The caller resets the device just before.
+    // The library reads no env: capture the HAZE_TARGET test parameter here and
+    // fold it (plus the reduced-noise FBC, so haze matches the WITH_REDUCED_NOISE
+    // OpenFHE oracle) into the one-shot config below. The caller resets the device
+    // just before.
+    const char *target = nullptr;
     if (const char *t = std::getenv("HAZE_TARGET"); t != nullptr && t[0] != '\0')
-        REQUIRE(hazeSetTarget(t) == HAZE_SUCCESS);
-    REQUIRE(hazeSetReducedNoise(1) == HAZE_SUCCESS);
+        target = t;
 
     OpCtx ctx;
     ctx.mode = params.mode;
@@ -420,24 +421,22 @@ OpCtx make_ctx(const CtxParams &params) {
             ctx.p_base.push_back(p->GetModulus().ConvertToInt());
     }
 
-    REQUIRE(hazeSetRingDimension(ctx.ring_dim) == HAZE_SUCCESS);
     // Pure-C bridge: build haze's CryptoContext from (ring_dim, first Q prime).
-    // The full Q∥P chain is conveyed below via hazeSetCiphertextModulus; per-op
-    // shapes are rebuilt from the trace moduli, so the exact picked prime here
-    // only seeds the fallback primary context.
+    // The full Q∥P chain is conveyed via hazeFheParams::moduli in Q-then-P order;
+    // per-op shapes are rebuilt from the trace moduli, so the exact picked prime
+    // here only seeds the fallback primary context.
+    std::vector<uint64_t> moduli(ctx.q_base.begin(), ctx.q_base.end());
+    moduli.insert(moduli.end(), ctx.p_base.begin(), ctx.p_base.end());
+    const hazeFheParams fhe = {
+        .ring_dim = ctx.ring_dim, .moduli = moduli.data(), .moduli_count = moduli.size()};
+    const hazeReplayConfig replay = {.target = target, .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+
+    // Bridge pre-init after the explicit finalize, so it reads the frozen config.
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(ctx.ring_dim, ctx.q_base.front(), &picked) ==
             HAZE_SUCCESS);
     REQUIRE(picked != 0);
-
-    int mod_idx = 0;
-    for (uint64_t q : ctx.q_base) {
-        REQUIRE(hazeSetCiphertextModulus(mod_idx++, q) == HAZE_SUCCESS);
-    }
-    for (uint64_t pmod : ctx.p_base) {
-        REQUIRE(hazeSetCiphertextModulus(mod_idx++, pmod) == HAZE_SUCCESS);
-    }
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
     if (ctx.with_relin_key) {
         REQUIRE(extract_evalmult_key_limbs(ctx.cc, ctx.keys.secretKey, ctx.relin_key) ==

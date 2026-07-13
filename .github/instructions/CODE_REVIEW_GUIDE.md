@@ -62,7 +62,7 @@ Label every issue: **Blocker / High / Medium / Low**.
 ### Medium Risk — targeted review
 - New compute API implementations in `src/api/compute.cpp`.
 - New or modified test cases under `test/`.
-- Changes to `hazeSetRingDimension`, `hazeMalloc`, `hazeFree` (single-size invariant enforcement).
+- Changes to `hazeConfigureDevice`, `hazeMalloc`, `hazeFree` (single-size invariant enforcement).
 - Changes to the `EpochSession` RAII guard lifecycle (constructor, destructor, `ensure_initialized`).
 
 ### Low Risk — light review
@@ -116,7 +116,7 @@ This is the most subtle correctness area in libhaze.
 
 ### 3.6 Single-Size Allocation Invariant
 - Every `hazeMalloc` allocation must equal `ring_dim * sizeof(uint64_t)`. Any path that accepts a different size or skips the size check is a Blocker.
-- `hazeSetRingDimension` must be called before the first `hazeMalloc`. New code that calls `hazeMalloc` without a prior ring-dimension set is a contract violation.
+- `hazeConfigureDevice` must be called before the first `hazeMalloc`. New code that calls `hazeMalloc` without a prior configure is a contract violation.
 - `hazeHostAlloc` is the correct path for non-polynomial scratch (pointer arrays, twiddle tables, kernel-arg packs) — these must never go through `hazeMalloc`.
 
 ### 3.7 hazeDeviceReset and Bridge Re-init

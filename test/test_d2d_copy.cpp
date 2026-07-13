@@ -76,15 +76,14 @@ TEST_CASE("hazeMemcpy(D2D) copies a residue into an MRP-registered addr", "[inte
     constexpr uint64_t kQ2 = 576460752303702017ULL;
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(hazeSetRingDimension(kRingDimMrp) == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0, kQ1, kQ2};
+    const hazeFheParams fhe = {.ring_dim = kRingDimMrp, .moduli = moduli, .moduli_count = 3};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+    // Bridge pre-init after finalize; the set modulus (kQ0) is trace-authoritative.
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDimMrp, kQ0, &picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(0, picked) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(1, kQ1) == HAZE_SUCCESS);
-    REQUIRE(hazeSetCiphertextModulus(2, kQ2) == HAZE_SUCCESS);
-    REQUIRE(hazeConfigureDevice() == HAZE_SUCCESS);
 
-    const std::vector<uint64_t> base = {picked, kQ1, kQ2};
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
     std::vector<std::vector<uint64_t>> src_residues = {
         haze::test::make_residue(picked, /*seed=*/1, kRingDimMrp),
         haze::test::make_residue(kQ1, /*seed=*/2, kRingDimMrp),
