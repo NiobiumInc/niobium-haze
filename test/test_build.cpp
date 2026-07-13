@@ -107,3 +107,13 @@ TEST_CASE("error state is thread-local", "[unit]") {
     REQUIRE(child_err == HAZE_SUCCESS);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
+
+// hazeFlush with nothing recorded or tagged (backend never initialized) is a
+// success no-op — pins the recording_ short-circuit at the top of
+// finalize_locked at unit scope, no bridge/replay needed.
+TEST_CASE("hazeFlush with nothing recorded is a success no-op", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS); // idempotent
+    REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
+}

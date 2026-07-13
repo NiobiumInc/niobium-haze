@@ -72,7 +72,7 @@ const char *internal_error_name(HazeInternalError err) noexcept {
     case HazeInternalError::UnknownAddress:
         return "unknown address";
     case HazeInternalError::NoData:
-        return "no data";
+        return "no data (reserved; surfaced as source-unavailable)";
     case HazeInternalError::PolySizeMismatch:
         return "size does not match configured polynomial size (ring_dim * sizeof(uint64_t))";
     case HazeInternalError::BackendInitFailed:

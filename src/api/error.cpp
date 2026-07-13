@@ -38,7 +38,7 @@ extern "C" const char *hazeGetErrorString(hazeError_t error) noexcept {
     case HAZE_ERROR_UNKNOWN_ADDRESS:
         return "unknown device address";
     case HAZE_ERROR_NO_DATA:
-        return "no data at device address";
+        return "no data at device address (reserved; see HAZE_ERROR_SOURCE_UNAVAILABLE)";
     case HAZE_ERROR_SIZE_MISMATCH:
         return "size does not match configured polynomial size (ring_dim * sizeof(uint64_t))";
     case HAZE_ERROR_SOURCE_UNAVAILABLE:
