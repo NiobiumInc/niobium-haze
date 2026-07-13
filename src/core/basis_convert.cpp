@@ -81,9 +81,8 @@ std::expected<void, HazeInternalError> validate(const hazeModDownParams &p) noex
                               "hazeModDown: rescale_base_len >= src_base_len");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Foreign-modulus check: every prime in rescale_base must appear in
-    // src_base. Doing this HAZE-side rejects bad calls before fhetch's
-    // assert (which strips in release).
+    // Foreign-modulus check: every rescale_base prime must appear in src_base;
+    // rejecting HAZE-side beats fhetch's assert (stripped in release).
     std::unordered_set<uint64_t> src_set(p.src_base, p.src_base + p.src_base_len);
     for (size_t j = 0; j < p.rescale_base_len; ++j) {
         if (!src_set.contains(p.rescale_base[j])) {
@@ -167,12 +166,10 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     }
 
     const fhetch::ModuliBase target_base(p.dst_base, p.dst_base + p.dst_base_len);
-    // Thread the engine's configured FBC variant/shape, matching mod_down/mod_up
-    // below — basis_convert was the lone CRT primitive pinned to the 2-arg
-    // fast_base_convert default (ReducedNoise/ThreeOp). With reduced_noise off this
-    // yields the Standard lift that a split rescale/keyswitch mod-down (INTT only the
-    // dropped limbs, then basis-convert + NTT + combine in eval) composes against
-    // byte-for-byte; with reduced_noise on it tracks the centered variant automatically.
+    // Thread config()'s FBC variant/shape (matching mod_down/mod_up) rather than
+    // the 2-arg fast_base_convert default (ReducedNoise/ThreeOp): with reduced_noise
+    // off this Standard lift composes byte-for-byte against a split rescale/keyswitch
+    // mod-down, and with it on tracks the centered variant automatically.
     fhetch::MRP result =
         fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant(), fbc_center_shape());
     return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
@@ -196,9 +193,8 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
     fhetch::MRP result =
         fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant(), fbc_center_shape());
-    // result.base() == src_base \ rescale_base in src_base's original
-    // order. Use it directly so HAZE-side and backend-side never disagree
-    // on the dst layout.
+    // result.base() == src_base \ rescale_base in original order; use it directly
+    // so HAZE-side and backend-side agree on the dst layout.
     const auto &dst_base = result.base();
     return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
 }

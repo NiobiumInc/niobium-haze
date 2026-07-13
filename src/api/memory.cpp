@@ -67,10 +67,9 @@ extern "C" hazeError_t hazeFreeMrp(void *const *ptrs, size_t num_residues) noexc
     // Same noexcept bound as hazeMallocMrp.
     if (num_residues > static_cast<size_t>(haze::kMaxCiphertextModuli))
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Mirror hazeFree: drop each live address's epoch polymap binding first.
-    // epoch().invalidate takes (and releases) the epoch lock before the
-    // single allocator lock in free_many, preserving the epoch -> allocator
-    // lock order.
+    // Mirror hazeFree: drop each live address's epoch polymap binding first;
+    // epoch().invalidate takes and releases the epoch lock before free_many's
+    // allocator lock, preserving the epoch -> allocator lock order.
     std::vector<haze::DevAddr> addrs;
     addrs.reserve(num_residues);
     for (size_t i = 0; i < num_residues; ++i) {
@@ -93,15 +92,12 @@ extern "C" hazeError_t hazeFreeAsync(void *ptr, hazeStream_t /*stream*/) noexcep
 extern "C" hazeError_t hazeHostAlloc(void **ptr, size_t size, unsigned int /*flags*/) noexcept {
     if (ptr == nullptr || size == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Page-aligned allocation for DMA / O_DIRECT compatibility on
-    // pinned-host buffers. Apple Silicon uses 16K pages, Linux x86_64
-    // uses 4K — sysconf returns the right value either way.
+    // Page-aligned for DMA / O_DIRECT compatibility on pinned-host buffers; sysconf
+    // returns the right page size on both Apple Silicon (16K) and Linux x86_64 (4K).
     static const size_t kHostAllocAlignment = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void *p = nullptr;
-    // posix_memalign is exposed via <cstdlib> on the toolchain we
-    // build with, but include-cleaner does not model POSIX extensions
-    // and would direct us at <stdlib.h>, which modernize-deprecated-
-    // headers in turn rejects. Suppress the cleaner here only.
+    // posix_memalign comes from <cstdlib> on our toolchain, but include-cleaner would
+    // redirect to <stdlib.h> (which modernize-deprecated-headers rejects); suppress it here.
     if (posix_memalign(&p, kHostAllocAlignment, size) != 0) // NOLINT(misc-include-cleaner)
         return set_error(HAZE_ERROR_OUT_OF_MEMORY);
     haze::allocator().register_host_pointer(p);

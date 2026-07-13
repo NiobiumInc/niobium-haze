@@ -15,9 +15,8 @@
 #include <cstdint>
 #include <haze/haze_types.h>
 
-// Opaque-handle struct definitions. These match the forward-declared C
-// handles in haze_types.h. Allocated via raw new/delete at the C ABI
-// boundary per the documented opaque-handle pattern.
+// Opaque-handle struct definitions matching the forward-declared C handles in
+// haze_types.h; allocated via raw new/delete at the C ABI boundary.
 struct haze_stream_s {
     uint64_t id;
 };
@@ -28,8 +27,7 @@ struct haze_event_s {
 
 namespace haze {
 
-// Free functions instead of registry classes — state is just two
-// counters, not enough invariants to justify a wrapper.
+// Free functions instead of registry classes — state is just two counters.
 
 hazeStream_t stream_create() noexcept; // new haze_stream_s, caller owns
 void stream_destroy(hazeStream_t s) noexcept;

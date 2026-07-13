@@ -81,10 +81,9 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
         addrs.push_back(a);
     }
     auto mrp = fhetch::MRP::from_pairs(pairs);
-    // Tag a multi-tower live-in MRP input (so a transport target can synthesize
-    // its CT) only for a genuine input; a computed source is reproduced by replay,
-    // so tagging it bloats the replay working set. The leading residue represents
-    // the group — a CKKS ciphertext's residues move as a unit.
+    // Tag a multi-tower MRP input (so a transport target can synthesize its CT) only for a
+    // genuine live-in — replay reproduces computed sources, so tagging them bloats the working
+    // set; the leading residue represents the group (a ciphertext's residues move as a unit).
     if (len > 1 && epoch().is_input_locked(addrs.front())) {
         auto group_name = epoch().mrp_group_name_locked(/*output=*/false, addrs.front());
         epoch().tag_mrp_input_if_new_locked(group_name, mrp);

@@ -40,8 +40,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_NOT_FLUSHED;
     case HazeInternalError::UnsupportedDataFormat:
         return HAZE_ERROR_NOT_SUPPORTED;
-    // Internal: haze invariants / backend failed. Caller can't recover;
-    // the specific variant survives in the HAZE_DEBUG=1 stderr log.
+    // Internal: haze invariants / backend failed; caller can't recover, but the
+    // specific variant survives in the HAZE_DEBUG=1 stderr log.
     case HazeInternalError::BackendInitFailed:
     case HazeInternalError::BackendReplayFailed:
     case HazeInternalError::BackendShapeMismatch:
@@ -54,9 +54,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::PoolMapDesync:
         return HAZE_ERROR_INTERNAL;
     }
-    // Unreachable: the switch above is exhaustive. If a new variant is
-    // added without extending this table, "haze is broken" is the
-    // correct user-visible classification.
+    // Unreachable: the switch is exhaustive, but if a new variant skips this table
+    // "haze is broken" is the correct user-visible classification.
     return HAZE_ERROR_INTERNAL;
 }
 

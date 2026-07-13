@@ -28,9 +28,8 @@ inline constexpr int kDeviceCount = 1;
 inline constexpr size_t kHbmSize = 16ULL * 1024 * 1024 * 1024; // 16 GB
 inline constexpr int kNumRegisters = 64;
 inline constexpr int kNumHbmBanks = 8;
-// Ring dimension exponents kMinRingDimExponent..kMaxRingDimExponent
-// (N = 1024..65536); the envelope constants live in device.hpp so
-// FheParams::create validates the ring dimension against the same range.
+// Ring-dim exponents kMinRingDimExponent..kMaxRingDimExponent (N = 1024..65536);
+// the envelope constants live in device.hpp so FheParams::create shares the range.
 inline constexpr int kNumSupportedRingDims = kMaxRingDimExponent - kMinRingDimExponent + 1;
 
 } // namespace

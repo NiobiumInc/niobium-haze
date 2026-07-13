@@ -38,9 +38,8 @@ class DeviceState;
 class EpochState;
 EpochState &epoch() noexcept; // defined in device_state.cpp
 
-// Tracks the polymap, pending outputs, and recording flag for the active
-// epoch (a DeviceState member); replay_and_populate() drains it at flush
-// time. Public methods take mutex_; _locked variants require it held via
+// Per-epoch polymap/pending-output/recording state (a DeviceState member), drained at flush by
+// replay_and_populate(); public methods take mutex_, _locked variants require it held via
 // EpochSession (enforced by clang -Wthread-safety).
 class EpochState {
   public:
@@ -49,9 +48,8 @@ class EpochState {
 
     // ---- Public methods (take mutex_ internally) ----
 
-    // Drop any binding for `addr` so the next read rebuilds from shadow. Called
-    // on memset and free; H2D replaces the binding in place via tag_h2d_input_locked
-    // and D2D binds via copy_result_locked, so neither routes through here.
+    // Drop any binding for `addr` so the next read rebuilds from shadow (memset/free route
+    // here; H2D and D2D rebind in place via tag_h2d_input_locked / copy_result_locked).
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     // Finalize the epoch: tag outputs, write the trace, dispatch replay,
@@ -63,9 +61,8 @@ class EpochState {
     // (backs hazeWriteProgram); same true-no-op rule as replay_and_populate.
     std::expected<void, HazeInternalError> write_program() noexcept HAZE_EXCLUDES(mutex_);
 
-    // Declare `addr` an output of the active recording (backs hazeTagOutput).
-    // Takes mutex_ but does NOT start a recording: tagging with nothing
-    // recorded (empty poly_map_) returns SourceUnavailable.
+    // Declare `addr` an output (backs hazeTagOutput); does NOT start a recording — tagging
+    // with nothing recorded (empty poly_map_) returns SourceUnavailable.
     std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
     void reset() noexcept HAZE_EXCLUDES(mutex_);
@@ -80,8 +77,8 @@ class EpochState {
     std::expected<void, HazeInternalError> require_recording_locked() const noexcept
         HAZE_REQUIRES(mutex_);
 
-    // Resolve `addr`; returns a copy so in-place compute doesn't invalidate
-    // the source. On first reference, builds from shadow and tags as input.
+    // Resolve `addr` (first reference builds from shadow and tags as input); returns a copy
+    // so in-place compute doesn't invalidate the source.
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
@@ -101,48 +98,40 @@ class EpochState {
     // kCopyModulus if none (raw input, or a result whose op had no modulus).
     uint64_t recorded_modulus_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
-    // Declare `addr` an output (idempotent); it must name a value bound in
-    // poly_map_ or it is a caller error. Tagging any residue of a known MRP
-    // group tags the whole ciphertext and promotes the group for emission.
+    // Declare `addr` an output (idempotent; caller error unless bound in poly_map_); tagging
+    // any residue of a known MRP group tags the whole ciphertext and promotes the group.
     std::expected<void, HazeInternalError> tag_output_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
-    // Record a pass-through copy dst <- src. Pass the residue's real modulus
-    // when the caller knows it (MRP D2D has base[i]); otherwise the modulus is
-    // recovered from the source's recorded_modulus_locked, so a copy of a
-    // compute-produced (or otherwise modulus-bound) SRP value is still
-    // probe-serializable on transport. Only a copy of a never-modulus-bound
-    // address (raw opaque H2D buffer) stays sentinel-only.
+    // Record a pass-through copy dst <- src; pass the residue's real modulus when known (MRP
+    // D2D has base[i]), otherwise it is recovered from the source so copies of modulus-bound
+    // values stay probe-serializable on transport and only a never-modulus-bound address (raw
+    // opaque H2D buffer) stays sentinel-only.
     std::expected<void, HazeInternalError>
     copy_result_locked(DevAddr dst, DevAddr src, uint64_t modulus = kCopyModulus) noexcept
         HAZE_REQUIRES(mutex_);
 
-    // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input.
-    // Builds the Polynomial via a non-evicting read (shadow stays intact
-    // for subsequent compute-free D2H), calls `tag_input`, and binds it
-    // in poly_map_. Returns an internal error if the H2D post-conditions
-    // (ring_dim set, shadow populated) are violated.
+    // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input via a non-evicting read
+    // (shadow survives for compute-free D2H); violated H2D post-conditions (ring_dim set,
+    // shadow populated) are internal errors.
     std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
         HAZE_REQUIRES(mutex_);
 
-    // Register an MRP-shaped grouping so replay can emit a single
-    // fhetch::tag_output(name, MRP). Latest-write-wins on re-registration:
-    // identical membership is a no-op, anything else replaces/evicts (see the
-    // implementation for the full semantics).
+    // Register an MRP-shaped grouping so replay emits a single fhetch::tag_output(name, MRP);
+    // re-registration is latest-write-wins (identical membership no-ops, anything else
+    // replaces/evicts).
     std::expected<void, HazeInternalError> record_mrp_group_locked(std::span<const DevAddr> addrs,
                                                                    std::span<const uint64_t> moduli,
                                                                    std::string &&name)
         HAZE_REQUIRES(mutex_);
 
-    // Pass-through to fhetch::tag_input(name, MRP), deduped by name. Unlike
-    // output groups (latest-write-wins, see record_mrp_group_locked),
-    // input tags reach fhetch immediately and keep first-wins dedup —
-    // input-side dst[0] reuse staleness is a known, separate limitation.
+    // Pass-through to fhetch::tag_input(name, MRP) with first-wins dedup by name (unlike the
+    // latest-write-wins output groups); input-side dst[0] reuse staleness is a known
+    // limitation.
     void tag_mrp_input_if_new_locked(const std::string &name, const niobium::fhetch::MRP &mrp)
         HAZE_REQUIRES(mutex_);
 
-    // Stable counter name for the MRP group led by `leading` ("haze_mrp_in_N"
-    // / "haze_mrp_out_N"): same leading addr -> same name within an epoch;
-    // invalidate() drops it so a recycled allocation gets a fresh name.
+    // Stable per-epoch counter name ("haze_mrp_in_N" / "haze_mrp_out_N") for the group led by
+    // `leading`; invalidate() drops it so a recycled allocation gets a fresh name.
     std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
 
     EpochState(const EpochState &) = delete;
@@ -152,8 +141,8 @@ class EpochState {
     friend class DeviceState;
     EpochState() = default;
 
-    // Tag pending SRP + MRP outputs for fhetch. Shared by replay_and_populate
-    // and write_program; returns the binding error without clearing state.
+    // Tag pending SRP + MRP outputs for fhetch (shared by replay_and_populate and
+    // write_program); returns the binding error without clearing state.
     std::expected<void, HazeInternalError> tag_pending_outputs_locked() HAZE_REQUIRES(mutex_);
 
     // Shared finalize entry: true no-op when idle or nothing tagged, else
@@ -173,24 +162,21 @@ class EpochState {
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
-    // Name `addr` as a pending output if it isn't one already.
     void ensure_output_tag_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Lock order: see the canonical DAG in common/thread_safety.hpp
     // (epoch → allocator only; config scalars are read lock-free).
     HazeMutex mutex_;
-    // Every poly in flight this epoch (inputs and outputs land here).
-    // pending_outputs_ is the addr-keyed subset that names the outputs.
+    // Every poly in flight this epoch; pending_outputs_ is the addr-keyed subset naming outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
     // Subset of poly_map_ addrs that are live-in inputs (H2D upload / fresh
     // shadow read), kept in lockstep with poly_map_; backs is_input_locked.
     std::unordered_set<DevAddr> input_addrs_ HAZE_GUARDED_BY(mutex_);
-    // addr -> real modulus from the last modulus-carrying op that wrote it.
-    // Kept in lockstep with poly_map_; cleared per epoch, dropped on invalidate.
+    // addr -> real modulus from the last modulus-carrying op, in lockstep with
+    // poly_map_; cleared per epoch and dropped on invalidate.
     std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);
-    // MRP group bookkeeping (membership, pending export, stable names);
-    // invariants documented on the class.
+    // MRP group bookkeeping; invariants documented on MrpGroupRegistry.
     MrpGroupRegistry mrp_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
@@ -208,8 +194,7 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     EpochSession() HAZE_ACQUIRE(epoch().mutex_) : guard_(epoch_mutex()) {
         epoch().ensure_recording_locked();
     }
-    // The unlock runs in guard_'s destructor; HAZE_RELEASE just
-    // declares the capability hand-off to TSA.
+    // guard_'s destructor unlocks; HAZE_RELEASE only declares the hand-off to TSA.
     ~EpochSession() HAZE_RELEASE() = default;
 
     EpochSession(const EpochSession &) = delete;
@@ -223,9 +208,8 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     HazeLockGuard guard_;
 };
 
-// haze:: entry points for the api/ shims, which translate the returned
-// HazeInternalError at the C ABI edge. These forward to the EpochState members
-// above (or the allocator), which carry the detailed contract.
+// haze:: entry points for the api/ shims (HazeInternalError translates at the C ABI edge);
+// they forward to the EpochState members above (or the allocator), which carry the contract.
 
 // Pure shadow read backing hazeMemcpy D2H; unmaterialized bytes read as
 // OutputNotFlushed.

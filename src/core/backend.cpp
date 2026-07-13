@@ -11,10 +11,9 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Control surface for the niobium::compiler() singleton; recording is
-// local, replay is dispatched per the configured target. libnbfhetch treats
-// "local" as the in-process simulator and any other string as an HTTP target
-// for nbcc_fhetch_replay (haze keeps comparisons symbolic via kLocalTarget).
+// Control surface for the niobium::compiler() singleton: recording is local,
+// replay dispatches per target ("local" = in-process simulator, any other string
+// = HTTP nbcc_fhetch_replay; comparisons stay symbolic via kLocalTarget).
 
 #include "core/backend.hpp"
 

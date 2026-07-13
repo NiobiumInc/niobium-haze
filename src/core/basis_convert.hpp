@@ -20,11 +20,10 @@
 
 namespace haze {
 
-// Internal C++ entry points for the CRT basis-conversion composites.
-// extern "C" shims in src/api/basis_convert.cpp validate pointer
-// arguments, dispatch here, and map HazeInternalError to hazeError_t.
-// Each function does its own pre-flight validation on the params struct
-// and opens an EpochSession internally.
+// Internal C++ entry points for the CRT basis-conversion composites; the extern
+// "C" shims in src/api/basis_convert.cpp validate pointers, dispatch here, and map
+// HazeInternalError to hazeError_t. Each does its own params validation and opens
+// an EpochSession internally.
 
 std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
                                                      const hazeBasisConvertParams &params) noexcept;

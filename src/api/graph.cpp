@@ -11,10 +11,9 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// Graph capture / execution shims (CUDA-shape names). All entries
-// return HAZE_ERROR_NOT_SUPPORTED — graph capture has no analogue in
-// the record-and-replay model. Output handles are zeroed on entry so
-// callers that ignore the error code do not see uninitialised pointers.
+// Graph capture / execution shims (CUDA-shape names): all return
+// HAZE_ERROR_NOT_SUPPORTED (no analogue in record-and-replay) and zero their output
+// handles so callers that ignore the error code see no uninitialised pointer.
 
 #include "common/errors.hpp"
 

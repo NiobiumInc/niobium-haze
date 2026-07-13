@@ -100,10 +100,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     const uint64_t ring_dim = fhe_params().ring_dim();
     auto components = allocator().extract_polynomial_components(addr, ring_dim);
     if (!components) {
-        // Compute / D2D on an addr with neither shadow data nor a
-        // poly_map_ binding is undefined under the record-and-replay
-        // model — there's no value to read. Translate NoData into the
-        // sharper SourceUnavailable; pass other errors through.
+        // An addr with neither shadow nor a poly_map_ binding has no value to read; translate
+        // NoData into the sharper SourceUnavailable and pass other errors through.
         if (components.error() == HazeInternalError::NoData) {
             record_internal_error(HazeInternalError::SourceUnavailable,
                                   "lookup_or_create_locked: no shadow and no poly_map_ binding");
@@ -127,7 +125,6 @@ bool EpochState::is_input_locked(DevAddr addr) const noexcept {
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    // This addr now holds a trace-produced value, not a live-in input.
     input_addrs_.erase(addr);
     // A no-modulus (kCopyModulus) result drops any stale entry so a later
     // copy/automorph can't recover a previous occupant's modulus here.
@@ -135,8 +132,7 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
         addr_modulus_.insert_or_assign(addr, modulus);
     else
         addr_modulus_.erase(addr);
-    // Drop stale shadow bytes so a pre-flush D2H errors with
-    // OutputNotFlushed instead of returning the old bytes.
+    // Evict stale shadow so a pre-flush D2H reports OutputNotFlushed, not the old bytes.
     allocator().evict_shadow(addr);
 }
 
@@ -156,7 +152,6 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
                               "tag_output_locked: addr not bound in poly_map_");
         return std::unexpected(HazeInternalError::SourceUnavailable);
     }
-    // An MRP residue tags every residue of its group and promotes the group.
     if (auto members = mrp_.mark_group_output(addr)) {
         for (DevAddr a : *members)
             ensure_output_tag_locked(a);
@@ -168,9 +163,9 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
 
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
                                                                       uint64_t modulus) noexcept {
-    // The op carries the COPY sentinel (the executor lowers ADDI imm=0 at
-    // modulus-table index 0 as a register copy); the real modulus rides as
-    // metadata. Recover it from the source when the caller passed none.
+    // The op carries the COPY sentinel (the executor lowers ADDI imm=0 at modulus-table index
+    // 0 as a register copy); the real modulus rides as metadata, recovered from the source
+    // when the caller passed none.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
@@ -215,7 +210,6 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
 }
 
 void EpochState::tag_mrp_input_if_new_locked(const std::string &name, const fhetch::MRP &mrp) {
-    // Dedup so each name reaches fhetch exactly once.
     if (mrp_.mark_input_tagged(name))
         fhetch::tag_input(name, mrp);
 }
@@ -285,13 +279,12 @@ std::expected<void, HazeInternalError> EpochState::tag_pending_outputs_locked() 
 
 std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_replay) {
     if (!recording_) {
-        return {}; // nothing to finalize
+        return {};
     }
 
-    // Nothing tagged: TRUE no-op (recording, bindings, counters survive).
-    // A half-clear desyncs haze from the vendor recorder — its start()
-    // no-ops while running, so the next flush would emit both epochs'
-    // nodes into one trace.
+    // Nothing tagged is a TRUE no-op (recording, bindings, counters survive): the vendor
+    // recorder's start() no-ops while running, so a half-clear would emit both epochs' nodes
+    // into one trace on the next flush.
     if (pending_outputs_.empty() && !mrp_.has_pending()) {
         return {};
     }
@@ -387,8 +380,7 @@ std::expected<void, HazeInternalError> flush() noexcept {
 
 std::expected<void, HazeInternalError> copy_device_to_device(DevAddr dst, DevAddr src,
                                                              size_t count) noexcept {
-    // Recorded pass-through copy of a whole polynomial: validate dst
-    // liveness and exact-polynomial count up front (contract in epoch.hpp).
+    // Validate dst liveness and exact-polynomial count up front (contract in epoch.hpp).
     if (auto live = allocator().require_allocated(dst); !live)
         return std::unexpected(live.error());
     if (count == 0)

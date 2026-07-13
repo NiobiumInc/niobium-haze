@@ -25,9 +25,9 @@
 
 namespace haze {
 
-// MRP polymap glue: build_mrp_locked assembles K per-addr residues into an
-// MRP; store_mrp_locked decomposes one back into per-addr stores. Both run
-// under the EpochSession lock (HAZE_REQUIRES enforces it via clang TSA).
+// MRP polymap glue: build_mrp_locked assembles per-addr residues into an MRP, store_mrp_locked
+// decomposes one back into per-addr stores, both under the EpochSession lock (HAZE_REQUIRES
+// enforced via clang TSA).
 
 // Validate a caller-supplied CRT base — len in [1, kMaxCiphertextModuli],
 // non-zero primes, no duplicates — returning InvalidArgument on violation
@@ -49,9 +49,8 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
                                                         const uint64_t *base, std::size_t len)
     HAZE_REQUIRES(epoch().mutex());
 
-// Per-residue fan-out backing hazeMemcpyMrp. Each manages its own
-// EpochSession (call without the lock held), so they mirror the single-ptr
-// copy_* free functions in epoch.hpp rather than the *_locked glue above.
+// Per-residue fan-out backing hazeMemcpyMrp; each manages its own EpochSession (call without
+// the lock held), mirroring the single-ptr copy_* free functions in epoch.hpp.
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
                                                     std::size_t count, std::size_t len) noexcept;
 
@@ -63,8 +62,7 @@ std::expected<void, HazeInternalError>
 copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t count,
                           const uint64_t *base, std::size_t len) noexcept;
 
-// Build an MRS from per-modulus uint64_t scalars + their primes. Pure-data
-// helper: does not touch the polymap, so no lock contract.
+// Build an MRS from per-modulus scalars + primes; pure data — no polymap, so no lock contract.
 inline niobium::fhetch::MRS build_mrs(const uint64_t *scalars, const uint64_t *base,
                                       std::size_t len) {
     std::vector<std::pair<niobium::fhetch::Scalar, uint64_t>> pairs;

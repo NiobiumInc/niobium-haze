@@ -92,10 +92,9 @@ std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int
     return {};
 }
 
-// Polynomial-index (hazeAutomorph). The eval-form automorph is a pure slot
-// permutation, so the op carries the COPY sentinel; recover the source's
-// recorded modulus and bind it (source + result) so a tagged SRP automorph is
-// probe-serializable on transport.
+// Polynomial-index (hazeAutomorph): the eval-form automorph is a pure slot
+// permutation carrying the COPY sentinel, so bind the source's recorded modulus
+// to source and result to keep the tagged SRP automorph probe-serializable.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
                                                    uint64_t index) noexcept {
@@ -117,9 +116,8 @@ std::expected<void, HazeInternalError> unary_pi_op(DevAddr dst, DevAddr src,
     return {};
 }
 
-// MRP compute templates: same shape as the SRP templates, fanned out per
-// residue via build_mrp_locked / store_mrp_locked. In-place safety carries
-// over per-residue.
+// MRP compute templates: same shape as SRP, fanned out per residue via
+// build_mrp_locked / store_mrp_locked; in-place safety carries over per-residue.
 
 // MRP polynomial-polynomial. Used by hazeAddMrp, hazeSubMrp, hazeMulMrp.
 template <auto OpFn>
@@ -169,8 +167,8 @@ binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scala
     return {};
 }
 
-// MRP polynomial-only: mr_ntt/mr_intt carry their moduli base inside the
-// MRP, so this can't reuse unary_pq_op. Used by hazeNTTMrp, hazeINTTMrp.
+// MRP polynomial-only (hazeNTTMrp, hazeINTTMrp): mr_ntt/mr_intt carry their
+// base inside the MRP, so this can't reuse unary_pq_op.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const void *const *src,
                                                       const uint64_t *base,
