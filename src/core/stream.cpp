@@ -39,8 +39,7 @@ void event_destroy(hazeEvent_t e) noexcept {
 }
 
 void event_record(hazeEvent_t /*e*/) noexcept {
-    // Events do not model ordering in this runtime (CUDA-shape parity
-    // only); recording is a no-op.
+    // Events do not model ordering (CUDA-shape parity only); recording is a no-op.
 }
 
 } // namespace haze

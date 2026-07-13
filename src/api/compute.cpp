@@ -11,9 +11,8 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// HAZE compute API: extern "C" shims dispatching to the templates in
-// core/compute.hpp. Each shim validates pointer arguments, casts to
-// DevAddr, and selects the matching FHETCH operation.
+// HAZE compute API: extern "C" shims that validate pointers, cast to DevAddr, and
+// dispatch to core/compute.hpp templates for the matching FHETCH operation.
 
 #include "core/compute.hpp"
 
@@ -96,8 +95,8 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
                                      hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    // Explicit function-pointer type picks the modulus-less overload (the SRP
-    // automorph carries no base; the MRP variant uses the modulus-carrying one).
+    // Explicit function-pointer type selects the modulus-less overload (the MRP
+    // variant uses the modulus-carrying one).
     // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores) — read as a template argument below.
     constexpr niobium::fhetch::Polynomial (*kAutomorphEval)(const niobium::fhetch::Polynomial &,
                                                             uint64_t) = fhetch::sr_automorph_eval;
@@ -105,14 +104,9 @@ extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
         haze::unary_pi_op<kAutomorphEval>(haze::to_dev_addr(dst), haze::to_dev_addr(src), index));
 }
 
-// ---------------------------------------------------------------------------
-// Multi-residue polynomial (MRP) variants.
-//
-// Each shim validates only the top-level array arguments (non-null + non-zero
-// base length); the per-residue dev pointers in dst / src* are dereferenced
-// inside build_mrp_locked, where bad addresses surface as the standard
-// HazeInternalError translated by to_public_error.
-// ---------------------------------------------------------------------------
+// Multi-residue polynomial (MRP) variants: each shim validates only the top-level
+// array args; per-residue pointers are checked in build_mrp_locked and surface as a
+// HazeInternalError via to_public_error.
 
 extern "C" hazeError_t hazeAddMrp(void *const *dst, const void *const *src1,
                                   const void *const *src2, const uint64_t *base, size_t base_len,
@@ -200,6 +194,4 @@ extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *co
         haze::unary_pi_op_mrp<fhetch::mr_rot_automorph_coeff>(dst, src, offset, base, base_len));
 }
 
-// CRT basis conversion (hazeBasisConvert / hazeModDown / hazeModUp) is
-// implemented in basis_convert.cpp. Graph capture / execution stubs
-// (hazeStreamBeginCapture, hazeGraph*) live in graph.cpp.
+// CRT basis conversion lives in basis_convert.cpp; graph capture stubs live in graph.cpp.

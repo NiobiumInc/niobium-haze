@@ -16,12 +16,9 @@
 
 namespace haze {
 
-// Tagged sink for [haze]-prefixed runtime diagnostics emitted from
-// replay_bridge (libhaze internal failures route through
-// record_internal_error in errors.hpp instead).
-//
-// Output format: "[haze] <tag>: <body>\n". Both arguments are printed
-// verbatim; callers compose their own error text.
+// Tagged sink for [haze]-prefixed runtime diagnostics from replay_bridge (libhaze
+// internal failures route through record_internal_error instead); prints
+// "[haze] <tag>: <body>\n" with both arguments verbatim.
 void log_error(std::string_view tag, std::string_view body) noexcept;
 
 } // namespace haze

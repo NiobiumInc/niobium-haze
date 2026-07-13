@@ -70,9 +70,9 @@ namespace {
 namespace fs = std::filesystem;
 using DCRTPoly = lbcrypto::DCRTPoly;
 
-// fhetch's copy sentinel (trace_writer.h TraceWriter::COPY_MODULUS_VALUE; no
-// public header exports it). Tags an address only ever touched by modulus-less
-// copy ops, so it describes no real modulus. Keep in sync if fhetch changes it.
+// fhetch's copy sentinel (trace_writer.h TraceWriter::COPY_MODULUS_VALUE, not
+// exported by any public header — keep in sync); tags an address touched only by
+// modulus-less copy ops, so it describes no real modulus.
 constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 
 // Granular failure variants for diagnostics; the C ABI collapses them.
@@ -112,9 +112,9 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     p.SetSecurityLevel(HEStd_NotSet); // toy: ring_dim is user-chosen
     p.SetRingDim(static_cast<uint32_t>(ring_dim));
     p.SetMultiplicativeDepth(static_cast<uint32_t>(moduli.size() - 1));
-    // Bit-widths only need to satisfy PreviousPrime for this ring_dim — the
-    // actual primes are overwritten from the trace at reconstruct time.
-    // Use max bit-width so wide chains have enough headroom.
+    // Bit-widths only need to satisfy PreviousPrime for this ring_dim (actual
+    // primes are overwritten from the trace at reconstruct); use max width for
+    // wide-chain headroom.
     auto max_bits = static_cast<uint32_t>(std::bit_width(moduli.front()));
     for (size_t i = 1; i < moduli.size(); ++i)
         max_bits = std::max(max_bits, static_cast<uint32_t>(std::bit_width(moduli[i])));
@@ -135,8 +135,8 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     return Context{.ring_dim = ring_dim, .cc = std::move(cc)};
 }
 
-// First-tower modulus of `cc`'s chain. Throws on empty chain; build_context
-// already validates non-empty so this is defensive.
+// First-tower modulus of `cc`'s chain; throws on an empty chain (defensive —
+// build_context already validates non-empty).
 uint64_t first_tower_modulus(const lbcrypto::CryptoContext<DCRTPoly> &cc) {
     const auto &params = cc->GetCryptoParameters()->GetElementParams()->GetParams();
     if (params.empty())
@@ -155,8 +155,8 @@ hazeError_t to_haze_error(BridgeError e) {
     return HAZE_ERROR_INTERNAL;
 }
 
-// Drop trailing towers from `dcrt` to exactly `target`; throws if the CC
-// chain is too shallow. Load-bearing for the deep-CC synthesize path.
+// Drop trailing towers from `dcrt` to exactly `target` (load-bearing for the
+// deep-CC synthesize path); throws if the CC chain is too shallow.
 void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
     auto current = dcrt.GetAllElements().size();
     if (current < target) {
@@ -168,8 +168,8 @@ void trim_towers_to(lbcrypto::DCRTPoly &dcrt, size_t target) {
         dcrt.DropLastElements(current - target);
 }
 
-// Build a K-element CT shell sized by the CC's full chain; the
-// synthesize_* dispatch trims per output. No Encrypt, no keys.
+// Build a K-element CT shell sized by the CC's full chain (synthesize_* trims per
+// output); no Encrypt, no keys.
 lbcrypto::Ciphertext<DCRTPoly> empty_ct_shell(const Context &ctx, size_t k_count = 1) {
     auto element_params = ctx.cc->GetCryptoParameters()->GetElementParams();
     std::vector<DCRTPoly> elements;
@@ -375,10 +375,8 @@ struct HookCtx {
     Context primary;
 };
 
-// Pick the CC for a shape; uses `local_cache` (alive only during one hook
-// call) to dedupe per-shape builds. Heterogeneous arrays log + return nullptr.
-// The modulus-0 / COPY_MODULUS fallback now covers only the residual case: an
-// address never bound to a real modulus (raw H2D, never compute-touched).
+// Pick the CC for a shape, deduping per-shape builds via `local_cache` (alive
+// only during one hook call); heterogeneous arrays log and return nullptr.
 const Context *context_for_shape(const HookCtx &hctx,
                                  std::map<std::vector<uint64_t>, Context> &local_cache,
                                  const niobium::CapturedShape &shape) {
@@ -387,10 +385,9 @@ const Context *context_for_shape(const HookCtx &hctx,
     const auto &moduli = shape.per_element_moduli.front();
     if (moduli.empty())
         return &hctx.primary;
-    // A 0 or COPY_MODULUS sentinel means the address carries no real modulus —
-    // its primes are filled from the trace at reconstruct time. Route to the
-    // primary CC; synthesizing a per-shape context from the sentinel yields
-    // bit_width 64 → an out-of-range scalingModSize.
+    // A 0 or COPY_MODULUS sentinel carries no real modulus (primes filled from
+    // the trace at reconstruct), so route to the primary CC — a per-shape context
+    // from the sentinel yields bit_width 64 and an out-of-range scalingModSize.
     for (auto q : moduli) {
         if (q == 0 || q == kCopyModulus)
             return &hctx.primary;
@@ -426,12 +423,12 @@ const Context *context_for_shape(const HookCtx &hctx,
     return &ins->second;
 }
 
-// LOAD-BEARING. Runs between stop_recording and reconstruct to produce the
-// OpenFHE artifacts the replay path needs. local_cache is per-call.
+// Core artifact-synthesis hook (the sole path the replay depends on): runs
+// between stop_recording and reconstruct to produce the OpenFHE artifacts the
+// replay path needs; local_cache is per-call.
 void on_post_recording(const HookCtx &hctx) {
     std::map<std::vector<uint64_t>, Context> local_cache;
 
-    // ---- Inputs ----
     niobium::detail::for_each_captured_input([&](const niobium::CapturedInputRecord &rec) {
         // Keys aren't shape-tagged yet (Tier 2 / FIDESlib).
         if (rec.name == "evalmult_key" || rec.name == "automorphism_key")
@@ -572,10 +569,8 @@ extern "C" int hazeReplayBridgeTakeHookHadError() noexcept {
     return hook_had_error_flag().exchange(false, std::memory_order_relaxed) ? 1 : 0;
 }
 
-// ============================================================================
-// fhetch::result() overloads — read serialized_probes/<name>.ct back as
-// fhetch types. Default visibility so libhaze resolves them out of the bridge.
-// ============================================================================
+// fhetch::result() overloads — read serialized_probes/<name>.ct back as fhetch
+// types; default visibility so libhaze resolves them out of the bridge.
 
 #define NIOBIUM_FHETCH_RESULT_API __attribute__((visibility("default")))
 

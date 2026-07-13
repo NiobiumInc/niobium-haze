@@ -26,14 +26,10 @@
 
 namespace haze {
 
-// Bookkeeping for MRP (multi-residue) groupings within one epoch: which
-// addrs form a group, which groups are pending output export, and the
-// stable per-leading-addr group names. Pure value type — no locks, no
-// fhetch, no polymap; EpochState owns one instance under its mutex.
-//
-// Invariants (owned entirely by this class): an addr belongs to AT MOST
-// one group; registration is latest-write-wins (identical re-registration
-// is a no-op, any other overlap evicts the competing group wholesale);
+// Per-epoch MRP group bookkeeping (membership, pending output export, stable per-leading-addr
+// names); a pure value type — no locks, no fhetch, no polymap — owned by EpochState under its
+// mutex. Invariants: an addr belongs to AT MOST one group; registration is latest-write-wins
+// (identical re-registration no-ops, any other overlap evicts the competing group wholesale);
 // pending names are always a subset of known names.
 class MrpGroupRegistry {
   public:

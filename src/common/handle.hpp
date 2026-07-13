@@ -17,15 +17,14 @@
 
 namespace haze {
 
-// Virtual HBM address base for HAZE's DeviceAllocator. The offset
-// (256 GiB) sits well above any plausible upstream synthetic-address
-// range so HAZE-allocated DevAddr values cannot collide with synthetic
-// addresses fhetch may emit inside the recorded IR.
+// Virtual HBM base for HAZE's DeviceAllocator; the 256 GiB offset sits above any
+// plausible upstream synthetic-address range so HAZE DevAddr values cannot collide
+// with synthetic addresses fhetch emits in the recorded IR.
 inline constexpr uintptr_t kHbmBase = 0x4000000000ULL;
 
-// Strong-typed device address. Wraps the uintptr_t we cast from the
-// `void*` HAZE handed to the user via hazeMalloc. Internal HAZE code
-// works with DevAddr; the `void*` lives only at the C ABI boundary.
+// Strong-typed device address wrapping the uintptr_t cast from the `void*` handed to
+// the user; internal code works with DevAddr and `void*` lives only at the C ABI
+// boundary.
 enum class DevAddr : uintptr_t {};
 
 inline DevAddr to_dev_addr(const void *p) noexcept {
@@ -37,9 +36,8 @@ inline uintptr_t to_uintptr(DevAddr a) noexcept {
 }
 
 inline void *to_void_ptr(DevAddr a) noexcept {
-    // DevAddr is a uintptr_t-alias strong-type; the cast back to void*
-    // at the C ABI boundary is unavoidable. The optimizer-aliasing
-    // performance hint does not apply to handle types.
+    // The cast back to void* at the C ABI boundary is unavoidable, and the
+    // int-to-ptr performance hint does not apply to handle types.
     return reinterpret_cast<void *>( // NOLINT(performance-no-int-to-ptr)
         static_cast<uintptr_t>(a));
 }
