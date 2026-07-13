@@ -150,8 +150,9 @@ HAZE_API hazeError_t hazeFreeMrp(void *const *ptrs, size_t num_residues) HAZE_NO
 // view is dropped (its residues still materialize individually).
 HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
 
-// Run the recorded program and populate the tagged outputs' shadow buffers;
-// no-op when nothing is recorded or tagged.
+// Run the recorded program and populate the tagged outputs' shadow buffers.
+// A flush with nothing tagged is a no-op that leaves the in-flight recording
+// intact (it is not an epoch reset — use hazeDeviceReset to discard).
 HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
 // Device configuration: ring dimension, ciphertext moduli, twiddle factors,

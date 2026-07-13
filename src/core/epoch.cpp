@@ -44,10 +44,17 @@ EpochState &EpochState::instance() noexcept {
 }
 
 void EpochState::ensure_recording_locked() {
-    // On any failure recording_ stays false and require_recording_locked
-    // reports it; start_epoch() before start() keeps polynomial IDs stable.
+    // start_epoch() precedes start(); on any failure recording_ stays false so
+    // require_recording_locked reports it. If start() fails after start_epoch()
+    // opened the epoch, drop the partial captured state so a retry starts from a
+    // clean registry instead of double-starting the epoch.
     if (backend().is_initialized() && !recording_) {
-        recording_ = CompilerBackend::start_epoch() && CompilerBackend::start_recording();
+        if (CompilerBackend::start_epoch()) {
+            if (CompilerBackend::start_recording())
+                recording_ = true;
+            else
+                CompilerBackend::clear_captured();
+        }
     }
 }
 
