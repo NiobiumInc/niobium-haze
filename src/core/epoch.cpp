@@ -35,17 +35,22 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 void EpochState::ensure_recording_locked() {
+    if (recording_)
+        return;
+    // First compute brings the backend up here, under the lock, consuming the
+    // result directly. A failed bring-up leaves recording_ false; the caller's
+    // require_recording_locked() then names the reason at the ABI edge.
+    if (!backend().ensure_initialized())
+        return;
     // start_epoch() precedes start(); on any failure recording_ stays false so
     // require_recording_locked reports it. If start() fails after start_epoch()
     // opened the epoch, drop the partial captured state so a retry starts from a
     // clean registry instead of double-starting the epoch.
-    if (backend().is_initialized() && !recording_) {
-        if (CompilerBackend::start_epoch()) {
-            if (CompilerBackend::start_recording())
-                recording_ = true;
-            else
-                CompilerBackend::clear_captured();
-        }
+    if (CompilerBackend::start_epoch()) {
+        if (CompilerBackend::start_recording())
+            recording_ = true;
+        else
+            CompilerBackend::clear_captured();
     }
 }
 
@@ -357,10 +362,7 @@ void EpochState::reset() noexcept {
     clear_state_locked();
 }
 
-HazeMutex &EpochSession::init_then_get_mutex() noexcept {
-    // Run ensure_initialized() before grabbing the epoch lock so first-call
-    // init doesn't serialize; failure surfaces later via is_initialized().
-    [[maybe_unused]] const bool _ = backend().ensure_initialized();
+HazeMutex &EpochSession::epoch_mutex() noexcept {
     return epoch().mutex_;
 }
 

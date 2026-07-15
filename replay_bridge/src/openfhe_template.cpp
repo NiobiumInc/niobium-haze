@@ -12,7 +12,8 @@
 #include "ciphertext-ser.h"
 #include "common/errors.hpp" // set_error — bridge entries feed hazeGetLastError too
 #include "common/log.hpp"
-#include "core/config.hpp" // haze::replay_config() — honor caller-pinned program name/directory
+#include "core/backend.hpp" // haze::backend().ensure_initialized — one shared vendor bring-up
+#include "core/config.hpp"  // haze::config_finalized — require the frozen config before bootstrap
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "openfhe.h"
@@ -496,57 +497,25 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         return set_error(HAZE_ERROR_INVALID_VALUE);
 
     // Configuration must be finalized (hazeConfigureDevice) first; this pre-init
-    // reads the frozen replay config, never the write-only builder.
+    // reads the frozen replay config, never the builder.
     if (!haze::config_finalized())
         return set_error(HAZE_ERROR_CONFIGERR);
-    const haze::ReplayConfig &rc = haze::replay_config();
 
     try {
-        // The record-time capture builds a local OpenFHE context regardless of the
-        // replay target, so disable the compiler's hardware ring-dim/prime checks
-        // here; the compiler enforces hardware compatibility at dispatch. Pass the
-        // configured target too: this pre-init runs before the first compute, so
-        // without it a flush with no compute op would replay against the compiler's
-        // default target instead of the configured one (init() re-applies, so the
-        // backend's first-compute bring-up stays authoritative when it does run).
-        {
-            const std::string target_arg = "--target=" + rc.target();
-            // argv[0] mirrors backend.cpp's bring-up.
-            std::string prog_storage = rc.program_name();
-            std::string target_storage = target_arg;
-            std::string no_ring_check_storage = "--no-ring-dim-check";
-            std::string no_prime_check_storage = "--no-prime-check";
-            char *argv[] = {prog_storage.data(), target_storage.data(),
-                            no_ring_check_storage.data(), no_prime_check_storage.data(), nullptr};
-            int argc = 4;
-            niobium::compiler().init(argc, argv);
-        }
+        // Single shared bring-up: whichever of this pre-init or the first compute
+        // runs first initializes the compiler exactly once (with the real target /
+        // program info / pinned directory / format flags); the other fast-paths on
+        // the initialized flag. Needed here so a compute-free flush still replays
+        // against the configured target and cryptocontext.dat lands in the trace's
+        // program directory.
+        if (auto init = haze::backend().ensure_initialized(); !init)
+            return set_error(haze::to_public_error(init.error()));
 
         auto built = build_context(ring_dim, {desired_modulus});
         if (!built)
             return set_error(to_haze_error(built.error()));
 
         *picked_modulus = first_tower_modulus(built->cc);
-
-        // Use the CONFIGURED program name so cryptocontext.dat lands in the
-        // same directory the trace will (a hard-coded "haze" orphaned it
-        // whenever the app set a custom name).
-        niobium::compiler().set_program_info(rc.program_name(), rc.program_version(),
-                                             rc.program_description());
-
-        // Honor a caller-pinned program directory. hazeSetProgramDirectory()
-        // stores the directory in the replay config; the backend only forwards it to
-        // the compiler at first-compute bring-up (core/backend.cpp), which happens
-        // AFTER this init writes cryptocontext.dat. Without re-applying it here,
-        // set_program_info()'s cwd/<name> reset orphans cryptocontext.dat under
-        // cwd/haze/ while the .fhetch trace lands in the pinned directory — so
-        // nbcc_fhetch_replay --project=<pinned> reports "Cannot load crypto context
-        // — skipping probe serialization" and returns no probes. The haze suites
-        // never pin a directory (cwd/<name> default), so the divergence stayed
-        // hidden until a library integrator (FIDESlib's HazeEngine) pinned a custom
-        // run directory.
-        if (rc.has_program_directory())
-            niobium::compiler().set_program_directory(rc.program_directory());
 
         niobium::compiler().capture_crypto_context(built->cc);
 

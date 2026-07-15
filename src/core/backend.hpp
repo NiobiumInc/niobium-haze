@@ -12,9 +12,11 @@
 // from the Product.
 #pragma once
 
+#include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 
 #include <atomic>
+#include <expected>
 
 namespace haze {
 
@@ -27,10 +29,14 @@ class DeviceState;
 // via whichever library supplies the niobium::compiler() symbol.
 class CompilerBackend {
   public:
-    // Idempotent, concurrency-safe compiler init from the replay config;
-    // false on throw or unsupported config, and the compute preludes'
-    // require_recording_locked gate then surfaces the failure at the ABI.
-    [[nodiscard]] bool ensure_initialized() noexcept;
+    // Idempotent, concurrency-safe compiler bring-up from the frozen replay
+    // config: runs the vendor init exactly once (later callers fast-path on the
+    // initialized_ flag). Both bring-up sites — first compute and the replay
+    // bridge's pre-init — funnel through here, so init happens a single time
+    // regardless of their order. Returns the failure reason so callers map it at
+    // their boundary; the compute preludes also re-surface it via
+    // require_recording_locked.
+    [[nodiscard]] std::expected<void, HazeInternalError> ensure_initialized() noexcept;
 
     // True iff ensure_initialized() has completed successfully.
     bool is_initialized() const noexcept;
@@ -76,13 +82,6 @@ class CompilerBackend {
     std::atomic<bool> initialized_{false};
     HazeMutex init_mutex_;
 };
-
-// One-shot vendor-compiler bootstrap (argv from Config, program info, pinned
-// program dir) shared by first-compute bring-up and the replay bridge's pre-init.
-// Format flags are explicit parameters because vendor init LATCHES them (set-only
-// until reset), so callers pass a guard-approved snapshot; not idempotence-guarded
-// and may throw, so callers contain both.
-void bootstrap_compiler(bool montgomery, bool bit_reversal);
 
 // Defined in device_state.cpp (returns the DeviceState member).
 CompilerBackend &backend() noexcept;
