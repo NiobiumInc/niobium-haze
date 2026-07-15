@@ -26,6 +26,21 @@
 // mutexes form a DAG, acquire only along its edges:
 //
 //   EpochState::mutex_ -> DeviceAllocator::mutex_
+//   EpochState::mutex_ -> CompilerBackend::init_mutex_
+//
+// The init_mutex_ edge: first-compute bring-up takes init_mutex_ while holding
+// epoch_mutex_ (EpochState::ensure_recording_locked calls ensure_initialized
+// under the lock). The other two init_mutex_ acquirers hold NO epoch lock — the
+// replay-bridge pre-init (hazeReplayBridgeInitCryptoContext) and hazeDeviceReset,
+// which resets epoch, backend, and allocator sequentially, never nested. This
+// asymmetry cannot deadlock because init_mutex_ is a LEAF: the code holding it
+// (ensure_initialized / bootstrap_compiler) reads only the lock-free config and
+// calls the vendor compiler — never epoch() or allocator() — so no reverse edge
+// exists and the graph stays acyclic. Invariant to preserve: never acquire
+// epoch_mutex_ or the allocator lock while holding init_mutex_. clang TSA does
+// NOT enforce this cross-mutex order (it does no lock-ordering analysis, and
+// init_mutex_ is CompilerBackend-private while ensure_initialized runs both with
+// and without epoch_mutex_ held), so it rests on this contract and review.
 //
 // Config carries no lock. The FHE params and replay config are immutable values
 // built by the single explicit hazeConfigureDevice() (from caller-owned structs,
@@ -36,10 +51,9 @@
 // hazeDeviceReset is not called while compute is in flight. Under that contract
 // the compute path only ever READS the frozen config — never finalizes, never
 // mutates — so it needs no lock or atomics (CompilerBackend::init_mutex_'s
-// acquire/release at bring-up orders the freeze before every compute read).
-// init_mutex_ serializes bring-up but acquires no other lock. The allocator is a
-// leaf: allocator code must not call into any other component while holding its
-// lock; TSAN is the runtime backstop.
+// acquire/release at bring-up orders the freeze before every compute read). The
+// allocator is a leaf: allocator code must not call into any other component
+// while holding its lock; TSAN is the runtime backstop.
 
 // Clang's thread-safety attributes are GNU-style __attribute__((...)), not C++11
 // [[clang::...]]; the macro names mirror the clang TSA documentation spellings.

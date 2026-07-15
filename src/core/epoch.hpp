@@ -200,13 +200,12 @@ class EpochState {
     friend class EpochSession;
 };
 
-// RAII guard for compute entry points: brings up the backend, takes the
-// epoch mutex, and enters recording mode for the session lifetime.
-// Backend init runs before the lock so concurrent callers don't
-// serialize on the one-time setup.
+// RAII guard for compute entry points: takes the epoch mutex, then on first
+// compute brings the backend up and enters recording mode for the session
+// lifetime (EpochState::ensure_recording_locked, under the lock).
 class HAZE_SCOPED_CAPABILITY EpochSession {
   public:
-    EpochSession() HAZE_ACQUIRE(epoch().mutex_) : guard_(init_then_get_mutex()) {
+    EpochSession() HAZE_ACQUIRE(epoch().mutex_) : guard_(epoch_mutex()) {
         epoch().ensure_recording_locked();
     }
     // The unlock runs in guard_'s destructor; HAZE_RELEASE just
@@ -217,10 +216,9 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
     EpochSession &operator=(const EpochSession &) = delete;
 
   private:
-    // Runs backend().ensure_initialized() before returning the mutex
-    // reference, so first-call compiler init isn't serialized under
-    // the epoch lock.
-    static HazeMutex &init_then_get_mutex() noexcept HAZE_RETURN_CAPABILITY(epoch().mutex_);
+    // The epoch mutex reference for the guard; the capability annotation lets TSA
+    // track the acquisition through the singleton accessor.
+    static HazeMutex &epoch_mutex() noexcept HAZE_RETURN_CAPABILITY(epoch().mutex_);
 
     HazeLockGuard guard_;
 };

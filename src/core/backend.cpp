@@ -23,23 +23,76 @@
 #include "core/config.hpp"
 
 #include <atomic>
+#include <expected>
 #include <niobium/compiler.h>
 #include <niobium/openfhe/probes.h>
 #include <string>
 
 namespace haze {
 
-bool CompilerBackend::ensure_initialized() noexcept {
+namespace {
+
+// Bring niobium::compiler() up from the frozen ReplayConfig (target, program
+// info, pinned directory, format flags), running the vendor init sequence once.
+// ensure_initialized is the sole caller and owns the idempotence guard, the
+// config-finalized precondition, and the montgomery/local compat check; this may
+// throw (vendor init), and that caller contains it.
+void bootstrap_compiler() {
+    const ReplayConfig &rc = replay_config();
+    const std::string &program_name = rc.program_name();
+    const std::string &program_version = rc.program_version();
+    const std::string &program_description = rc.program_description();
+
+    // Synthesize a minimal argv — compiler().init() exposes no setters; it
+    // copies argv during the call, so function-local storage is safe.
+    std::string prog_storage = program_name;
+    std::string target_arg_storage = "--target=" + rc.target();
+    std::string montgomery_arg_storage = "--montgomery";
+    std::string bitrev_arg_storage = "--bit_reversal";
+    std::string no_ring_check_storage = "--no-ring-dim-check";
+    std::string no_prime_check_storage = "--no-prime-check";
+    // prog + --target + up to two optional format flags + the two always-on skip
+    // flags (--no-ring-dim-check, --no-prime-check) + NULL terminator = 7 slots.
+    char *argv[7] = {prog_storage.data(),
+                     target_arg_storage.data(),
+                     nullptr,
+                     nullptr,
+                     nullptr,
+                     nullptr,
+                     nullptr};
+    int argc = 2;
+    if (rc.montgomery())
+        argv[argc++] = montgomery_arg_storage.data();
+    if (rc.bit_reversal())
+        argv[argc++] = bitrev_arg_storage.data();
+    // Hardware ring-dim/prime compatibility is the compiler's job at
+    // dispatch; the record/replay bridge always skips those checks.
+    argv[argc++] = no_ring_check_storage.data();
+    argv[argc++] = no_prime_check_storage.data();
+    niobium::compiler().init(argc, argv);
+    niobium::compiler().set_program_info(program_name, program_version, program_description);
+    // A pinned output dir must be re-applied after set_program_info (which
+    // resets it to cwd/<name>) and before the first trace write.
+    if (rc.has_program_directory())
+        niobium::compiler().set_program_directory(rc.program_directory());
+}
+
+} // namespace
+
+// Both bring-up sites — first compute and the replay bridge pre-init — call this,
+// so the vendor init runs exactly once per epoch (whichever arrives first); the
+// other fast-paths on initialized_.
+std::expected<void, HazeInternalError> CompilerBackend::ensure_initialized() noexcept {
     // Lock-free fast path for the common case where init has already
     // completed. The acquire load pairs with the release store below so
     // any reads after this point see the fully-initialized state.
     if (initialized_.load(std::memory_order_acquire))
-        return true;
+        return {};
 
     // Slow path: serialize concurrent first callers so init runs once.
     HazeLockGuard lock(init_mutex_);
     if (initialized_.load(std::memory_order_relaxed))
-        return true;
+        return {};
 
     // Configuration must be finalized by an explicit hazeConfigureDevice()
     // first; bring-up only READS the frozen config — it never finalizes, so the
@@ -48,62 +101,23 @@ bool CompilerBackend::ensure_initialized() noexcept {
         record_internal_error(HazeInternalError::NotConfigured,
                               "CompilerBackend::ensure_initialized: hazeConfigureDevice() "
                               "not called before first compute");
-        return false;
+        return std::unexpected(HazeInternalError::NotConfigured);
     }
-    const ReplayConfig &rc = replay_config();
 
     // The local simulator runs ordinary-form traces only; reject the
     // Montgomery / bit-reversal toggles here so the error names the real cause.
-    const bool montgomery = rc.montgomery();
-    const bool bit_reversal = rc.bit_reversal();
-    if ((montgomery || bit_reversal) && rc.target_is_local()) {
+    const ReplayConfig &rc = replay_config();
+    if ((rc.montgomery() || rc.bit_reversal()) && rc.target_is_local()) {
         record_internal_error(HazeInternalError::UnsupportedDataFormat,
                               "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
                               "require a transport target such as FUNC_SIM)");
-        return false;
+        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
     }
 
     // niobium::compiler() can throw (bad_alloc, config errors); catch here
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
-        const std::string &program_name = rc.program_name();
-        const std::string &program_version = rc.program_version();
-        const std::string &program_description = rc.program_description();
-
-        // Synthesize a minimal argv to pass --target= (and the Montgomery /
-        // bit-reversal flags) to compiler().init() — no setters are exposed.
-        // init copies argv during the call, so function-local storage is safe.
-        std::string prog_storage = program_name;
-        std::string target_arg_storage = "--target=" + rc.target();
-        std::string montgomery_arg_storage = "--montgomery";
-        std::string bitrev_arg_storage = "--bit_reversal";
-        std::string no_ring_check_storage = "--no-ring-dim-check";
-        std::string no_prime_check_storage = "--no-prime-check";
-        // prog + --target + up to two optional flags + NULL terminator.
-        char *argv[7] = {prog_storage.data(),
-                         target_arg_storage.data(),
-                         nullptr,
-                         nullptr,
-                         nullptr,
-                         nullptr,
-                         nullptr};
-        int argc = 2;
-        if (montgomery)
-            argv[argc++] = montgomery_arg_storage.data();
-        if (bit_reversal)
-            argv[argc++] = bitrev_arg_storage.data();
-        // The haze record/replay-bridge never enforces hardware ring-dim/prime
-        // compatibility (the compiler does at dispatch); always skip those checks.
-        argv[argc++] = no_ring_check_storage.data();
-        argv[argc++] = no_prime_check_storage.data();
-        niobium::compiler().init(argc, argv);
-        niobium::compiler().set_program_info(program_name, program_version, program_description);
-        // Optional explicit output dir: when set via hazeSetProgramDirectory,
-        // the project (.fhetch + inputs + templates + cryptocontext) lands
-        // here instead of cwd/<program_name>. Must precede the first compute
-        // op so it's in effect when stop_recording() writes the trace.
-        if (rc.has_program_directory())
-            niobium::compiler().set_program_directory(rc.program_directory());
+        bootstrap_compiler();
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.
@@ -111,11 +125,11 @@ bool CompilerBackend::ensure_initialized() noexcept {
     } catch (...) {
         record_internal_error(HazeInternalError::BackendInitFailed,
                               "CompilerBackend::ensure_initialized");
-        return false;
+        return std::unexpected(HazeInternalError::BackendInitFailed);
     }
 
     initialized_.store(true, std::memory_order_release);
-    return true;
+    return {};
 }
 
 bool CompilerBackend::is_initialized() const noexcept {
