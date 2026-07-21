@@ -540,12 +540,11 @@ std::vector<std::vector<uint64_t>> run_mixed_computation(bool with_mod_down, con
         REQUIRE(hazeMemcpy(down, pa, kBytes, HAZE_MEMCPY_DEVICE_TO_DEVICE) == HAZE_SUCCESS);
     }
 
-    // NOTE: basis-convert with overlapping primes (the copy_residue
-    // pass-through) is exercised by the existing ordinary-mode suite and
-    // currently fails on the FUNC_SIM transport even without the data
-    // format (pre-existing; see "hazeBasisConvert: shared-modulus copies
-    // produce input values" under make test-transport), so it is excluded
-    // here until that path is fixed compiler-side.
+    // Pass-through copies of live-in inputs (the copy_residue / D2D-copy
+    // idiom) are covered by the `down` output above and by the ordinary-mode
+    // basis-convert suite; the former FUNC_SIM failure was fixed
+    // compiler-side (fhetch_driver's lower materializes copy-of-input
+    // outputs).
     for (void *out : {sum, prod, scaled, down})
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
