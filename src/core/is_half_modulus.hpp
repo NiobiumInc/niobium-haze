@@ -21,18 +21,13 @@
 
 namespace haze {
 
-// Internal C++ entry points for hazeIsHalfModulus / hazeIsHalfModulusMrp — the
-// per-coefficient predicate dst_i = (src_i > q/2) ? 1 : 0; the extern "C" shims
-// in src/api/compute.cpp validate pointers, dispatch here, and map
-// HazeInternalError to hazeError_t. Each opens an EpochSession internally.
+// Internal entry points for hazeIsHalfModulus / hazeIsHalfModulusMrp, the
+// per-coefficient predicate dst_i = (src_i > q/2) ? 1 : 0; each opens an
+// EpochSession internally.
 
-// SRP: q = moduli[mod_idx], aux prime auto-selected from the configuration.
 std::expected<void, HazeInternalError> is_half_modulus(DevAddr dst, DevAddr src,
                                                        int mod_idx) noexcept;
 
-// MRP: per-limb over caller-supplied base primes with one shared aux prime,
-// auto-selected from the configuration (lowest-indexed configured modulus not
-// in base); every dst[i] is recorded under it.
 std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, const void *const *src,
                                                            const uint64_t *base,
                                                            std::size_t base_len) noexcept;
