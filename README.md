@@ -71,8 +71,9 @@ simulator internals, see the companion repository:
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable
    polynomial. Compute calls (`hazeAdd`, `hazeMul`, `hazeNTT`, `hazeAutomorph`,
-   `hazeBasisConvert`, ...) record one or more FHETCH instructions per call;
-   nothing executes yet. Stream and event handles are accepted for CUDA-shape
+   `hazeIsHalfModulus`, `hazeBasisConvert`, ...) record one or more FHETCH
+   instructions per call; nothing executes yet. Stream and event handles are
+   accepted for CUDA-shape
    parity but are intentionally no-ops — recording has no notion of
    stream-relative ordering until the trace is flushed.
 
@@ -369,8 +370,8 @@ int main() {
 <!-- readme-example:end -->
 
 Replace `hazeAddMrp` with any sequence of `hazeMulMrp`, `hazeNTTMrp`,
-`hazeAutomorphMrp`, `hazeBasisConvert`, ... and the recording layer captures
-every op in execution order. `test/test_compute.cpp` and
+`hazeAutomorphMrp`, `hazeIsHalfModulusMrp`, `hazeBasisConvert`, ... and the
+recording layer captures every op in execution order. `test/test_compute.cpp` and
 `test/test_basis_convert.cpp` exercise the full surface; the `test/e2e/` suite
 builds the CKKS operation set (add, mult + relin, rotate, rescale) on the same
 C ABI.

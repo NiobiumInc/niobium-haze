@@ -215,6 +215,16 @@ HAZE_API hazeError_t hazeSubScalar(void *dst, const void *src, uint64_t scalar, 
 HAZE_API hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, int mod_idx,
                                    hazeStream_t stream) HAZE_NOEXCEPT;
 
+// hazeIsHalfModulus records the per-coefficient predicate dst_i = (src_i > q/2) ? 1 : 0
+// (equivalently src_i >= (q+1)/2 for odd q), where q = moduli[mod_idx] and src coefficients
+// are reduced mod q. The lowering routes through an auxiliary prime p = moduli[j] for the
+// lowest configured j != mod_idx (requires moduli_count >= 2; the sealed configuration
+// supplies it — no extra parameter or setup call), and dst is recorded under p; its values
+// are 0/1 and remain valid residues under any configured modulus. The per-limb MRP variant
+// (shared auto-selected aux prime) is hazeIsHalfModulusMrp below.
+HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
+                                       hazeStream_t stream) HAZE_NOEXCEPT;
+
 // Number-theoretic transform (NTT) and its inverse.
 
 HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
@@ -262,6 +272,18 @@ HAZE_API hazeError_t hazeSubScalarMrp(void *const *dst, const void *const *src,
 HAZE_API hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
                                       const uint64_t *scalars, const uint64_t *base,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+
+// hazeIsHalfModulusMrp applies the hazeIsHalfModulus predicate per limb:
+// dst[i]_k = (src[i]_k > base[i]/2) ? 1 : 0. This is a per-limb quantity (not a function of
+// the CRT-represented value), so the outputs are base_len independent single-residue
+// polynomials, each recorded under one shared aux prime p, auto-selected like the SRP
+// variant's: the lowest-indexed configured modulus whose prime is not in `base` (the sealed
+// configuration supplies it — no extra parameter or setup call; HAZE_ERROR_INVALID_VALUE
+// when base covers every configured modulus). One aux serves every limb; correctness does
+// not depend on its size relative to the base primes.
+HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *src,
+                                          const uint64_t *base, size_t base_len,
+                                          hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                 size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,

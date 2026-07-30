@@ -18,6 +18,7 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "core/is_half_modulus.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -73,6 +74,22 @@ extern "C" hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar
         return set_error(HAZE_ERROR_INVALID_VALUE);
     return set_internal_result(haze::binary_ps_op<fhetch::sr_mulps>(
         haze::to_dev_addr(dst), haze::to_dev_addr(src), scalar, mod_idx));
+}
+
+extern "C" hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
+                                         hazeStream_t /*stream*/) noexcept {
+    if (dst == nullptr || src == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(
+        haze::is_half_modulus(haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
+}
+
+extern "C" hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *src,
+                                            const uint64_t *base, size_t base_len,
+                                            hazeStream_t /*stream*/) noexcept {
+    if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::is_half_modulus_mrp(dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
