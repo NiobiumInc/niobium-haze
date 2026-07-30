@@ -189,6 +189,7 @@ add_library(haze_objs OBJECT
   src/core/device.cpp
   src/core/device_state.cpp
   src/core/epoch.cpp
+  src/core/is_half_modulus.cpp
   src/core/materialize.cpp
   src/core/mrp_polymap.cpp
   src/core/mrp_registry.cpp
@@ -426,6 +427,7 @@ add_executable(haze_tests
   test/test_memory.cpp
   test/test_config.cpp
   test/test_compute.cpp
+  test/test_is_half_modulus.cpp
   test/test_basis_convert.cpp
   test/test_mul_rotation.cpp
   test/test_ring_dim_consistency.cpp
