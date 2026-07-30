@@ -102,6 +102,8 @@ fhetch::Polynomial lower_is_half_modulus(const fhetch::Polynomial &x, uint64_t q
         // hoists the sub above the cross-modulus rebase onto unreduced ring-q
         // operands — wrong results on the transport path. A +1/-1 pair keeps a
         // non-elidable addps between the rebase and the sub.
+        // TODO(niobium-compiler): drop the barrier once scalar_factor_sub gains
+        // a cross-ring guard; deployed drivers predate that fix.
         const auto barrier = fhetch::sr_addps(g1, fhetch::Scalar::from_int(1), p);
         const auto diff = fhetch::sr_subp(barrier, g2, p);
         return fhetch::sr_addps(diff, fhetch::Scalar::from_int(p - 1), p);

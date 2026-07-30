@@ -590,11 +590,20 @@ TEST_CASE("hazeIsHalfModulusMrp rejects invalid arguments", "[unit]") {
     void *dst3[] = {d_a, d_b, d_a};
     const void *src3[] = {d_a, d_b, d_a};
     REQUIRE(hazeIsHalfModulusMrp(dst3, src3, full_base, 3, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    // A null src residue surfaces from the source-resolution path, matching the
-    // sibling MRP ops (no element pre-check), and must not mutate any dst.
-    const void *bad_src[] = {d_a, nullptr};
-    REQUIRE(hazeIsHalfModulusMrp(dst_polys, bad_src, base, 2, nullptr) ==
+    // Bad src residues surface from the source-resolution path — the same
+    // lookup build_mrp_locked uses (no element pre-check) — and must not
+    // mutate any dst. An allocated-but-unwritten residue reports
+    // SOURCE_UNAVAILABLE; a null (never-allocated) residue reports
+    // UNKNOWN_ADDRESS. Write d_a first so each case isolates one bad element.
+    const void *unwritten_src[] = {d_a, d_b};
+    REQUIRE(hazeIsHalfModulusMrp(dst_polys, unwritten_src, base, 2, nullptr) ==
             HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+    std::vector<uint64_t> vals(kRingDim, 1);
+    REQUIRE(hazeMemcpy(d_a, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    const void *null_src[] = {d_a, nullptr};
+    REQUIRE(hazeIsHalfModulusMrp(dst_polys, null_src, base, 2, nullptr) ==
+            HAZE_ERROR_UNKNOWN_ADDRESS);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
