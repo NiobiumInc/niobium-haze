@@ -1,10 +1,7 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// hazeIsHalfModulus tests: [unit] argument validation and [integration] golden
-// values (exact 0/1 per coefficient) across aux-prime-above-q, aux-prime-below-q,
-// small-prime, in-place, and shared-source cases. The trace-shape and
-// hardware-format (montgomery/bit-reversal) tiers live further down, tagged
-// [hwfmt] like test_hardware_format.cpp.
+// hazeIsHalfModulus / hazeIsHalfModulusMrp tests: [unit] validation and
+// trace-shape pinning, [integration] golden values, [hwfmt] transport cases.
 
 #include "integration_helpers.hpp"
 #include "mod_arith_ref.hpp"
@@ -34,14 +31,11 @@ constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 constexpr uint64_t kQ0 = 576460752303415297ULL;
 constexpr uint64_t kQ1 = 576460752303439873ULL;
 constexpr uint64_t kQ2 = 576460752303702017ULL;
-// Small NTT-friendly prime (just above 2^30, ≡ 1 mod 8192): as q it exercises a
-// small half-point, as the auto-selected aux prime it exercises h >= p immediate
-// reduction. ~2^30 is the practical floor here — the replay bridge's OpenFHE
-// template synthesis throws (LastPrime overflow) for tiny primes like 65537.
+// Small NTT-friendly prime (~2^30, ≡ 1 mod 8192); the practical floor — the
+// replay bridge's template synthesis throws for tiny primes like 65537.
 constexpr uint64_t kSmallQ = 1073750017ULL;
-// 59-bit NTT-friendly prime with q ≡ 1 (mod kSmallQ): q = 32771 * kSmallQ * 8192 + 1.
-// Against aux p = kSmallQ it drives the rare immediate branches in one case:
-// qinv == 1, p | h, h % p == 0, and the neg_half == 0 copy special case.
+// 59-bit NTT-friendly prime with q ≡ 1 (mod kSmallQ): against aux p = kSmallQ
+// it drives qinv == 1, p | h, and the zero-immediate gadget branches at once.
 constexpr uint64_t kCongruentQ = 288241371603542017ULL;
 
 uint64_t is_half_ref(uint64_t x, uint64_t q) {
@@ -590,11 +584,10 @@ TEST_CASE("hazeIsHalfModulusMrp rejects invalid arguments", "[unit]") {
     void *dst3[] = {d_a, d_b, d_a};
     const void *src3[] = {d_a, d_b, d_a};
     REQUIRE(hazeIsHalfModulusMrp(dst3, src3, full_base, 3, nullptr) == HAZE_ERROR_INVALID_VALUE);
-    // Bad src residues surface from the source-resolution path — the same
-    // lookup build_mrp_locked uses (no element pre-check) — and must not
-    // mutate any dst. An allocated-but-unwritten residue reports
-    // SOURCE_UNAVAILABLE; a null (never-allocated) residue reports
-    // UNKNOWN_ADDRESS. Write d_a first so each case isolates one bad element.
+    // Bad src residues surface from the source-resolution path (same lookup as
+    // build_mrp_locked): allocated-but-unwritten reports SOURCE_UNAVAILABLE,
+    // null reports UNKNOWN_ADDRESS. d_a is written before the null case so
+    // each call isolates one bad element.
     const void *unwritten_src[] = {d_a, d_b};
     REQUIRE(hazeIsHalfModulusMrp(dst_polys, unwritten_src, base, 2, nullptr) ==
             HAZE_ERROR_SOURCE_UNAVAILABLE);

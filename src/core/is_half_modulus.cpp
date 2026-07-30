@@ -11,11 +11,9 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// hazeIsHalfModulus lowering. The FHETCH ISA has no comparison instruction; the
-// predicate b = [x > q/2] is extracted arithmetically through an auxiliary prime
-// p using two centered modulus switches (the only integer-level primitive that
-// survives every replay mode — a bare cross-modulus rebase is not
-// Montgomery-safe).
+// hazeIsHalfModulus lowering: the FHETCH ISA has no comparison instruction, so
+// the predicate is extracted arithmetically via two centered modulus switches
+// through an auxiliary prime.
 
 #include "core/is_half_modulus.hpp"
 
@@ -61,13 +59,10 @@ uint64_t modinv_prime(uint64_t a, uint64_t p) noexcept {
 }
 
 // Centered modulus switch q -> p: c(v) = v mod p for v <= (q-1)/2, else
-// (v - q) mod p. Same lowering as fhetch's center_mod_q_into_p
-// (shift / rebase / unshift; ordinary-form immediates; the imm=1 cross-modulus
-// multiply is the SwitchModulus placeholder), with the montgomery config
-// prepending the identity multiply so the chain forms the muli/addi/muli/addi
-// quadruple the hardware replay driver substitutes — the same shape keying as
-// fbc_center_shape() in basis_convert.cpp. Intermediates must stay single-use
-// SSA values or the hardware substitution silently misses the chain.
+// (v - q) mod p. Emits the exact shape of fhetch's center_mod_q_into_p
+// (vendor-internal; montgomery keying as basis_convert.cpp's fbc_center_shape)
+// so the hardware replay driver recognizes and substitutes the chain;
+// intermediates must stay single-use SSA values.
 fhetch::Polynomial emit_centered_switch(const fhetch::Polynomial &v, uint64_t q, uint64_t p) {
     const uint64_t half_q = (q - 1) / 2;
     const uint64_t half_mod_p = half_q % p;
@@ -79,13 +74,9 @@ fhetch::Polynomial emit_centered_switch(const fhetch::Polynomial &v, uint64_t q,
     return fhetch::sr_addps(rebased, fhetch::Scalar::from_int(neg_half), p);
 }
 
-// b = [x > h] with h = (q-1)/2, extracted via two centered switches into p:
-//   g1 = c(x - h mod q) == x - h        (signed value; x - h in [-h, h])
-//   g2 = c(x)           == x - q*b      (mod p)
-//   b  = ((g1 - g2 + h) mod p) * q^-1 == q*b * q^-1 in {0, 1}
-// Exact for any prime p != q (mod-p arithmetic is exact ring arithmetic);
-// immediates are pre-reduced mod their op's modulus because the replay
-// backends assume scalar operands below the modulus.
+// b = [x > h], h = (q-1)/2: g1 = c(x-h) == x-h (signed), g2 = c(x) == x - q*b,
+// so ((g1 - g2 + h) mod p) * q^-1 == b exactly, for any prime p != q.
+// Immediates are pre-reduced (replay backends assume scalars below the modulus).
 fhetch::Polynomial lower_is_half_modulus(const fhetch::Polynomial &x, uint64_t q, uint64_t p) {
     const uint64_t h = (q - 1) / 2;
     const auto w = fhetch::sr_subps(x, fhetch::Scalar::from_int(h), q);
@@ -96,14 +87,12 @@ fhetch::Polynomial lower_is_half_modulus(const fhetch::Polynomial &x, uint64_t q
             const auto diff = fhetch::sr_subp(g1, g2, p);
             return fhetch::sr_addps(diff, fhetch::Scalar::from_int(h % p), p);
         }
-        // p | h degenerates every h-derived immediate to 0: the replay driver's
-        // identity folds then elide the gadget unshifts and re-add, exposing
-        // sub(muli(u,1,p), muli(v,1,p)) to its scalar_factor_sub rewrite, which
-        // hoists the sub above the cross-modulus rebase onto unreduced ring-q
-        // operands — wrong results on the transport path. A +1/-1 pair keeps a
-        // non-elidable addps between the rebase and the sub.
-        // TODO(niobium-compiler): drop the barrier once scalar_factor_sub gains
-        // a cross-ring guard; deployed drivers predate that fix.
+        // p | h zeroes every h-derived immediate; the replay driver's identity
+        // folds then expose sub(muli,muli) to scalar_factor_sub, which hoists
+        // the sub above the rebase onto unreduced ring-q operands. The +1/-1
+        // pair keeps a non-elidable addps in between.
+        // TODO(niobium-compiler): drop once scalar_factor_sub gains a
+        // cross-ring guard; deployed drivers predate that fix.
         const auto barrier = fhetch::sr_addps(g1, fhetch::Scalar::from_int(1), p);
         const auto diff = fhetch::sr_subp(barrier, g2, p);
         return fhetch::sr_addps(diff, fhetch::Scalar::from_int(p - 1), p);
@@ -125,8 +114,7 @@ std::expected<void, HazeInternalError> is_half_modulus(DevAddr dst, DevAddr src,
         record_internal_error(HazeInternalError::InvalidArgument, "hazeIsHalfModulus: bad mod_idx");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Aux prime: lowest configured index != mod_idx (deterministic under the
-    // sealed configuration; uniqueness of moduli guarantees p != q).
+    // Aux prime: lowest configured index != mod_idx.
     const uint64_t p = fhe_params().modulus(mod_idx == 0 ? 1 : 0);
     if (p == 0) {
         record_internal_error(HazeInternalError::InvalidArgument,
@@ -134,7 +122,7 @@ std::expected<void, HazeInternalError> is_half_modulus(DevAddr dst, DevAddr src,
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     if (std::gcd(q, p) != 1) {
-        // Distinct primes are coprime; a composite chain voids the modulus contract.
+        // q^-1 mod p must exist; distinct primes always pass.
         record_internal_error(HazeInternalError::InvalidArgument,
                               "hazeIsHalfModulus: modulus and aux modulus not coprime");
         return std::unexpected(HazeInternalError::InvalidArgument);
@@ -152,9 +140,7 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
                                                            std::size_t base_len) noexcept {
     if (auto v = validate_moduli_base(base, base_len); !v)
         return v;
-    // Shared aux prime, auto-selected like the SRP variant's: the lowest
-    // configured index whose prime is not in base (deterministic under the
-    // sealed configuration). One aux serves every limb.
+    // Shared aux prime: lowest configured index whose prime is not in base.
     uint64_t aux_modulus = 0;
     for (int j = 0; j < kMaxCiphertextModuli; ++j) {
         const uint64_t candidate = fhe_params().modulus(j);
@@ -179,8 +165,7 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     for (std::size_t i = 0; i < base_len; ++i) {
-        // q^-1 mod aux must exist for every limb; distinct primes always
-        // qualify, so this only rejects composite chains.
+        // q^-1 mod aux must exist for every limb; distinct primes always pass.
         if (std::gcd(base[i], aux_modulus) != 1) {
             record_internal_error(HazeInternalError::InvalidArgument,
                                   "hazeIsHalfModulusMrp: aux modulus not coprime to base prime");
@@ -192,9 +177,8 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
     EpochSession session;
     if (auto rec = epoch().require_recording_locked(); !rec)
         return rec;
-    // Resolve every source before any store so a bad residue (null pointer,
-    // never-written address) fails without half-mutating the dst array — the
-    // build_mrp_locked / store_mrp_locked split the sibling MRP ops use.
+    // Resolve every source before any store so a bad residue fails without
+    // half-mutating the dst array (the sibling ops' build/store split).
     std::vector<fhetch::Polynomial> sources;
     sources.reserve(base_len);
     for (std::size_t i = 0; i < base_len; ++i) {
@@ -203,9 +187,8 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
             return std::unexpected(x.error());
         sources.push_back(std::move(*x));
     }
-    // Per-limb fan-out: the predicate is a per-limb quantity, so each output is
-    // an independent single-residue polynomial recorded under the shared aux
-    // prime (a same-prime MRP grouping would alias residue keys).
+    // Outputs stay independent single-residue polynomials: a same-prime MRP
+    // grouping would alias residue keys.
     for (std::size_t i = 0; i < base_len; ++i) {
         epoch().store_compute_result_locked(to_dev_addr(dst[i]),
                                             lower_is_half_modulus(sources[i], base[i], aux_modulus),
