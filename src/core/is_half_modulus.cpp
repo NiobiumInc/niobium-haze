@@ -20,6 +20,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
+#include "core/centered_switch.hpp"
 #include "core/config.hpp"
 #include "core/device.hpp"
 #include "core/epoch.hpp"
@@ -94,22 +95,6 @@ bool is_prime_u64(uint64_t n) noexcept {
             return false;
     }
     return true;
-}
-
-// Centered modulus switch q -> p: c(v) = v mod p for v <= (q-1)/2, else
-// (v - q) mod p. Emits the exact shape of fhetch's center_mod_q_into_p
-// (vendor-internal; montgomery keying as basis_convert.cpp's fbc_center_shape)
-// so the hardware replay driver recognizes and substitutes the chain;
-// intermediates must stay single-use SSA values.
-fhetch::Polynomial emit_centered_switch(const fhetch::Polynomial &v, uint64_t q, uint64_t p) {
-    const uint64_t half_q = (q - 1) / 2;
-    const uint64_t half_mod_p = half_q % p;
-    const uint64_t neg_half = (half_mod_p == 0) ? 0 : p - half_mod_p;
-    const fhetch::Polynomial shift_in =
-        replay_config().montgomery() ? fhetch::sr_mulps(v, fhetch::Scalar::from_int(1), q) : v;
-    const auto shifted = fhetch::sr_addps(shift_in, fhetch::Scalar::from_int(half_q), q);
-    const auto rebased = fhetch::sr_mulps(shifted, fhetch::Scalar::from_int(1), p);
-    return fhetch::sr_addps(rebased, fhetch::Scalar::from_int(neg_half), p);
 }
 
 // b = [x > h], h = (q-1)/2: g1 = c(x-h) == x-h (signed), g2 = c(x) == x - q*b,

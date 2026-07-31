@@ -370,8 +370,9 @@ int main() {
 <!-- readme-example:end -->
 
 Replace `hazeAddMrp` with any sequence of `hazeMulMrp`, `hazeNTTMrp`,
-`hazeAutomorphMrp`, `hazeIsHalfModulusMrp`, `hazeBasisConvert`, ... and the
-recording layer captures every op in execution order. `test/test_compute.cpp` and
+`hazeAutomorphMrp`, `hazeIsHalfModulusMrp`, `hazeBroadcastMulMrp`,
+`hazeBasisConvert`, ... and the recording layer captures every op in execution
+order. `test/test_compute.cpp` and
 `test/test_basis_convert.cpp` exercise the full surface; the `test/e2e/` suite
 builds the CKKS operation set (add, mult + relin, rotate, rescale) on the same
 C ABI.
