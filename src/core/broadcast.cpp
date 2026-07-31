@@ -43,28 +43,29 @@ namespace {
 // cannot be elided; an ordinary-form direct-path recording is not portable to
 // --niobium_hw replay — see the haze.h contract).
 template <auto OpFn, bool kReversed = false>
-std::expected<void, HazeInternalError> broadcast_op(void *const *dst, const void *const *src,
-                                                    const void *operand, uint64_t operand_modulus,
-                                                    bool operand_in_range, const uint64_t *base,
-                                                    std::size_t base_len) noexcept {
+std::expected<void, HazeInternalError>
+broadcast_op(void *const *dst, const void *const *src, const void *operand, bool operand_in_range,
+             const uint64_t *base, std::size_t base_len) noexcept {
     if (auto v = validate_moduli_base(base, base_len); !v)
         return v;
-    if (operand_modulus == 0) {
-        record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeBroadcastMrp: zero operand modulus");
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    }
     if (auto live = require_allocated_array(dst, base_len); !live)
         return live;
     EpochSession session;
     if (auto rec = epoch().require_recording_locked(); !rec)
         return rec;
-    // A recorded modulus that disagrees with the caller's is a caller bug;
-    // raw H2D operands have none recorded and pass.
-    const uint64_t recorded = epoch().recorded_modulus_locked(to_dev_addr(operand));
-    if (recorded != kCopyModulus && recorded != operand_modulus) {
+    // The operand's ring is the modulus haze recorded for the op that produced
+    // it (e.g. the hazeIsHalfModulus aux prime); a raw H2D operand has none —
+    // record one first (any modulus-carrying op).
+    const uint64_t operand_modulus = epoch().recorded_modulus_locked(to_dev_addr(operand));
+    if (operand_modulus == kCopyModulus) {
         record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeBroadcastMrp: operand modulus disagrees with recorded modulus");
+                              "hazeBroadcastMrp: operand has no recorded modulus");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
+    if (operand_modulus % 2 == 0) {
+        // h = (p-1)/2 centering needs an odd operand ring.
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeBroadcastMrp: operand modulus must be odd");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     auto x = build_mrp_locked(src, base, base_len);
@@ -91,35 +92,32 @@ std::expected<void, HazeInternalError> broadcast_op(void *const *dst, const void
 } // namespace
 
 std::expected<void, HazeInternalError> broadcast_add(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept {
-    return broadcast_op<fhetch::sr_addp>(dst, src, operand, operand_modulus, operand_in_range, base,
-                                         base_len);
+    return broadcast_op<fhetch::sr_addp>(dst, src, operand, operand_in_range, base, base_len);
 }
 
 std::expected<void, HazeInternalError> broadcast_sub(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept {
-    return broadcast_op<fhetch::sr_subp>(dst, src, operand, operand_modulus, operand_in_range, base,
-                                         base_len);
+    return broadcast_op<fhetch::sr_subp>(dst, src, operand, operand_in_range, base, base_len);
 }
 
 std::expected<void, HazeInternalError> broadcast_rsub(void *const *dst, const void *const *src,
-                                                      const void *operand, uint64_t operand_modulus,
-                                                      bool operand_in_range, const uint64_t *base,
+                                                      const void *operand, bool operand_in_range,
+                                                      const uint64_t *base,
                                                       std::size_t base_len) noexcept {
-    return broadcast_op<fhetch::sr_subp, /*kReversed=*/true>(dst, src, operand, operand_modulus,
-                                                             operand_in_range, base, base_len);
+    return broadcast_op<fhetch::sr_subp, /*kReversed=*/true>(dst, src, operand, operand_in_range,
+                                                             base, base_len);
 }
 
 std::expected<void, HazeInternalError> broadcast_mul(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept {
-    return broadcast_op<fhetch::sr_mulp>(dst, src, operand, operand_modulus, operand_in_range, base,
-                                         base_len);
+    return broadcast_op<fhetch::sr_mulp>(dst, src, operand, operand_in_range, base, base_len);
 }
 
 } // namespace haze

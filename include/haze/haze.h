@@ -279,32 +279,34 @@ HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *s
                                           hazeStream_t stream) HAZE_NOEXCEPT;
 
 // hazeBroadcastAddMrp records dst[i]_k = src[i]_k + lift(operand)_k mod base[i]:
-// `operand` is one single-residue polynomial under `operand_modulus`, lifted into every
-// base prime by the centered modulus switch (a base prime equal to operand_modulus
-// passes the operand through verbatim; on transport targets operand_modulus must be
-// bridge-synthesizable, i.e. a prime ≡ 1 mod 2*ring_dim). Non-zero `operand_in_range`
-// asserts every coefficient is <= (operand_modulus-1)/2 and that the coefficient is
-// below every base prime (e.g. a hazeIsHalfModulus mask) — unvalidated — and elides the
-// lift wherever the RECORDED data format allows; an ordinary-form recording that used
-// the flag with base_len > 1 must not be replayed under --niobium_hw (the driver
+// `operand` is one single-residue polynomial lifted into every base prime by the
+// centered modulus switch. Its ring p is the modulus haze recorded for the op that
+// produced it (e.g. the hazeIsHalfModulus aux prime); a raw H2D operand has none and
+// is rejected — run it through a modulus-carrying op first. A base prime equal to p
+// passes the operand through verbatim; on transport targets p must be
+// bridge-synthesizable, i.e. a prime ≡ 1 mod 2*ring_dim. Non-zero `operand_in_range`
+// asserts every coefficient is <= (p-1)/2 and that the coefficient is below every
+// base prime (e.g. a hazeIsHalfModulus mask) — unvalidated — and elides the lift
+// wherever the RECORDED data format allows; an ordinary-form recording that used the
+// flag with base_len > 1 must not be replayed under --niobium_hw (the driver
 // re-encodes each input under one modulus only). Sub subtracts the lifted operand;
 // Rsub subtracts src from it.
 HAZE_API hazeError_t hazeBroadcastAddMrp(void *const *dst, const void *const *src,
-                                         const void *operand, uint64_t operand_modulus,
-                                         int operand_in_range, const uint64_t *base,
-                                         size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+                                         const void *operand, int operand_in_range,
+                                         const uint64_t *base, size_t base_len,
+                                         hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeBroadcastSubMrp(void *const *dst, const void *const *src,
-                                         const void *operand, uint64_t operand_modulus,
-                                         int operand_in_range, const uint64_t *base,
-                                         size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+                                         const void *operand, int operand_in_range,
+                                         const uint64_t *base, size_t base_len,
+                                         hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeBroadcastRsubMrp(void *const *dst, const void *const *src,
-                                          const void *operand, uint64_t operand_modulus,
-                                          int operand_in_range, const uint64_t *base,
-                                          size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+                                          const void *operand, int operand_in_range,
+                                          const uint64_t *base, size_t base_len,
+                                          hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeBroadcastMulMrp(void *const *dst, const void *const *src,
-                                         const void *operand, uint64_t operand_modulus,
-                                         int operand_in_range, const uint64_t *base,
-                                         size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
+                                         const void *operand, int operand_in_range,
+                                         const uint64_t *base, size_t base_len,
+                                         hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                 size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,

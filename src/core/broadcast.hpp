@@ -25,23 +25,23 @@ namespace haze {
 // EpochSession internally.
 
 std::expected<void, HazeInternalError> broadcast_add(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept;
 
 std::expected<void, HazeInternalError> broadcast_sub(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept;
 
 std::expected<void, HazeInternalError> broadcast_rsub(void *const *dst, const void *const *src,
-                                                      const void *operand, uint64_t operand_modulus,
-                                                      bool operand_in_range, const uint64_t *base,
+                                                      const void *operand, bool operand_in_range,
+                                                      const uint64_t *base,
                                                       std::size_t base_len) noexcept;
 
 std::expected<void, HazeInternalError> broadcast_mul(void *const *dst, const void *const *src,
-                                                     const void *operand, uint64_t operand_modulus,
-                                                     bool operand_in_range, const uint64_t *base,
+                                                     const void *operand, bool operand_in_range,
+                                                     const uint64_t *base,
                                                      std::size_t base_len) noexcept;
 
 } // namespace haze

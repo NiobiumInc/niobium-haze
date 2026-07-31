@@ -41,18 +41,42 @@ constexpr uint64_t kCongruentP = 211107843342337ULL;
 enum class Op : std::uint8_t { Add, Sub, Rsub, Mul };
 
 hazeError_t call_broadcast(Op op, void *const *dst, const void *const *src, const void *operand,
-                           uint64_t p, int in_range, const uint64_t *base, std::size_t len) {
+                           int in_range, const uint64_t *base, std::size_t len) {
     switch (op) {
     case Op::Add:
-        return hazeBroadcastAddMrp(dst, src, operand, p, in_range, base, len, nullptr);
+        return hazeBroadcastAddMrp(dst, src, operand, in_range, base, len, nullptr);
     case Op::Sub:
-        return hazeBroadcastSubMrp(dst, src, operand, p, in_range, base, len, nullptr);
+        return hazeBroadcastSubMrp(dst, src, operand, in_range, base, len, nullptr);
     case Op::Rsub:
-        return hazeBroadcastRsubMrp(dst, src, operand, p, in_range, base, len, nullptr);
+        return hazeBroadcastRsubMrp(dst, src, operand, in_range, base, len, nullptr);
     case Op::Mul:
-        return hazeBroadcastMulMrp(dst, src, operand, p, in_range, base, len, nullptr);
+        return hazeBroadcastMulMrp(dst, src, operand, in_range, base, len, nullptr);
     }
     return HAZE_ERROR_INVALID_VALUE;
+}
+
+// One-shot configuration over an arbitrary chain (bridge scaffold from moduli[0]).
+void setup_chain_config(const std::vector<uint64_t> &moduli) {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const hazeFheParams fhe = {
+        .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = moduli.size()};
+    const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+    uint64_t scaffold = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0], &scaffold) == HAZE_SUCCESS);
+}
+
+// H2D `vals` and record them under moduli[mod_idx] via a zero-add (the values
+// pass through verbatim); the broadcast recovers the operand's ring from that
+// recorded modulus. Returns {raw, bound}; caller frees both.
+std::pair<void *, void *> bind_operand(const std::vector<uint64_t> &vals, int mod_idx) {
+    void *d_raw = nullptr;
+    void *d_m = nullptr;
+    REQUIRE(hazeMalloc(&d_raw, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(d_raw, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAddScalar(d_m, d_raw, 0, mod_idx, nullptr) == HAZE_SUCCESS);
+    return {d_raw, d_m};
 }
 
 // Centered lift oracle: m for m <= (p-1)/2, else m - p, reduced mod q.
@@ -77,10 +101,11 @@ uint64_t op_ref(Op op, uint64_t a, uint64_t b, uint64_t q) {
     return 0;
 }
 
-// Run one broadcast over pseudorandom limbs and operand, flush, and require
-// exact equality against the lift+op oracle on every coefficient. The operand
-// limb for base[i] == p is used verbatim (no lift), matching the pass-through.
-void run_broadcast_golden(Op op, const std::vector<uint64_t> &base, uint64_t p,
+// Run one broadcast over pseudorandom limbs and an operand recorded under
+// moduli[p_idx] (= p), flush, and require exact equality against the lift+op
+// oracle on every coefficient. The operand limb for base[i] == p is used
+// verbatim (no lift), matching the pass-through.
+void run_broadcast_golden(Op op, const std::vector<uint64_t> &base, uint64_t p, int p_idx,
                           const std::vector<uint64_t> &operand_vals, int in_range, uint64_t seed) {
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
@@ -88,13 +113,10 @@ void run_broadcast_golden(Op op, const std::vector<uint64_t> &base, uint64_t p,
 
     const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
-    void *d_m = nullptr;
-    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_m, operand_vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-            HAZE_SUCCESS);
+    const auto [d_raw, d_m] = bind_operand(operand_vals, p_idx);
 
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
-    REQUIRE(call_broadcast(op, d_dst.data(), src_view.data(), d_m, p, in_range, base.data(),
+    REQUIRE(call_broadcast(op, d_dst.data(), src_view.data(), d_m, in_range, base.data(),
                            base.size()) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
@@ -115,6 +137,7 @@ void run_broadcast_golden(Op op, const std::vector<uint64_t> &base, uint64_t p,
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_dst);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
 }
 
@@ -165,7 +188,7 @@ TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
 
     const int in_range = GENERATE(0, 1);
-    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_mask, kQ1, in_range, base.data(),
+    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_mask, in_range, base.data(),
                                 base.size(), nullptr) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
@@ -190,11 +213,11 @@ TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[
 }
 
 TEST_CASE("hazeBroadcast: general values, small operand prime (p < q)", "[integration]") {
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    setup_chain_config({kQ0, kQ1, kSmallQ});
     const std::vector<uint64_t> base = {kQ0, kQ1};
     const std::vector<uint64_t> vals = boundary_operand(kSmallQ, 626262ULL);
     for (Op op : {Op::Add, Op::Sub, Op::Rsub, Op::Mul})
-        run_broadcast_golden(op, base, kSmallQ, vals, /*in_range=*/0,
+        run_broadcast_golden(op, base, kSmallQ, /*p_idx=*/2, vals, /*in_range=*/0,
                              /*seed=*/700000ULL + static_cast<uint64_t>(op));
 }
 
@@ -203,7 +226,7 @@ TEST_CASE("hazeBroadcast: general values, large operand prime (p > q)", "[integr
     const std::vector<uint64_t> base = {kQ0, kQ1};
     const std::vector<uint64_t> vals = boundary_operand(kQ2, 636363ULL);
     for (Op op : {Op::Add, Op::Sub, Op::Rsub, Op::Mul})
-        run_broadcast_golden(op, base, kQ2, vals, /*in_range=*/0,
+        run_broadcast_golden(op, base, kQ2, /*p_idx=*/2, vals, /*in_range=*/0,
                              /*seed=*/710000ULL + static_cast<uint64_t>(op));
 }
 
@@ -211,11 +234,11 @@ TEST_CASE("hazeBroadcast: zero unshift immediate (base prime divides half the op
           "[integration]") {
     // kSmallQ | (kCongruentP-1)/2 zeroes the kSmallQ limb's unshift immediate,
     // hitting the simulator's addps-imm-0 copy path inside the gadget.
-    haze::test::setup_integration_mrp3_config(kRingDim, kSmallQ);
+    setup_chain_config({kSmallQ, kQ0, kCongruentP});
     const std::vector<uint64_t> base = {kSmallQ, kQ0};
     const std::vector<uint64_t> vals = boundary_operand(kCongruentP, 646400ULL);
     for (Op op : {Op::Add, Op::Sub, Op::Rsub, Op::Mul})
-        run_broadcast_golden(op, base, kCongruentP, vals, /*in_range=*/0,
+        run_broadcast_golden(op, base, kCongruentP, /*p_idx=*/2, vals, /*in_range=*/0,
                              /*seed=*/740000ULL + static_cast<uint64_t>(op));
 }
 
@@ -223,7 +246,7 @@ TEST_CASE("hazeBroadcast: direct path with general in-range values", "[integrati
     // operand_in_range with non-binary coefficients: all values satisfy the
     // contract (<= (p-1)/2 and below every base prime), so the lift is elided
     // on the ordinary format and the results must match the lift oracle.
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    setup_chain_config({kQ0, kQ2, kSmallQ});
     const std::vector<uint64_t> base = {kQ0, kQ2};
     std::vector<uint64_t> vals =
         haze::test::make_residue(((kSmallQ - 1) / 2) + 1, 656600ULL, kRingDim);
@@ -231,7 +254,7 @@ TEST_CASE("hazeBroadcast: direct path with general in-range values", "[integrati
     vals[1] = 1;
     vals[2] = (kSmallQ - 1) / 2; // the contract's upper edge
     for (Op op : {Op::Add, Op::Sub, Op::Rsub, Op::Mul})
-        run_broadcast_golden(op, base, kSmallQ, vals, /*in_range=*/1,
+        run_broadcast_golden(op, base, kSmallQ, /*p_idx=*/2, vals, /*in_range=*/1,
                              /*seed=*/750000ULL + static_cast<uint64_t>(op));
 }
 
@@ -239,21 +262,22 @@ TEST_CASE("hazeBroadcast: operand modulus inside the base (pass-through limb)", 
     haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
     const std::vector<uint64_t> base = {kQ0, kQ1};
     const std::vector<uint64_t> vals = boundary_operand(kQ1, 646464ULL);
-    run_broadcast_golden(Op::Sub, base, kQ1, vals, /*in_range=*/0, /*seed=*/730000ULL);
+    run_broadcast_golden(Op::Sub, base, kQ1, /*p_idx=*/1, vals, /*in_range=*/0,
+                         /*seed=*/730000ULL);
 }
 
 TEST_CASE("hazeBroadcast: H2D overwrite clears a stale recorded operand modulus", "[integration]") {
     // An address that held a compute result (recorded under the aux prime)
-    // and is then H2D-overwritten is a fresh raw operand again; the
-    // consistency guard must accept the caller's modulus for the new bytes.
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    // and is then H2D-overwritten is a fresh raw operand again: the recovery
+    // rejects it until a modulus-carrying op records a ring for the new bytes.
+    setup_chain_config({kQ0, kQ2, kSmallQ});
     const std::vector<uint64_t> pred_in = haze::test::make_residue(kQ0, 767676ULL, kRingDim);
     void *d_t = nullptr;
     void *d_in = nullptr;
     REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_in, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_in, pred_in.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeIsHalfModulus(d_t, d_in, 0, nullptr) == HAZE_SUCCESS); // recorded under kQ1
+    REQUIRE(hazeIsHalfModulus(d_t, d_in, 0, nullptr) == HAZE_SUCCESS); // recorded under kQ2
 
     const std::vector<uint64_t> mask = binary_mask(0x7E7EULL);
     REQUIRE(hazeMemcpy(d_t, mask.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
@@ -265,9 +289,14 @@ TEST_CASE("hazeBroadcast: H2D overwrite clears a stale recorded operand modulus"
     const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
-    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_t, kSmallQ,
-                                /*operand_in_range=*/1, base.data(), base.size(),
-                                nullptr) == HAZE_SUCCESS);
+    // The stale kQ2 recording is gone: the raw bytes are rejected...
+    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_t, /*operand_in_range=*/1,
+                                base.data(), base.size(), nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    // ...until a zero-add records a ring for them (kSmallQ at index 2).
+    REQUIRE(hazeAddScalar(d_t, d_t, 0, 2, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_t, /*operand_in_range=*/1,
+                                base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
@@ -287,7 +316,7 @@ TEST_CASE("hazeBroadcast: H2D overwrite clears a stale recorded operand modulus"
 }
 
 TEST_CASE("hazeBroadcast: in-place dst == src", "[integration]") {
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    setup_chain_config({kQ0, kQ1, kSmallQ});
     const std::vector<uint64_t> base = {kQ0, kQ1};
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
@@ -295,14 +324,11 @@ TEST_CASE("hazeBroadcast: in-place dst == src", "[integration]") {
     const std::vector<uint64_t> mask = binary_mask(0xA5A5ULL);
 
     const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(inputs);
-    void *d_m = nullptr;
-    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_m, mask.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    const auto [d_raw, d_m] = bind_operand(mask, /*mod_idx=*/2); // kSmallQ
 
     const std::vector<const void *> src_view = haze::test::to_const(d_x);
-    REQUIRE(hazeBroadcastAddMrp(d_x.data(), src_view.data(), d_m, kSmallQ,
-                                /*operand_in_range=*/1, base.data(), base.size(),
-                                nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBroadcastAddMrp(d_x.data(), src_view.data(), d_m, /*operand_in_range=*/1,
+                                base.data(), base.size(), nullptr) == HAZE_SUCCESS);
     for (void *out : d_x)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
@@ -316,6 +342,7 @@ TEST_CASE("hazeBroadcast: in-place dst == src", "[integration]") {
         }
     }
     haze::test::free_all_residues(d_x);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
 }
 
@@ -339,17 +366,18 @@ TEST_CASE("hazeBroadcast rejects invalid arguments", "[unit]") {
     void *dst_polys[] = {d_a, d_b};
     const void *src_polys[] = {d_a, d_b};
 
-    REQUIRE(hazeBroadcastAddMrp(nullptr, src_polys, d_m, kQ2, 0, base, 2, nullptr) ==
+    REQUIRE(hazeBroadcastAddMrp(nullptr, src_polys, d_m, 0, base, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeBroadcastAddMrp(dst_polys, nullptr, d_m, kQ2, 0, base, 2, nullptr) ==
+    REQUIRE(hazeBroadcastAddMrp(dst_polys, nullptr, d_m, 0, base, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, nullptr, kQ2, 0, base, 2, nullptr) ==
+    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, nullptr, 0, base, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, kQ2, 0, nullptr, 2, nullptr) ==
+    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, 0, nullptr, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, kQ2, 0, base, 0, nullptr) ==
+    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, 0, base, 0, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, 0, 0, base, 2, nullptr) ==
+    // d_m was never computed on: no recorded modulus, so the recovery rejects it.
+    REQUIRE(hazeBroadcastAddMrp(dst_polys, src_polys, d_m, 0, base, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
@@ -358,35 +386,27 @@ TEST_CASE("hazeBroadcast rejects invalid arguments", "[unit]") {
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeBroadcast rejects an operand modulus that disagrees with the recorded one",
-          "[integration]") {
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+TEST_CASE("hazeBroadcast rejects an operand recorded under an even modulus", "[integration]") {
+    // The centered lift's h = (p-1)/2 needs an odd operand ring; an operand
+    // bound under an even chain entry is rejected at recovery.
+    setup_chain_config({kQ0, kQ1, 1ULL << 40});
 
-    // Compute a mask under the auto aux kQ1, then lie about its modulus.
-    const std::vector<uint64_t> pred_in = haze::test::make_residue(kQ0, 676767ULL, kRingDim);
-    void *d_pred_in = nullptr;
-    void *d_mask = nullptr;
-    REQUIRE(hazeMalloc(&d_pred_in, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_mask, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_pred_in, pred_in.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-            HAZE_SUCCESS);
-    REQUIRE(hazeIsHalfModulus(d_mask, d_pred_in, 0, nullptr) == HAZE_SUCCESS);
-
-    const uint64_t base[] = {kQ0, kQ2};
+    const uint64_t base[] = {kQ0, kQ1};
     const std::vector<void *> d_src =
         haze::test::allocate_and_h2d_residues({haze::test::make_residue(kQ0, 1ULL, kRingDim),
-                                               haze::test::make_residue(kQ2, 2ULL, kRingDim)});
+                                               haze::test::make_residue(kQ1, 2ULL, kRingDim)});
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(2, kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
+    const auto [d_raw, d_m] = bind_operand(binary_mask(0x1B1BULL), /*mod_idx=*/2);
 
-    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_mask, kQ2, 0, base, 2, nullptr) ==
+    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_m, 0, base, 2, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_dst);
-    REQUIRE(hazeFree(d_pred_in) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_mask) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
 }
 
 // ===========================================================================
@@ -411,13 +431,15 @@ std::size_t count_occurrences(const std::string &haystack, const std::string &ne
     return count;
 }
 
-// Record one hazeBroadcastAddMrp (operand under kQ1, base {kQ0, kQ2}) into a
+// Record one hazeBroadcastAddMrp (operand bound under moduli[p_idx] by a
+// zero-add — every trace below therefore carries one extra sr_addps) into a
 // uniquely named program dir and return the trace text.
 std::string record_broadcast_trace(const std::string &program_name, bool montgomery, int in_range,
-                                   uint64_t operand_modulus, const std::vector<uint64_t> &base) {
+                                   const std::vector<uint64_t> &moduli, int p_idx,
+                                   const std::vector<uint64_t> &base) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
+    const hazeFheParams fhe = {
+        .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = moduli.size()};
     const hazeReplayConfig replay = {.target = "FUNC_SIM",
                                      .program_name = program_name.c_str(),
                                      .program_version = "0.1",
@@ -427,27 +449,25 @@ std::string record_broadcast_trace(const std::string &program_name, bool montgom
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0], &scaffold) == HAZE_SUCCESS);
 
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], 686868ULL + i, kRingDim);
     const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
-    void *d_m = nullptr;
-    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
-    const std::vector<uint64_t> mask = binary_mask(0x5A5AULL);
-    REQUIRE(hazeMemcpy(d_m, mask.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    const auto [d_raw, d_m] = bind_operand(binary_mask(0x5A5AULL), p_idx);
 
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
-    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_m, operand_modulus, in_range,
-                                base.data(), base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_m, in_range, base.data(),
+                                base.size(), nullptr) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_dst);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
     return slurp(std::filesystem::path{program_name} / (program_name + ".fhetch"));
 }
@@ -460,8 +480,9 @@ TEST_CASE("hazeBroadcast record-time: per-limb lift emission", "[unit][hwfmt]") 
 
     SECTION("flag off, ordinary: 3-op gadget per limb + pointwise") {
         const std::string trace =
-            record_broadcast_trace("haze_bc_threeop", /*montgomery=*/false, 0, kQ1, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 4); // 2 shifts + 2 unshifts
+            record_broadcast_trace("haze_bc_threeop", /*montgomery=*/false, 0, {kQ0, kQ1, kQ2},
+                                   /*p_idx=*/1, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 5); // bind + 2 shifts + 2 unshifts
         CHECK(count_occurrences(trace, "sr_mulps ") == 2); // 2 rebases
         CHECK(count_occurrences(trace, "sr_addp ") == 2);  // pointwise
         REQUIRE(trace.find(", " + std::to_string(half_p) + ",") != std::string::npos);
@@ -471,47 +492,51 @@ TEST_CASE("hazeBroadcast record-time: per-limb lift emission", "[unit][hwfmt]") 
     }
     SECTION("flag off, montgomery: 4-op gadget per limb + pointwise") {
         const std::string trace =
-            record_broadcast_trace("haze_bc_fourop", /*montgomery=*/true, 0, kQ1, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 4);
+            record_broadcast_trace("haze_bc_fourop", /*montgomery=*/true, 0, {kQ0, kQ1, kQ2},
+                                   /*p_idx=*/1, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 5);
         CHECK(count_occurrences(trace, "sr_mulps ") == 4); // leading identities + rebases
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
     }
     SECTION("flag on, ordinary: no lift at all") {
         const std::string trace =
-            record_broadcast_trace("haze_bc_direct", /*montgomery=*/false, 1, kQ1, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 0);
+            record_broadcast_trace("haze_bc_direct", /*montgomery=*/false, 1, {kQ0, kQ1, kQ2},
+                                   /*p_idx=*/1, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 1); // the bind only
         CHECK(count_occurrences(trace, "sr_mulps ") == 0);
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
         REQUIRE(trace.find(std::to_string(half_p)) == std::string::npos);
     }
     SECTION("flag on, montgomery: the switch is the data-format conversion") {
-        const std::string trace =
-            record_broadcast_trace("haze_bc_direct_mont", /*montgomery=*/true, 1, kQ1, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 4);
+        const std::string trace = record_broadcast_trace("haze_bc_direct_mont", /*montgomery=*/true,
+                                                         1, {kQ0, kQ1, kQ2}, /*p_idx=*/1, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 5);
         CHECK(count_occurrences(trace, "sr_mulps ") == 4);
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
     }
     SECTION("operand modulus in the base: pass-through limb lifts nothing") {
-        const std::string trace = record_broadcast_trace("haze_bc_passthrough",
-                                                         /*montgomery=*/false, 0, kQ2, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 2); // one gadget only (kQ0 limb)
+        const std::string trace = record_broadcast_trace(
+            "haze_bc_passthrough", /*montgomery=*/false, 0, {kQ0, kQ1, kQ2}, /*p_idx=*/2, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 3); // bind + one gadget (kQ0 limb)
         CHECK(count_occurrences(trace, "sr_mulps ") == 1);
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
     }
     SECTION("pass-through limb under montgomery: same-ring use needs no format switch") {
-        const std::string trace = record_broadcast_trace("haze_bc_passthrough_mont",
-                                                         /*montgomery=*/true, 0, kQ2, base);
-        CHECK(count_occurrences(trace, "sr_addps ") == 2); // one FourOp gadget (kQ0 limb)
+        const std::string trace = record_broadcast_trace(
+            "haze_bc_passthrough_mont", /*montgomery=*/true, 0, {kQ0, kQ1, kQ2}, /*p_idx=*/2, base);
+        CHECK(count_occurrences(trace, "sr_addps ") == 3); // bind + one FourOp gadget
         CHECK(count_occurrences(trace, "sr_mulps ") == 2);
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
     }
     SECTION("zero unshift immediate stays inside the gadget shape") {
-        const std::string trace = record_broadcast_trace("haze_bc_zeroimm", /*montgomery=*/false, 0,
-                                                         kCongruentP, {kSmallQ, kQ0});
-        CHECK(count_occurrences(trace, "sr_addps ") == 4);
+        const std::string trace =
+            record_broadcast_trace("haze_bc_zeroimm", /*montgomery=*/false, 0,
+                                   {kSmallQ, kQ0, kCongruentP}, /*p_idx=*/2, {kSmallQ, kQ0});
+        CHECK(count_occurrences(trace, "sr_addps ") == 5);
         CHECK(count_occurrences(trace, "sr_mulps ") == 2);
         CHECK(count_occurrences(trace, "sr_addp ") == 2);
-        REQUIRE(trace.find(", 0, m=") != std::string::npos); // kSmallQ | (kCongruentP-1)/2
+        // The bind and the zeroed unshift (kSmallQ | (kCongruentP-1)/2).
+        CHECK(count_occurrences(trace, ", 0, m=") == 2);
     }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
@@ -530,7 +555,7 @@ bool transport_target_active() {
 // Record + flush one broadcast under the given toggles and return the
 // per-limb D2H results.
 std::vector<std::vector<uint64_t>>
-run_broadcast_transport(bool montgomery, int in_range, Op op, uint64_t p,
+run_broadcast_transport(bool montgomery, int in_range, Op op, int p_idx,
                         const std::vector<uint64_t> &base,
                         const std::vector<uint64_t> &operand_vals) {
     const uint64_t moduli[] = {kQ0, kQ1, kQ2};
@@ -548,13 +573,10 @@ run_broadcast_transport(bool montgomery, int in_range, Op op, uint64_t p,
         inputs[i] = haze::test::make_residue(base[i], 696969ULL + i, kRingDim);
     const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
-    void *d_m = nullptr;
-    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_m, operand_vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-            HAZE_SUCCESS);
+    const auto [d_raw, d_m] = bind_operand(operand_vals, p_idx);
 
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
-    REQUIRE(call_broadcast(op, d_dst.data(), src_view.data(), d_m, p, in_range, base.data(),
+    REQUIRE(call_broadcast(op, d_dst.data(), src_view.data(), d_m, in_range, base.data(),
                            base.size()) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
@@ -568,6 +590,7 @@ run_broadcast_transport(bool montgomery, int in_range, Op op, uint64_t p,
     }
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_dst);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
     return results;
 }
@@ -580,24 +603,24 @@ TEST_CASE("hazeBroadcast transport: A/B byte-exact vs ordinary mode", "[integrat
 
     struct Arm {
         Op op;
-        uint64_t p;
+        int p_idx;
         std::vector<uint64_t> base;
         std::vector<uint64_t> vals;
         int in_range;
     };
     const std::vector<Arm> arms = {
-        {Op::Mul, kQ1, {kQ0, kQ2}, binary_mask(0x3C3CULL), 0},
-        {Op::Mul, kQ1, {kQ0, kQ2}, binary_mask(0x3C3CULL), 1},
-        {Op::Sub, kQ2, {kQ0, kQ2}, boundary_operand(kQ2, 787878ULL), 0}, // pass-through limb
+        {Op::Mul, 1, {kQ0, kQ2}, binary_mask(0x3C3CULL), 0},           // p = kQ1
+        {Op::Mul, 1, {kQ0, kQ2}, binary_mask(0x3C3CULL), 1},           // p = kQ1
+        {Op::Sub, 2, {kQ0, kQ2}, boundary_operand(kQ2, 787878ULL), 0}, // pass-through kQ2
     };
     for (std::size_t a = 0; a < arms.size(); ++a) {
         const Arm &arm = arms[a];
         REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
         const auto ordinary = run_broadcast_transport(/*montgomery=*/false, arm.in_range, arm.op,
-                                                      arm.p, arm.base, arm.vals);
+                                                      arm.p_idx, arm.base, arm.vals);
         REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
         const auto encoded = run_broadcast_transport(/*montgomery=*/true, arm.in_range, arm.op,
-                                                     arm.p, arm.base, arm.vals);
+                                                     arm.p_idx, arm.base, arm.vals);
         INFO("arm " << a << " in_range " << arm.in_range);
         REQUIRE(ordinary == encoded);
     }
@@ -613,13 +636,7 @@ TEST_CASE("hazeBroadcast transport: non-synthesizable operand modulus fails loud
     // bridge must synthesize; a prime not ≡ 1 mod 2N fails at flush — cleanly,
     // never silently.
     constexpr uint64_t kBadP = 1000003ULL; // prime, not ≡ 1 mod 8192
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-    const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    setup_chain_config({kQ0, kQ1, kBadP});
 
     const std::vector<uint64_t> base = {kQ0, kQ1};
     std::vector<std::vector<uint64_t>> inputs(base.size());
@@ -627,14 +644,12 @@ TEST_CASE("hazeBroadcast transport: non-synthesizable operand modulus fails loud
         inputs[i] = haze::test::make_residue(base[i], 797979ULL + i, kRingDim);
     const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
-    void *d_m = nullptr;
-    REQUIRE(hazeMalloc(&d_m, kBytes) == HAZE_SUCCESS);
     const std::vector<uint64_t> vals = haze::test::make_residue(kBadP, 808080ULL, kRingDim);
-    REQUIRE(hazeMemcpy(d_m, vals.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    const auto [d_raw, d_m] = bind_operand(vals, /*mod_idx=*/2);
 
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
-    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_m, kBadP, 0, base.data(),
-                                base.size(), nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeBroadcastAddMrp(d_dst.data(), src_view.data(), d_m, 0, base.data(), base.size(),
+                                nullptr) == HAZE_SUCCESS);
     for (void *out : d_dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() != HAZE_SUCCESS);
@@ -642,6 +657,7 @@ TEST_CASE("hazeBroadcast transport: non-synthesizable operand modulus fails loud
 
     haze::test::free_all_residues(d_src);
     haze::test::free_all_residues(d_dst);
+    REQUIRE(hazeFree(d_raw) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_m) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
