@@ -185,6 +185,8 @@ add_library(haze_objs OBJECT
   src/core/allocator.cpp
   src/core/backend.cpp
   src/core/basis_convert.cpp
+  src/core/broadcast.cpp
+  src/core/centered_switch.cpp
   src/core/config.cpp
   src/core/device.cpp
   src/core/device_state.cpp
@@ -428,6 +430,7 @@ add_executable(haze_tests
   test/test_config.cpp
   test/test_compute.cpp
   test/test_is_half_modulus.cpp
+  test/test_broadcast.cpp
   test/test_basis_convert.cpp
   test/test_mul_rotation.cpp
   test/test_ring_dim_consistency.cpp
