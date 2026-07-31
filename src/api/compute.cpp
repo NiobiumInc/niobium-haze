@@ -215,43 +215,43 @@ extern "C" hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *co
 // Broadcast MRP ops: one single-residue operand applied to every limb.
 
 extern "C" hazeError_t hazeBroadcastAddMrp(void *const *dst, const void *const *src,
-                                           const void *operand, uint64_t operand_modulus,
-                                           int operand_in_range, const uint64_t *base,
-                                           size_t base_len, hazeStream_t /*stream*/) noexcept {
+                                           const void *operand, int operand_in_range,
+                                           const uint64_t *base, size_t base_len,
+                                           hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || operand == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::broadcast_add(dst, src, operand, operand_modulus,
-                                                   operand_in_range != 0, base, base_len));
+    return set_internal_result(
+        haze::broadcast_add(dst, src, operand, operand_in_range != 0, base, base_len));
 }
 
 extern "C" hazeError_t hazeBroadcastSubMrp(void *const *dst, const void *const *src,
-                                           const void *operand, uint64_t operand_modulus,
-                                           int operand_in_range, const uint64_t *base,
-                                           size_t base_len, hazeStream_t /*stream*/) noexcept {
+                                           const void *operand, int operand_in_range,
+                                           const uint64_t *base, size_t base_len,
+                                           hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || operand == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::broadcast_sub(dst, src, operand, operand_modulus,
-                                                   operand_in_range != 0, base, base_len));
+    return set_internal_result(
+        haze::broadcast_sub(dst, src, operand, operand_in_range != 0, base, base_len));
 }
 
 extern "C" hazeError_t hazeBroadcastRsubMrp(void *const *dst, const void *const *src,
-                                            const void *operand, uint64_t operand_modulus,
-                                            int operand_in_range, const uint64_t *base,
-                                            size_t base_len, hazeStream_t /*stream*/) noexcept {
+                                            const void *operand, int operand_in_range,
+                                            const uint64_t *base, size_t base_len,
+                                            hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || operand == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::broadcast_rsub(dst, src, operand, operand_modulus,
-                                                    operand_in_range != 0, base, base_len));
+    return set_internal_result(
+        haze::broadcast_rsub(dst, src, operand, operand_in_range != 0, base, base_len));
 }
 
 extern "C" hazeError_t hazeBroadcastMulMrp(void *const *dst, const void *const *src,
-                                           const void *operand, uint64_t operand_modulus,
-                                           int operand_in_range, const uint64_t *base,
-                                           size_t base_len, hazeStream_t /*stream*/) noexcept {
+                                           const void *operand, int operand_in_range,
+                                           const uint64_t *base, size_t base_len,
+                                           hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || operand == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::broadcast_mul(dst, src, operand, operand_modulus,
-                                                   operand_in_range != 0, base, base_len));
+    return set_internal_result(
+        haze::broadcast_mul(dst, src, operand, operand_in_range != 0, base, base_len));
 }
 
 // CRT basis conversion lives in basis_convert.cpp; graph capture stubs live in graph.cpp.
