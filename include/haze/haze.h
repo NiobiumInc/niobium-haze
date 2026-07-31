@@ -216,8 +216,9 @@ HAZE_API hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, 
                                    hazeStream_t stream) HAZE_NOEXCEPT;
 
 // hazeIsHalfModulus records the per-coefficient predicate dst_i = (src_i > q/2) ? 1 : 0,
-// where q = moduli[mod_idx]; dst is recorded under the auto-selected aux prime
-// moduli[lowest j != mod_idx] (requires moduli_count >= 2).
+// where q = moduli[mod_idx] (must be odd); dst is recorded under the auto-selected aux:
+// the lowest-indexed configured modulus != mod_idx that passes a deterministic primality
+// check — composite chain entries are skipped, HAZE_ERROR_INVALID_VALUE when none exists.
 HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
                                        hazeStream_t stream) HAZE_NOEXCEPT;
 
@@ -269,9 +270,10 @@ HAZE_API hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
                                       const uint64_t *scalars, const uint64_t *base,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
 
-// hazeIsHalfModulusMrp records the per-limb predicate dst[i]_k = (src[i]_k > base[i]/2) ? 1 : 0;
-// every dst[i] is recorded under one shared auto-selected aux prime, the lowest-indexed
-// configured modulus not in base (HAZE_ERROR_INVALID_VALUE when none exists).
+// hazeIsHalfModulusMrp records the per-limb predicate dst[i]_k = (src[i]_k > base[i]/2) ? 1 : 0
+// (base moduli must be odd); every dst[i] is recorded under one shared auto-selected aux:
+// the lowest-indexed configured modulus not in base that passes a deterministic primality
+// check — composite chain entries are skipped, HAZE_ERROR_INVALID_VALUE when none exists.
 HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *src,
                                           const uint64_t *base, size_t base_len,
                                           hazeStream_t stream) HAZE_NOEXCEPT;
