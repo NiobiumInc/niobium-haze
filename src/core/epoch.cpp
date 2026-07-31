@@ -201,10 +201,12 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
         fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
-    // New H2D bytes overwrite the binding, drop any output tag, and reclassify
-    // the addr as a live-in input (MRP-group claims stay).
+    // New H2D bytes overwrite the binding, drop any output tag and stale
+    // modulus, and reclassify the addr as a live-in input (MRP-group claims
+    // stay).
     poly_map_.insert_or_assign(addr, std::move(poly));
     pending_outputs_.erase(addr);
+    addr_modulus_.erase(addr);
     input_addrs_.insert(addr);
     return {};
 }
