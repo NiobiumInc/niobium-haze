@@ -571,6 +571,15 @@ TEST_CASE("hazeIsHalfModulusMrp: in-place dst == src", "[integration]") {
     haze::test::free_all_residues(d_x);
 }
 
+TEST_CASE("hazeIsHalfModulusMrp: base spanning the whole data chain", "[integration]") {
+    // The scenario the configured-aux design could not serve: a predicate over
+    // every data modulus at once. The generated aux lives outside the supplied
+    // chain, so a full-chain base always has an extraction ring.
+    const std::vector<uint64_t> base =
+        haze::test::setup_integration_mrp3_config(kRingDim, kQ0); // {kQ0, kQ1, kQ2}
+    check_ihm_mrp_results(base, /*seed=*/878787ULL, run_ihm_mrp(base, /*seed=*/878787ULL));
+}
+
 TEST_CASE("hazeIsHalfModulusMrp: generated aux (h >= p per limb)", "[integration]") {
     // The generated ~2^30 aux serves 59-bit limbs with h >= p immediate
     // reduction on every limb.
