@@ -128,7 +128,9 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
                                   "hazeIsHalfModulusMrp: base modulus must be odd");
             return std::unexpected(HazeInternalError::InvalidArgument);
         }
-        // q_i^-1 mod aux must exist; aux is prime, so this only rejects aux | q_i.
+        // q_i^-1 mod aux must exist. Unlike the SRP path (whose q comes from
+        // the primality-validated chain), MRP bases are caller-defined raw
+        // values; aux is prime, so this only rejects aux | q_i.
         if (std::gcd(base[i], aux_modulus) != 1) {
             record_internal_error(HazeInternalError::InvalidArgument,
                                   "hazeIsHalfModulusMrp: aux modulus not coprime to base prime");

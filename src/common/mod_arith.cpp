@@ -48,7 +48,7 @@ bool is_prime_u64(uint64_t n) noexcept {
     uint64_t d = n - 1;
     unsigned s = 0;
     while (d % 2 == 0) {
-        d /= 2;
+        d >>= 1U;
         ++s;
     }
     for (uint64_t b : kBases) {

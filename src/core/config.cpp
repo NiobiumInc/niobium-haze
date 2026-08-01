@@ -32,10 +32,15 @@ constexpr uint64_t kAuxPrimeFloor = uint64_t{1} << 30U;
 // Smallest prime >= kAuxPrimeFloor with p ≡ 1 (mod 2*ring_dim) — NTT-friendly
 // for the hardware twiddle tables and readback synthesis — that is not one of
 // the user's moduli. Deterministic given (ring_dim, moduli).
+// 0 on exhaustion — unreachable for the validated ring_dim envelope (roughly
+// one in ln(2^30) ≈ 21 candidates in the progression is prime), but a bounded
+// loop turns a hypothetical generator bug into a clean configure error
+// instead of a stall.
 uint64_t generate_aux_prime(uint64_t ring_dim, const uint64_t *moduli, size_t count) noexcept {
+    constexpr uint64_t kMaxCandidates = 100000;
     const uint64_t step = 2 * ring_dim;
     uint64_t candidate = (((kAuxPrimeFloor + step - 1) / step) * step) + 1;
-    for (;; candidate += step) {
+    for (uint64_t tries = 0; tries < kMaxCandidates; ++tries, candidate += step) {
         if (!is_prime_u64(candidate))
             continue;
         bool collides = false;
@@ -48,6 +53,7 @@ uint64_t generate_aux_prime(uint64_t ring_dim, const uint64_t *moduli, size_t co
         if (!collides)
             return candidate;
     }
+    return 0;
 }
 
 // Power of two within the device envelope; the upper bound also keeps
@@ -96,6 +102,12 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
     // appended as the last chain entry; compute calls never derive it.
     if (raw.moduli_count > 0) {
         p.aux_modulus_ = generate_aux_prime(raw.ring_dim, raw.moduli, raw.moduli_count);
+        if (p.aux_modulus_ == 0) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "FheParams::create: aux prime generation exhausted");
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
+        // In bounds: the count cap above reserves this final slot for the aux.
         p.moduli_[raw.moduli_count] = p.aux_modulus_;
     }
     p.moduli_count_ = static_cast<int>(raw.moduli_count) + (raw.moduli_count > 0 ? 1 : 0);
