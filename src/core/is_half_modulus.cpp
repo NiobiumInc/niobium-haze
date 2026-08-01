@@ -19,10 +19,10 @@
 
 #include "common/errors.hpp"
 #include "common/handle.hpp"
+#include "common/mod_arith.hpp"
 #include "core/allocator.hpp"
 #include "core/centered_switch.hpp"
 #include "core/config.hpp"
-#include "core/device.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
 
@@ -39,63 +39,6 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 namespace {
-
-// a * b mod m via 128-bit product.
-uint64_t mulmod_u64(uint64_t a, uint64_t b, uint64_t m) noexcept {
-    return static_cast<uint64_t>((static_cast<__uint128_t>(a) * b) % m);
-}
-
-uint64_t powmod_u64(uint64_t base, uint64_t exp, uint64_t m) noexcept {
-    uint64_t result = 1;
-    base %= m;
-    while (exp > 0) {
-        if ((exp & 1U) != 0)
-            result = mulmod_u64(result, base, m);
-        base = mulmod_u64(base, base, m);
-        exp >>= 1U;
-    }
-    return result;
-}
-
-// Fermat inverse a^(p-2) mod p; requires p prime and a not divisible by p.
-uint64_t modinv_prime(uint64_t a, uint64_t p) noexcept {
-    return powmod_u64(a, p - 2, p);
-}
-
-// Deterministic Miller-Rabin for 64-bit n (the 12-base set is exact below 3.3e24).
-// Guards the aux selection: a composite aux would make the Fermat inverse silently
-// wrong.
-bool is_prime_u64(uint64_t n) noexcept {
-    constexpr uint64_t kBases[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37};
-    if (n < 2)
-        return false;
-    for (uint64_t b : kBases) {
-        if (n % b == 0)
-            return n == b;
-    }
-    uint64_t d = n - 1;
-    unsigned s = 0;
-    while (d % 2 == 0) {
-        d /= 2;
-        ++s;
-    }
-    for (uint64_t b : kBases) {
-        uint64_t x = powmod_u64(b, d, n);
-        if (x == 1 || x == n - 1)
-            continue;
-        bool composite = true;
-        for (unsigned i = 1; i < s; ++i) {
-            x = mulmod_u64(x, x, n);
-            if (x == n - 1) {
-                composite = false;
-                break;
-            }
-        }
-        if (composite)
-            return false;
-    }
-    return true;
-}
 
 // b = [x > h], h = (q-1)/2: g1 = c(x-h) == x-h (signed), g2 = c(x) == x - q*b,
 // so ((g1 - g2 + h) mod p) * q^-1 == b exactly, for any prime p != q.
@@ -143,30 +86,13 @@ std::expected<void, HazeInternalError> is_half_modulus(DevAddr dst, DevAddr src,
                               "hazeIsHalfModulus: modulus must be odd");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
-    // Aux prime: lowest configured index != mod_idx holding a prime; composite
-    // entries are skipped (the Fermat inverse below is only an inverse mod a
-    // prime — a composite aux would yield silently wrong results).
-    uint64_t p = 0;
-    for (int j = 0; j < kMaxCiphertextModuli; ++j) {
-        if (j == mod_idx)
-            continue;
-        const uint64_t candidate = fhe_params().modulus(j);
-        if (candidate == 0)
-            break; // configured moduli are contiguous from index 0
-        if (is_prime_u64(candidate)) {
-            p = candidate;
-            break;
-        }
-    }
-    if (p == 0) {
+    // The program-wide aux prime generated at configure time (last chain
+    // entry); distinct primes, so q and p are coprime by construction. The
+    // aux slot itself is not a data modulus.
+    const uint64_t p = fhe_params().aux_modulus();
+    if (q == p) {
         record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeIsHalfModulus: no prime configured modulus for the aux");
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    }
-    if (std::gcd(q, p) != 1) {
-        // q^-1 mod p must exist; p is prime, so this only rejects p | q.
-        record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeIsHalfModulus: modulus and aux modulus not coprime");
+                              "hazeIsHalfModulus: mod_idx names the aux modulus");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     auto x = epoch().lookup_or_create_locked(src);
@@ -182,35 +108,20 @@ std::expected<void, HazeInternalError> is_half_modulus_mrp(void *const *dst, con
                                                            std::size_t base_len) noexcept {
     if (auto v = validate_moduli_base(base, base_len); !v)
         return v;
-    // Shared aux prime: lowest configured index whose value is prime and not in
-    // base; composite entries are skipped (a composite aux would make the
-    // Fermat inverse silently wrong).
-    uint64_t aux_modulus = 0;
-    for (int j = 0; j < kMaxCiphertextModuli; ++j) {
-        const uint64_t candidate = fhe_params().modulus(j);
-        if (candidate == 0)
-            break; // configured moduli are contiguous from index 0
-        if (!is_prime_u64(candidate))
-            continue;
-        bool in_base = false;
-        for (std::size_t i = 0; i < base_len; ++i) {
-            if (base[i] == candidate) {
-                in_base = true;
-                break;
-            }
-        }
-        if (!in_base) {
-            aux_modulus = candidate;
-            break;
-        }
-    }
+    // The program-wide aux prime generated at configure time (last chain
+    // entry); one aux serves every limb.
+    const uint64_t aux_modulus = fhe_params().aux_modulus();
     if (aux_modulus == 0) {
         record_internal_error(HazeInternalError::InvalidArgument,
-                              "hazeIsHalfModulusMrp: no prime configured modulus outside base for "
-                              "the aux");
+                              "hazeIsHalfModulusMrp: no moduli configured");
         return std::unexpected(HazeInternalError::InvalidArgument);
     }
     for (std::size_t i = 0; i < base_len; ++i) {
+        if (base[i] == aux_modulus) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "hazeIsHalfModulusMrp: base contains the aux modulus");
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
         if (base[i] % 2 == 0) {
             // h = (q_i-1)/2 centering needs odd limb moduli.
             record_internal_error(HazeInternalError::InvalidArgument,

@@ -168,7 +168,7 @@ std::vector<uint64_t> boundary_operand(uint64_t p, uint64_t seed) {
 TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[integration]") {
     haze::test::setup_integration_mrp3_config(kRingDim, kQ0); // {kQ0, kQ1, kQ2}
 
-    // Mask: SRP predicate of a value under kQ0; recorded under the auto aux kQ1.
+    // Mask: SRP predicate of a value under kQ0; recorded under the generated aux.
     const std::vector<uint64_t> pred_in = haze::test::make_residue(kQ0, 424242ULL, kRingDim);
     void *d_pred_in = nullptr;
     void *d_mask = nullptr;
@@ -277,7 +277,7 @@ TEST_CASE("hazeBroadcast: H2D overwrite clears a stale recorded operand modulus"
     REQUIRE(hazeMalloc(&d_t, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMalloc(&d_in, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeMemcpy(d_in, pred_in.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeIsHalfModulus(d_t, d_in, 0, nullptr) == HAZE_SUCCESS); // recorded under kQ2
+    REQUIRE(hazeIsHalfModulus(d_t, d_in, 0, nullptr) == HAZE_SUCCESS); // recorded under the aux
 
     const std::vector<uint64_t> mask = binary_mask(0x7E7EULL);
     REQUIRE(hazeMemcpy(d_t, mask.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
@@ -389,7 +389,7 @@ TEST_CASE("hazeBroadcast rejects invalid arguments", "[unit]") {
 TEST_CASE("hazeBroadcast rejects an operand recorded under an even modulus", "[integration]") {
     // The centered lift's h = (p-1)/2 needs an odd operand ring; an operand
     // bound under an even chain entry is rejected at recovery.
-    setup_chain_config({kQ0, kQ1, 1ULL << 40});
+    setup_chain_config({kQ0, kQ1, 2}); // 2: the one even prime the config accepts
 
     const uint64_t base[] = {kQ0, kQ1};
     const std::vector<void *> d_src =

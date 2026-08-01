@@ -549,17 +549,22 @@ TEST_CASE("ciphertext-modulus count is bounded by the device envelope", "[unit]"
     hazeDeviceProp prop{};
     REQUIRE(hazeGetDeviceProperties(&prop, 0) == HAZE_SUCCESS);
     const auto max = static_cast<std::size_t>(prop.maxCiphertextModuli);
-    std::vector<uint64_t> moduli(max + 1);
-    for (std::size_t i = 0; i < moduli.size(); ++i)
-        moduli[i] = kQ0 + (2 * i);
+    // Distinct primes (the config enforces primality); the device appends its
+    // generated aux as the last chain entry, so callers may supply max - 1.
+    const std::vector<uint64_t> moduli = {
+        3,   5,   7,   11,  13,  17,  19,  23,  29,  31,  37,  41,  43,  47,  53,  59,
+        61,  67,  71,  73,  79,  83,  89,  97,  101, 103, 107, 109, 113, 127, 131, 137,
+        139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227,
+        229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313};
+    REQUIRE(moduli.size() >= max);
 
-    // Exactly `max` distinct primes configure cleanly...
-    const hazeFheParams full = {.ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max};
+    // Exactly `max - 1` supplied primes configure cleanly (aux slot reserved)...
+    const hazeFheParams full = {
+        .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max - 1};
     REQUIRE(hazeConfigureDevice(&full, nullptr) == HAZE_SUCCESS);
-    // ...and one past the envelope is rejected (previously an unbounded vector
-    // grew; now it guards a fixed array).
-    const hazeFheParams over = {
-        .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max + 1};
+    // ...and one more is rejected (previously an unbounded vector grew; now it
+    // guards a fixed array with the last slot reserved for the generated aux).
+    const hazeFheParams over = {.ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = max};
     REQUIRE(hazeConfigureDevice(&over, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);

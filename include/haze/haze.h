@@ -149,6 +149,11 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * nothing is installed on failure, so a corrected struct may be retried.
  * Re-calling reinstalls the configuration; changing the ring dimension while
  * allocations are live returns HAZE_ERROR_CONFIGERR (free them or reset first).
+ * Every ciphertext modulus must be a prime (deterministically checked;
+ * HAZE_ERROR_CONFIGERR otherwise) and unique, and at most 63 may be supplied:
+ * the device generates one dedicated aux prime for hazeIsHalfModulus (the
+ * smallest prime >= 2^30 with p ≡ 1 mod 2*ring_dim not colliding with the
+ * supplied moduli) and appends it as the last chain entry.
  *
  * hazeReplayConfig::target selects the niobium-compiler replay target:
  *   1. "local" (the default): libnbfhetch loads the .fhetch trace into its
@@ -216,9 +221,9 @@ HAZE_API hazeError_t hazeMulScalar(void *dst, const void *src, uint64_t scalar, 
                                    hazeStream_t stream) HAZE_NOEXCEPT;
 
 // hazeIsHalfModulus records the per-coefficient predicate dst_i = (src_i > q/2) ? 1 : 0,
-// where q = moduli[mod_idx] (must be odd); dst is recorded under the auto-selected aux:
-// the lowest-indexed configured modulus != mod_idx that passes a deterministic primality
-// check — composite chain entries are skipped, HAZE_ERROR_INVALID_VALUE when none exists.
+// where q = moduli[mod_idx] (must be odd); dst is recorded under the program-wide aux
+// prime the device generated at hazeConfigureDevice (the last chain entry). mod_idx
+// naming the aux slot itself returns HAZE_ERROR_INVALID_VALUE.
 HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
                                        hazeStream_t stream) HAZE_NOEXCEPT;
 
@@ -271,9 +276,8 @@ HAZE_API hazeError_t hazeMulScalarMrp(void *const *dst, const void *const *src,
                                       size_t base_len, hazeStream_t stream) HAZE_NOEXCEPT;
 
 // hazeIsHalfModulusMrp records the per-limb predicate dst[i]_k = (src[i]_k > base[i]/2) ? 1 : 0
-// (base moduli must be odd); every dst[i] is recorded under one shared auto-selected aux:
-// the lowest-indexed configured modulus not in base that passes a deterministic primality
-// check — composite chain entries are skipped, HAZE_ERROR_INVALID_VALUE when none exists.
+// (base moduli must be odd); every dst[i] is recorded under the program-wide generated aux
+// prime. A base containing the aux returns HAZE_ERROR_INVALID_VALUE.
 HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *src,
                                           const uint64_t *base, size_t base_len,
                                           hazeStream_t stream) HAZE_NOEXCEPT;
