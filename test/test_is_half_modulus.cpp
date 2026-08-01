@@ -647,8 +647,11 @@ TEST_CASE("hazeIsHalfModulusMrp transport: A/B byte-exact vs ordinary mode",
     if (!transport_target_active())
         SKIP("data format requires a transport target (run under make test-transport)");
 
-    const std::vector<uint64_t> limb_base = {kQ0, kQ1};
-    auto run_once = [&](bool montgomery, bool bit_reversal) {
+    // Two arms: a partial base and one spanning the whole data chain (the case
+    // only the generated aux can serve).
+    const std::vector<std::vector<uint64_t>> bases = {{kQ0, kQ1}, {kQ0, kQ1, kQ2}};
+    auto run_once = [&](const std::vector<uint64_t> &limb_base, bool montgomery,
+                        bool bit_reversal) {
         const uint64_t moduli[] = {kQ0, kQ1, kQ2};
         const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
         const hazeReplayConfig replay = {.target = haze::test::target_from_env(),
@@ -658,15 +661,18 @@ TEST_CASE("hazeIsHalfModulusMrp transport: A/B byte-exact vs ordinary mode",
         REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
         uint64_t scaffold = 0;
         REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-        return run_ihm_mrp(limb_base, /*seed=*/838383ULL); // auto aux = kQ2
+        return run_ihm_mrp(limb_base, /*seed=*/838383ULL);
     };
 
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto ordinary = run_once(/*montgomery=*/false, /*bit_reversal=*/false);
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto encoded = run_once(/*montgomery=*/true, /*bit_reversal=*/true);
-    REQUIRE(ordinary == encoded);
-    check_ihm_mrp_results(limb_base, /*seed=*/838383ULL, encoded);
+    for (const std::vector<uint64_t> &limb_base : bases) {
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+        const auto ordinary = run_once(limb_base, /*montgomery=*/false, /*bit_reversal=*/false);
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+        const auto encoded = run_once(limb_base, /*montgomery=*/true, /*bit_reversal=*/true);
+        INFO("base_len " << limb_base.size());
+        REQUIRE(ordinary == encoded);
+        check_ihm_mrp_results(limb_base, /*seed=*/838383ULL, encoded);
+    }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
