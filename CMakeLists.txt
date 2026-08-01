@@ -200,6 +200,7 @@ add_library(haze_objs OBJECT
   # Shared leaf utilities.
   src/common/errors.cpp
   src/common/log.cpp
+  src/common/mod_arith.cpp
 )
 
 target_include_directories(haze_objs

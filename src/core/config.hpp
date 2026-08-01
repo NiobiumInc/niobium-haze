@@ -40,9 +40,11 @@ class FheParams {
   public:
     // Validate the caller's struct and deep-copy it into an immutable FheParams.
     // Enforces per-argument invariants (ring_dim in the device envelope; moduli
-    // non-zero and within the modulus envelope), the whole-config invariant
+    // non-zero, prime, and within the modulus envelope), the whole-config invariant
     // (moduli unique), and struct well-formedness (a NULL array with a non-zero
-    // count is InvalidArgument). Nothing partial escapes — on any failure it
+    // count is InvalidArgument). When any moduli are supplied, a dedicated aux
+    // prime for hazeIsHalfModulus is generated and appended as the last chain
+    // entry (see aux_modulus()). Nothing partial escapes — on any failure it
     // returns the error and no object.
     static std::expected<FheParams, HazeInternalError> create(const hazeFheParams &raw) noexcept;
 
@@ -55,10 +57,14 @@ class FheParams {
             return 0;
         return moduli_[static_cast<size_t>(idx)];
     }
+    // The program-wide hazeIsHalfModulus aux prime, generated at create() and
+    // appended as the last chain entry (0 = no moduli configured).
+    uint64_t aux_modulus() const noexcept { return aux_modulus_; }
 
   private:
     uint64_t ring_dim_ = 0;
     std::array<uint64_t, static_cast<size_t>(kMaxCiphertextModuli)> moduli_{};
+    uint64_t aux_modulus_ = 0;
     int moduli_count_ = 0;
     std::vector<uint64_t> twiddle_generators_; // stored for the trace; no reader yet
 };

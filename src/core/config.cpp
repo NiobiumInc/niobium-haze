@@ -13,6 +13,7 @@
 #include "core/config.hpp"
 
 #include "common/errors.hpp"
+#include "common/mod_arith.hpp"
 #include "core/device.hpp"
 
 #include <cstddef>
@@ -23,6 +24,31 @@
 namespace haze {
 
 namespace {
+
+// Floor for the generated aux prime: the replay bridge's OpenFHE template
+// synthesis rejects tiny trace moduli (LastPrime overflow below ~2^30).
+constexpr uint64_t kAuxPrimeFloor = uint64_t{1} << 30U;
+
+// Smallest prime >= kAuxPrimeFloor with p ≡ 1 (mod 2*ring_dim) — NTT-friendly
+// for the hardware twiddle tables and readback synthesis — that is not one of
+// the user's moduli. Deterministic given (ring_dim, moduli).
+uint64_t generate_aux_prime(uint64_t ring_dim, const uint64_t *moduli, size_t count) noexcept {
+    const uint64_t step = 2 * ring_dim;
+    uint64_t candidate = (((kAuxPrimeFloor + step - 1) / step) * step) + 1;
+    for (;; candidate += step) {
+        if (!is_prime_u64(candidate))
+            continue;
+        bool collides = false;
+        for (size_t i = 0; i < count; ++i) {
+            if (moduli[i] == candidate) {
+                collides = true;
+                break;
+            }
+        }
+        if (!collides)
+            return candidate;
+    }
+}
 
 // Power of two within the device envelope; the upper bound also keeps
 // n * sizeof(uint64_t) from wrapping.
@@ -43,7 +69,8 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
     // Per-argument: ring_dim in the device envelope; modulus count within it.
     if (!is_supported_ring_dim(raw.ring_dim))
         return std::unexpected(HazeInternalError::InvalidArgument);
-    if (raw.moduli_count > static_cast<size_t>(kMaxCiphertextModuli))
+    // Reserve the last chain slot for the generated aux prime.
+    if (raw.moduli_count > static_cast<size_t>(kMaxCiphertextModuli) - 1)
         return std::unexpected(HazeInternalError::InvalidArgument);
 
     FheParams p;
@@ -52,6 +79,11 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
         const uint64_t qi = raw.moduli[i];
         if (qi == 0) // per-argument: moduli non-zero
             return std::unexpected(HazeInternalError::InvalidArgument);
+        if (!is_prime_u64(qi)) { // per-argument: moduli prime
+            record_internal_error(HazeInternalError::CompositeModulus,
+                                  "FheParams::create: modulus not prime");
+            return std::unexpected(HazeInternalError::CompositeModulus);
+        }
         for (size_t j = 0; j < i; ++j) // whole-config: moduli unique
             if (raw.moduli[j] == qi) {
                 record_internal_error(HazeInternalError::DuplicateModulus,
@@ -60,7 +92,13 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
             }
         p.moduli_[i] = qi;
     }
-    p.moduli_count_ = static_cast<int>(raw.moduli_count);
+    // One program-wide aux prime for hazeIsHalfModulus, generated here and
+    // appended as the last chain entry; compute calls never derive it.
+    if (raw.moduli_count > 0) {
+        p.aux_modulus_ = generate_aux_prime(raw.ring_dim, raw.moduli, raw.moduli_count);
+        p.moduli_[raw.moduli_count] = p.aux_modulus_;
+    }
+    p.moduli_count_ = static_cast<int>(raw.moduli_count) + (raw.moduli_count > 0 ? 1 : 0);
     p.twiddle_generators_.assign(raw.twiddle_generators,
                                  raw.twiddle_generators + raw.twiddle_count);
     return p;

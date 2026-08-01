@@ -35,6 +35,7 @@ enum class HazeInternalError : std::uint8_t {
     NotConfigured,              // ring_dim / modulus not set when required
     ConfigLocked,               // configuration frozen; conflicting re-set rejected
     DuplicateModulus,           // FheParams::build(): two ciphertext moduli are equal
+    CompositeModulus,           // FheParams::build(): a ciphertext modulus is not prime
     UnknownAddress,             // DevAddr not in the allocator's table
     NoData,                     // address allocated but no H2D / compute output present
     PolySizeMismatch,           // size != configured polynomial size (ring_dim * 8)

@@ -31,31 +31,20 @@ constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 constexpr uint64_t kQ0 = 576460752303415297ULL;
 constexpr uint64_t kQ1 = 576460752303439873ULL;
 constexpr uint64_t kQ2 = 576460752303702017ULL;
-// Small NTT-friendly prime (~2^30, ≡ 1 mod 8192); the practical floor — the
-// replay bridge's template synthesis throws for tiny primes like 65537.
+// The device-generated aux prime for ring_dim 4096: the smallest prime >= 2^30
+// (the replay bridge floor) with p ≡ 1 mod 8192. Configuring it as a data
+// modulus makes the generator skip to the next candidate (1073815553).
 constexpr uint64_t kSmallQ = 1073750017ULL;
 // 59-bit NTT-friendly prime with q ≡ 1 (mod kSmallQ): against aux p = kSmallQ
 // it drives qinv == 1, p | h, and the zero-immediate gadget branches at once.
 constexpr uint64_t kCongruentQ = 288241371603542017ULL;
-// 2*kQ0 + 1: composite (3*5*7*13 divide it) — the "safe-prime-looking" aux a
-// caller might configure; the aux selection must skip it (a composite aux
-// makes the Fermat inverse silently wrong).
+// 2*kQ0 + 1: composite (3*5*7*13 divide it) — the "safe-prime-looking" modulus
+// a caller might configure; hazeConfigureDevice must reject it (a composite
+// chain entry would make Fermat inverses silently wrong).
 constexpr uint64_t kCompositeAux = (2 * kQ0) + 1;
-constexpr uint64_t kEvenModulus = 1ULL << 40;
 
 uint64_t is_half_ref(uint64_t x, uint64_t q) {
     return (x > (q - 1) / 2) ? 1U : 0U;
-}
-
-// Two-prime configuration; the aux prime for mod_idx=0 is q1 (lowest index != 0).
-void setup_two_prime_config(uint64_t q0, uint64_t q1) {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {q0, q1};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 2};
-    const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, q0, &scaffold) == HAZE_SUCCESS);
 }
 
 // Pseudorandom residues mod q with the threshold boundary cases pinned into the
@@ -102,69 +91,42 @@ void run_golden_case(uint64_t q, int mod_idx, uint64_t seed) {
 // Golden values ([integration]: runs under test-sim and test-transport).
 // ===========================================================================
 
-TEST_CASE("hazeIsHalfModulus: golden values, aux prime above q", "[integration]") {
+TEST_CASE("hazeIsHalfModulus: golden values, generated aux below q", "[integration]") {
     haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
-    run_golden_case(kQ0, /*mod_idx=*/0, /*seed=*/424242ULL); // p = kQ1 > q
+    // aux = kSmallQ (generated, ~2^30): p < q and h >= p for every data prime.
+    run_golden_case(kQ0, /*mod_idx=*/0, /*seed=*/424242ULL);
+    run_golden_case(kQ1, /*mod_idx=*/1, /*seed=*/911223ULL);
+    run_golden_case(kQ2, /*mod_idx=*/2, /*seed=*/171717ULL);
 }
 
-TEST_CASE("hazeIsHalfModulus: golden values, aux prime below q", "[integration]") {
-    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
-    run_golden_case(kQ1, /*mod_idx=*/1, /*seed=*/911223ULL); // p = kQ0 < q
-    run_golden_case(kQ2, /*mod_idx=*/2, /*seed=*/171717ULL); // p = kQ0 < q
-}
-
-TEST_CASE("hazeIsHalfModulus: golden values, small q against 59-bit aux prime", "[integration]") {
-    setup_two_prime_config(kSmallQ, kQ0);
-    run_golden_case(kSmallQ, /*mod_idx=*/0, /*seed=*/555555ULL); // p = kQ0 >> q
-}
-
-TEST_CASE("hazeIsHalfModulus: golden values, small aux prime (h >= p)", "[integration]") {
-    setup_two_prime_config(kQ0, kSmallQ);
-    run_golden_case(kQ0, /*mod_idx=*/0, /*seed=*/777777ULL); // p = kSmallQ, h >> p
+TEST_CASE("hazeIsHalfModulus: golden values, generated aux above q (collision skip)",
+          "[integration]") {
+    // kSmallQ as a data modulus collides with the generator's first candidate,
+    // so the aux becomes the next qualifying prime (1073815553) — above q.
+    haze::test::setup_integration_compute_config(kRingDim, kSmallQ);
+    run_golden_case(kSmallQ, /*mod_idx=*/0, /*seed=*/555555ULL);
 }
 
 TEST_CASE("hazeIsHalfModulus: golden values, q ≡ 1 mod p (qinv == 1, p | h)", "[integration]") {
-    setup_two_prime_config(kCongruentQ, kSmallQ);
+    // kSmallQ | (kCongruentQ-1)/2, and the generated aux for this chain is
+    // exactly kSmallQ — driving qinv == 1 and the zero-immediate branches.
+    haze::test::setup_integration_compute_config(kRingDim, kCongruentQ);
     run_golden_case(kCongruentQ, /*mod_idx=*/0, /*seed=*/999999ULL);
 }
 
-TEST_CASE("hazeIsHalfModulus: aux selection skips a composite chain entry", "[integration]") {
-    // {kQ0, 2*kQ0+1 (composite), kQ1}: the aux for mod_idx=0 must skip index 1
-    // and land on kQ1; picking the composite would return garbage for every
-    // x > q/2 (Fermat inverse of a composite is not an inverse).
+TEST_CASE("hazeConfigureDevice rejects a composite modulus", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const uint64_t moduli[] = {kQ0, kCompositeAux, kQ1};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-    const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-    run_golden_case(kQ0, /*mod_idx=*/0, /*seed=*/121212ULL); // aux = kQ1
-}
-
-TEST_CASE("hazeIsHalfModulus rejects a chain with no prime aux candidate", "[unit]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {kQ0, kCompositeAux};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 2};
-    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-
-    void *d_src = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-    std::vector<uint64_t> a(kRingDim, 1);
-    REQUIRE(hazeMemcpy(d_src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
-    REQUIRE(hazeIsHalfModulus(d_dst, d_src, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_CONFIGERR);
     hazeGetLastError();
-
-    REQUIRE(hazeFree(d_src) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeIsHalfModulus rejects an even modulus", "[unit]") {
+    // 2 is the only prime the config accepts that the odd-centering guard
+    // must still reject.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {kEvenModulus, kQ0};
+    const uint64_t moduli[] = {2, kQ0};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 2};
     REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
 
@@ -175,11 +137,10 @@ TEST_CASE("hazeIsHalfModulus rejects an even modulus", "[unit]") {
     std::vector<uint64_t> a(kRingDim, 1);
     REQUIRE(hazeMemcpy(d_src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    // mod_idx 0 names the even modulus: rejected. An even value is also never
-    // selectable as aux (it fails the primality check).
+    // mod_idx 0 names the even prime: rejected by the odd-centering guard.
     REQUIRE(hazeIsHalfModulus(d_dst, d_src, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
-    const uint64_t base[] = {kEvenModulus};
+    const uint64_t base[] = {2};
     void *dst_polys[] = {d_dst};
     const void *src_polys[] = {d_src};
     REQUIRE(hazeIsHalfModulusMrp(dst_polys, src_polys, base, 1, nullptr) ==
@@ -289,7 +250,13 @@ TEST_CASE("hazeIsHalfModulus with invalid modulus index returns error", "[unit]"
     REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
 }
 
-TEST_CASE("hazeIsHalfModulus without a second configured modulus returns error", "[unit]") {
+TEST_CASE("hazeIsHalfModulus: a single data modulus works via the generated aux", "[integration]") {
+    haze::test::setup_integration_compute_config(kRingDim, kQ0);
+    run_golden_case(kQ0, /*mod_idx=*/0, /*seed=*/343434ULL);
+}
+
+TEST_CASE("hazeIsHalfModulus rejects mod_idx naming the aux slot", "[unit]") {
+    // {kQ0} configures as {kQ0, aux}; the aux entry is not a data modulus.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const uint64_t moduli[] = {kQ0};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
@@ -302,8 +269,7 @@ TEST_CASE("hazeIsHalfModulus without a second configured modulus returns error",
     std::vector<uint64_t> a(kRingDim, 1);
     REQUIRE(hazeMemcpy(d_src, a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
 
-    // mod_idx 0 is valid; the failure is the missing aux modulus.
-    REQUIRE(hazeIsHalfModulus(d_dst, d_src, 0, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeIsHalfModulus(d_dst, d_src, 1, nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     REQUIRE(hazeFree(d_src) == HAZE_SUCCESS);
@@ -382,12 +348,12 @@ std::filesystem::path record_ihm_program(const std::string &program_name, bool m
     return std::filesystem::path{program_name};
 }
 
-// Immediates of the lowering for q = kQ0, p = kQ1 (aux = lowest index != 0):
+// Immediates of the lowering for q = kQ0 against the generated aux kSmallQ:
 // h (subps + gadget shifts), -h mod p (gadget unshifts, exactly twice),
 // h mod p (the +h re-add), qinv (the final scale).
 void check_ihm_trace_shape(const std::string &trace, bool four_op) {
     const uint64_t q = kQ0;
-    const uint64_t p = kQ1;
+    const uint64_t p = kSmallQ;
     const uint64_t h = (q - 1) / 2;
     const uint64_t neg_half = p - (h % p);
     const uint64_t qinv = niobium::mod_arith::modinv_prime(q % p, p);
@@ -558,7 +524,7 @@ void check_ihm_mrp_results(const std::vector<uint64_t> &base, uint64_t seed,
 
 } // namespace
 
-TEST_CASE("hazeIsHalfModulusMrp: per-limb golden values, shared configured aux", "[integration]") {
+TEST_CASE("hazeIsHalfModulusMrp: per-limb golden values, shared generated aux", "[integration]") {
     const std::vector<uint64_t> base =
         haze::test::setup_integration_mrp3_config(kRingDim, kQ0); // {kQ0, kQ1, kQ2}
     const std::vector<uint64_t> limb_base = {base[0], base[1]};
@@ -575,7 +541,6 @@ TEST_CASE("hazeIsHalfModulusMrp: per-limb golden values, shared configured aux",
         haze::test::free_all_residues(d_tmp);
     }
 
-    // Auto-selected aux = base[2] (kQ2), the lowest configured index not in the base.
     check_ihm_mrp_results(limb_base, /*seed=*/818181ULL,
                           run_ihm_mrp(limb_base, /*seed=*/818181ULL));
 }
@@ -606,37 +571,20 @@ TEST_CASE("hazeIsHalfModulusMrp: in-place dst == src", "[integration]") {
     haze::test::free_all_residues(d_x);
 }
 
-TEST_CASE("hazeIsHalfModulusMrp: small auto-selected aux (h >= p per limb)", "[integration]") {
-    // Config {kSmallQ, kQ1, kQ2} with base {kQ1, kQ2}: the auto-selected aux is
-    // kSmallQ (lowest configured index not in the base), exercising h >= p
-    // immediate reduction on every limb.
-    haze::test::setup_integration_mrp3_config(kRingDim, kSmallQ);
+TEST_CASE("hazeIsHalfModulusMrp: generated aux (h >= p per limb)", "[integration]") {
+    // The generated ~2^30 aux serves 59-bit limbs with h >= p immediate
+    // reduction on every limb.
+    haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
     const std::vector<uint64_t> limb_base = {kQ1, kQ2};
     check_ihm_mrp_results(limb_base, /*seed=*/828282ULL,
                           run_ihm_mrp(limb_base, /*seed=*/828282ULL));
 }
 
-TEST_CASE("hazeIsHalfModulusMrp: aux selection skips a composite chain entry", "[integration]") {
-    // {kQ0, 2*kQ0+1 (composite), kQ2} with base {kQ0}: aux must skip the
-    // composite and select kQ2.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const uint64_t moduli[] = {kQ0, kCompositeAux, kQ2};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-    const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-    const std::vector<uint64_t> limb_base = {kQ0};
-    check_ihm_mrp_results(limb_base, /*seed=*/131313ULL,
-                          run_ihm_mrp(limb_base, /*seed=*/131313ULL));
-}
-
 TEST_CASE("hazeIsHalfModulusMrp: base prime outside the configured chain", "[integration]") {
     // Base primes are caller-defined raw values (registered through the trace's
-    // modulus table); only the aux comes from the configuration. Config
-    // {kQ0, kQ1, kQ2} with base {kSmallQ, kQ1} auto-selects aux = kQ0.
+    // modulus table); the generated aux serves them all the same.
     haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
-    const std::vector<uint64_t> limb_base = {kSmallQ, kQ1};
+    const std::vector<uint64_t> limb_base = {kCongruentQ, kQ1};
     check_ihm_mrp_results(limb_base, /*seed=*/868686ULL,
                           run_ihm_mrp(limb_base, /*seed=*/868686ULL));
 }
@@ -661,11 +609,11 @@ TEST_CASE("hazeIsHalfModulusMrp rejects invalid arguments", "[unit]") {
             HAZE_ERROR_INVALID_VALUE);
     REQUIRE(hazeIsHalfModulusMrp(dst_polys, src_polys, base, 0, nullptr) ==
             HAZE_ERROR_INVALID_VALUE);
-    // Base covering every configured modulus leaves no aux prime to select.
-    const uint64_t full_base[] = {kQ0, kQ1, kQ2};
-    void *dst3[] = {d_a, d_b, d_a};
-    const void *src3[] = {d_a, d_b, d_a};
-    REQUIRE(hazeIsHalfModulusMrp(dst3, src3, full_base, 3, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    // A base containing the generated aux prime is rejected (p must differ
+    // from every limb modulus).
+    const uint64_t aux_base[] = {kQ0, kSmallQ};
+    REQUIRE(hazeIsHalfModulusMrp(dst_polys, src_polys, aux_base, 2, nullptr) ==
+            HAZE_ERROR_INVALID_VALUE);
     // Bad src residues surface from the source-resolution path (same lookup as
     // build_mrp_locked): allocated-but-unwritten reports SOURCE_UNAVAILABLE,
     // null reports UNKNOWN_ADDRESS. d_a is written before the null case so
