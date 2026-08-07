@@ -457,6 +457,9 @@ add_executable(haze_tests
   test/e2e/test_openfhe_rotate_e2e.cpp
   test/e2e/test_basic_operations_sequential_e2e.cpp
   test/e2e/test_ops_ctx_params_e2e.cpp
+  # One atomic op per case, pinned at ring 65536 (the dimension FOG accepts),
+  # for per-op hardware timing. Tagged [atomic-timing].
+  test/e2e/test_atomic_ops_timing_e2e.cpp
   # Same compiled code as libhaze.so, linked directly — NOT the shipped
   # libhaze.so, whose version script hides the internal symbols these tests use.
   $<TARGET_OBJECTS:haze_objs>
