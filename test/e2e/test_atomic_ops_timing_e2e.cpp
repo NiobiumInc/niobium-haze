@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <iomanip>
@@ -368,4 +369,128 @@ TEST_CASE("atomic timing mult-no-relin ring65536", "[integration][e2e][atomic-ti
     }
 
     report("mult-no-relin", "FIXEDMANUAL", towers, us);
+}
+
+// ---------------------------------------------------------------------------
+// Regime 1: N back-to-back ops over a rotating pool of P accumulators.
+//
+// Every result is consumed by the next use of its accumulator, so nothing is a
+// dead store the compiler could eliminate, and the live set is 3P buffers —
+// trivially inside the 64-register file, so nothing spills. That is what makes
+// this shape expressible through haze at all: the compiler owns register
+// allocation, and the only way to keep operands resident is to keep the live
+// set small while leaving every value used.
+//
+// Consecutive ops are independent; the dependency distance is P. Sweeping P
+// therefore measures how far apart the dependent uses must be to hide the
+// pipeline.
+//
+// Ping-pong (A -> B -> A) rather than in-place accumulation: dst/src aliasing
+// is not documented in the MRP ABI, so it is avoided rather than assumed.
+//
+// Configured by environment so one binary covers op x N x P:
+//   REGIME1_OP   add | mul | ntt | morph   (default add)
+//   REGIME1_N    total ops                 (default 1000)
+//   REGIME1_POOL accumulators              (default 4)
+TEST_CASE("regime1 accumulator sweep ring65536", "[integration][e2e][regime1]") {
+    using namespace lbcrypto;
+
+    auto env_or = [](const char *name, const char *fallback) {
+        const char *v = std::getenv(name);
+        return std::string(v && v[0] ? v : fallback);
+    };
+    const std::string op = env_or("REGIME1_OP", "add");
+    const std::size_t total = static_cast<std::size_t>(std::stoul(env_or("REGIME1_N", "1000")));
+    const std::size_t pool = static_cast<std::size_t>(std::stoul(env_or("REGIME1_POOL", "4")));
+    REQUIRE(total >= pool);
+    REQUIRE(pool >= 1);
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    auto ctx = make_pinned_ctx(kMode, false, {});
+
+    // One residue per buffer: a single-modulus MRP op is one instruction's worth
+    // of work, which is the unit the ISA-level harness counts.
+    const std::vector<std::uint64_t> base = {ctx.q_base.front()};
+    const std::size_t bytes = ctx.poly_bytes;
+
+    // Deterministic operands, mod q. The GPU side must generate these with the
+    // same formula: the two machines' outputs are compared to each other, so a
+    // mismatch in inputs shows up as a mismatch in results.
+    auto make_poly = [&](std::size_t idx) {
+        std::vector<std::uint64_t> v(kRing);
+        std::uint64_t x = 0x9E3779B97F4A7C15ULL * (idx + 1);
+        for (std::size_t i = 0; i < kRing; ++i) {
+            x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+            v[i] = x % base[0];
+        }
+        return std::vector<std::vector<std::uint64_t>>{v};
+    };
+
+    std::vector<std::vector<void *>> in, acc_a, acc_b;
+    for (std::size_t p = 0; p < pool; ++p) {
+        in.push_back(haze::test::allocate_and_h2d_residues(make_poly(p)));
+        acc_a.push_back(haze::test::allocate_and_h2d_residues(make_poly(pool + p)));
+        acc_b.push_back(haze::test::allocate_dst_residues(1, bytes));
+    }
+
+    INFO("op=" << op << " N=" << total << " pool=" << pool);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    for (std::size_t n = 0; n < total; ++n) {
+        const std::size_t i = n % pool;
+        const bool even_round = ((n / pool) % 2) == 0;
+        auto &src = even_round ? acc_a[i] : acc_b[i];
+        auto &dst = even_round ? acc_b[i] : acc_a[i];
+        const auto src_c = haze::test::to_const(src);
+        const auto in_c = haze::test::to_const(in[i]);
+        if (op == "add") {
+            REQUIRE(hazeAddMrp(dst.data(), src_c.data(), in_c.data(), base.data(), base.size(),
+                               nullptr) == HAZE_SUCCESS);
+        } else if (op == "mul") {
+            REQUIRE(hazeMulMrp(dst.data(), src_c.data(), in_c.data(), base.data(), base.size(),
+                               nullptr) == HAZE_SUCCESS);
+        } else if (op == "ntt") {
+            REQUIRE(hazeNTTMrp(dst.data(), src_c.data(), base.data(), base.size(), nullptr) ==
+                    HAZE_SUCCESS);
+        } else if (op == "morph") {
+            REQUIRE(hazeAutomorphMrp(dst.data(), src_c.data(), 5, base.data(), base.size(),
+                                     nullptr) == HAZE_SUCCESS);
+        } else {
+            FAIL("unknown REGIME1_OP: " << op);
+        }
+    }
+    const double record_us =
+        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+
+    // The live results after the last round are the outputs.
+    const bool last_round_even = (((total - 1) / pool) % 2) == 0;
+    auto &final_acc = last_round_even ? acc_b : acc_a;
+    for (std::size_t p = 0; p < pool; ++p) {
+        REQUIRE(hazeTagOutput(final_acc[p][0]) == HAZE_SUCCESS);
+    }
+
+    const double flush_wall = flush_us([&] { REQUIRE(hazeFlush() == HAZE_SUCCESS); });
+
+    // Checksum every output so the GPU run can be compared without shipping
+    // 512 KiB per accumulator around.
+    std::uint64_t checksum = 0;
+    for (std::size_t p = 0; p < pool; ++p) {
+        std::vector<std::uint64_t> host(kRing);
+        REQUIRE(hazeMemcpy(host.data(), final_acc[p][0], bytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+        for (std::uint64_t v : host) {
+            checksum = checksum * 1000003ULL + v;
+        }
+    }
+
+    for (std::size_t p = 0; p < pool; ++p) {
+        haze::test::free_all_residues(in[p]);
+        haze::test::free_all_residues(acc_a[p]);
+        haze::test::free_all_residues(acc_b[p]);
+    }
+
+    std::cout << "[REGIME1] backend=haze op=" << op << " n=" << total << " pool=" << pool
+              << " ring=" << kRing << " record_us=" << std::fixed << std::setprecision(1)
+              << record_us << " flush_us=" << flush_wall << " checksum=0x" << std::hex << checksum
+              << std::dec << std::endl;
 }
