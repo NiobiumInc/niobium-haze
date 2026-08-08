@@ -489,8 +489,11 @@ TEST_CASE("regime1 accumulator sweep ring65536", "[integration][e2e][regime1]") 
         haze::test::free_all_residues(acc_b[p]);
     }
 
+    // The modulus is emitted so the GPU side can build its Limb context on the
+    // SAME prime — the two checksums are only comparable if the arithmetic is.
     std::cout << "[REGIME1] backend=haze op=" << op << " n=" << total << " pool=" << pool
-              << " ring=" << kRing << " record_us=" << std::fixed << std::setprecision(1)
+              << " ring=" << kRing << " modulus=" << base[0]
+              << " record_us=" << std::fixed << std::setprecision(1)
               << record_us << " flush_us=" << flush_wall << " checksum=0x" << std::hex << checksum
               << std::dec << std::endl;
 }
