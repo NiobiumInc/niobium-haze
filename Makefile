@@ -314,7 +314,7 @@ test-readme: build ## Compile + run the README examples (C + C++) via the local 
 	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
 	 scripts/test_readme_examples.sh
 
-test: test-unit test-sim test-e2e test-isolation ## Run default test suites + isolation guard (no transport dependency)
+test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard (no transport dependency)
 
 test-all: test-unit test-sim test-e2e test-readme test-isolation test-transport ## Run everything (incl. README examples + transport path)
 
