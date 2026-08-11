@@ -155,7 +155,7 @@ Usage: make <target> [MODE=debug|release]
                         (requires NIOBIUM_COMPILER_ROOT)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
     test                Default: test-unit + test-sim + test-e2e + test-isolation
-    test-all            test + test-readme + test-transport
+    test-all            test + test-transport
 
   Cleanup:
     clean-runs          Remove test runs/ artifacts
@@ -316,7 +316,7 @@ test-readme: build ## Compile + run the README examples (C + C++) via the local 
 
 test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard (no transport dependency)
 
-test-all: test-unit test-sim test-e2e test-readme test-isolation test-transport ## Run everything (incl. README examples + transport path)
+test-all: test test-transport ## Run everything (transport path)
 
 # ==============================================================================
 # Cleanup
