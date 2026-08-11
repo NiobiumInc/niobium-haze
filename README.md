@@ -443,7 +443,9 @@ Test:
   test-e2e          E2E suite (public C ABI + stock OpenFHE, decrypt).
   test-readme       Compile + run the README examples (C + C++).
   test-transport    [integration] suite via nbcc_fhetch_replay
-                    (opt-in; requires NIOBIUM_COMPILER_ROOT).
+                    (opt-in; requires NIOBIUM_COMPILER_ROOT. Uses the
+                    compiler's build/ or dbuild/, preferring MODE's
+                    flavour; NIOBIUM_COMPILER_BUILD pins one).
   test-isolation    Assert libhaze exports only the haze* C ABI.
   test              Default: test-unit + test-sim + test-e2e + test-isolation.
   test-all          test + test-readme + test-transport.
@@ -469,7 +471,8 @@ Make variables and / or environment:
 | `OPENFHE_INSTALL_DIR`     | Where OpenFHE is installed (libs + headers).                                                                | `<fhetch>/vendor/lib/openfhe`.            |
 | `EXTERNAL_OPENFHE`        | `1` skips the OpenFHE build chain (caller supplies it via `OPENFHE_INSTALL_DIR`).                           | `0`.                                      |
 | `JSON_INCLUDE_DIR`        | `nlohmann/json` single-include directory.                                                                   | unset (use niobium-fhetch's vendor copy). |
-| `NIOBIUM_COMPILER_ROOT`   | Path to a `niobium-compiler` checkout containing `build/nbcc_fhetch_replay`. Required for `test-transport`. | unset.                                    |
+| `NIOBIUM_COMPILER_ROOT`   | Path to a `niobium-compiler` checkout containing `build/nbcc_fhetch_replay` (release) or `dbuild/nbcc_fhetch_replay` (debug). Required for `test-transport`. | unset.                   |
+| `NIOBIUM_COMPILER_BUILD`  | Compiler build dir to use verbatim, skipping the `build`/`dbuild` search. Same knob name as `niobium-client/scripts/fhetch_server.sh`. | unset (search, preferring `MODE`'s flavour).   |
 
 Runtime selector (consumed by `libhaze` itself, not the Makefile):
 
@@ -513,12 +516,15 @@ make test-haze-unit-release
 
 make test-haze-integration-release \
     NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
-# End-to-end transport round trip:
+# End-to-end transport round trip (scripts/test_haze_integration.sh
+# --mode=http):
 #   1. spawns build/src/fhetch_transport/nbcc_fhetch_replay_server,
 #   2. puts the client-side forwarder first on PATH,
 #   3. runs haze_tests "[integration]" with HAZE_TARGET=FUNC_SIM.
-# Differs from standalone `make test-transport`, which dispatches to
-# nbcc_fhetch_replay directly without the in-tree forwarder/server pair.
+# Differs from standalone `make test-transport` (--mode=direct), which
+# dispatches to nbcc_fhetch_replay directly without the in-tree
+# forwarder/server pair. Both modes resolve the compiler binary the same
+# way, so either accepts a debug-built compiler.
 
 make test-haze-release      # both of the above.
 make clean-haze             # drop build/vendor/niobium-haze/runs/ only.
@@ -629,9 +635,14 @@ tag plus environment:
   in-process FHETCH simulator (`HAZE_TARGET=local`). Validates real FHE math
   without an external binary or HTTP transport.
 - `test-transport` — same `[integration]` filter, but the recorded trace is
-  shipped over HTTP to a `niobium-compiler`-built `nbcc_fhetch_replay`.
-  Requires `NIOBIUM_COMPILER_ROOT` pointing at a checkout containing
-  `build/nbcc_fhetch_replay`.
+  executed by a `niobium-compiler`-built `nbcc_fhetch_replay` instead of the
+  in-process simulator. Requires `NIOBIUM_COMPILER_ROOT` pointing at a checkout
+  containing `build/nbcc_fhetch_replay` (release) or
+  `dbuild/nbcc_fhetch_replay` (debug); `MODE` decides which flavour is
+  preferred when both exist, and `NIOBIUM_COMPILER_BUILD` pins one outright.
+  Standalone (`--mode=direct`) dispatches to that binary directly; the
+  parent-driven `haze_transport_tests` ctest entry (`--mode=http`) routes the
+  same run through niobium-client's forwarder and server.
 
 ## Project structure
 
