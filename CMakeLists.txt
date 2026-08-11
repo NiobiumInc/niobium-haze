@@ -585,7 +585,7 @@ endif() # HAZE_BUILD_E2E_TESTS
 # ---------------------------------------------------------------------------
 
 option(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS
-       "Register haze_transport_tests (transport round-trip via nbcc_fhetch_replay). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-transport target invokes scripts/test_haze_integration_standalone.sh directly without needing this flag."
+       "Register haze_transport_tests (transport round-trip via nbcc_fhetch_replay). Default OFF so config-client-release works without NIOBIUM_COMPILER_ROOT. Turn ON to add the ctest entry; the Makefile's test-transport target runs the same script with --mode=direct and does not need this flag."
        OFF)
 
 # Unit suite: in-process, no server, no compiler-side binary.
@@ -624,19 +624,35 @@ endif()
 
 if(NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS)
   set(NIOBIUM_COMPILER_ROOT "" CACHE PATH
-      "Path to a niobium-compiler checkout with build/nbcc_fhetch_replay. Required when NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS=ON.")
+      "Path to a niobium-compiler checkout with build/nbcc_fhetch_replay (release) or dbuild/nbcc_fhetch_replay (debug). Required when NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS=ON.")
   if(NOT NIOBIUM_COMPILER_ROOT)
     message(FATAL_ERROR
       "NIOBIUM_CLIENT_HAZE_WITH_TRANSPORT_TESTS=ON requires "
       "-DNIOBIUM_COMPILER_ROOT=<path/to/niobium-compiler>")
   endif()
 
+  # Empty by default: the test script then searches the compiler's build/ and
+  # dbuild/, preferring the flavour matching HAZE_MODE below. Set to pin one.
+  set(NIOBIUM_COMPILER_BUILD "" CACHE PATH
+      "Compiler build dir holding nbcc_fhetch_replay, used verbatim instead of searching NIOBIUM_COMPILER_ROOT's build/ and dbuild/.")
+
+  # Prefer a compiler flavour matching this build's config. Only orders the
+  # search; the other flavour is still accepted as a fallback.
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_haze_transport_mode debug)
+  else()
+    set(_haze_transport_mode release)
+  endif()
+
+  # HAZE_TARGET is deliberately absent: the script owns it (FUNC_SIM via
+  # HAZE_TRANSPORT_TARGET), so the value lives in one place.
   add_test(NAME haze_transport_tests
            COMMAND
-             ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_haze_integration.sh)
+             ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_haze_integration.sh
+             --mode=http)
   set_tests_properties(haze_transport_tests PROPERTIES
     ENVIRONMENT
-      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_TARGET=FUNC_SIM")
+      "NIOBIUM_COMPILER_ROOT=${NIOBIUM_COMPILER_ROOT};NIOBIUM_COMPILER_BUILD=${NIOBIUM_COMPILER_BUILD};NIOBIUM_CLIENT_BUILD=${CMAKE_BINARY_DIR};HAZE_TEST_BIN=$<TARGET_FILE:haze_tests>;OPENFHE_LIB=${OPENFHE_LIBRARY_PATH};HAZE_MODE=${_haze_transport_mode}")
 endif()
 
 # Isolation proof: assert the shipped libhaze exports ONLY the haze* C ABI, so

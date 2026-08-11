@@ -123,7 +123,10 @@ make test                      # test-unit + test-sim (default)
 make test-unit                 # ~[integration] tag, HAZE_TARGET=local
 make test-sim                  # [integration] tag, in-process FHETCH simulator
 make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
-                               # [integration] via nbcc_fhetch_replay; opt-in
+                               # [integration] via nbcc_fhetch_replay; opt-in.
+                               # Takes the compiler's build/ or dbuild/,
+                               # preferring MODE's flavour; pin one with
+                               # NIOBIUM_COMPILER_BUILD=<dir>
 make test-all                  # everything including transport
 make clean                     # build, dbuild, OpenFHE outputs (only if owned)
 make help                      # full target list
@@ -145,7 +148,10 @@ Target dispatch is two-tier: `"local"` runs the in-process FHETCH simulator
 end-to-end; any other target string (`FUNC_SIM`, `FHE_SIM`, `FPGA_TRI`,
 `fhetch_sim`) is forwarded verbatim to `nbcc_fhetch_replay` over HTTP
 transport and requires `NIOBIUM_COMPILER_ROOT` to point at a compiler
-checkout with `build/nbcc_fhetch_replay`. Resolution order for the value
+checkout with `build/nbcc_fhetch_replay` or `dbuild/nbcc_fhetch_replay`
+(`scripts/test_haze_integration.sh` is the sole resolver of that path —
+keep new call sites going through it rather than re-deriving it).
+Resolution order for the value
 itself: explicit `hazeReplayConfig::target` > `HAZE_TARGET` env var > `"local"`
 default. `kLocalTarget` in `src/core/config.hpp` is the single source of
 truth for the local string literal — keep comparison sites going through

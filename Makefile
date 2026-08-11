@@ -18,10 +18,14 @@
 #                            OPENFHE_INSTALL_DIR at it; we skip the openfhe
 #                            build target chain.
 #   NIOBIUM_COMPILER_ROOT    Path to a niobium-compiler checkout containing
-#                            build/nbcc_fhetch_replay. Required for
+#                            build/nbcc_fhetch_replay (release) or
+#                            dbuild/nbcc_fhetch_replay (debug). Required for
 #                            test-transport; the compiler binary is invoked
 #                            directly (no HTTP transport from haze's
 #                            standalone path). No default.
+#   NIOBIUM_COMPILER_BUILD   Compiler build dir to use verbatim, skipping the
+#                            build/dbuild search. Default: unset (search,
+#                            preferring the flavour matching MODE).
 # ==============================================================================
 
 SHELL := /bin/bash
@@ -107,10 +111,17 @@ endif
 CMAKE_FHETCH_DIR_FLAG       := $(if $(NIOBIUM_HAZE_FHETCH_DIR),-DNIOBIUM_HAZE_FHETCH_DIR="$(NIOBIUM_HAZE_FHETCH_DIR)")
 
 # Path to a built niobium-compiler checkout (must contain
-# build/nbcc_fhetch_replay). Haze does NOT vendor the compiler — set this
-# explicitly when running transport-path tests:
+# build/nbcc_fhetch_replay or dbuild/nbcc_fhetch_replay). Haze does NOT vendor
+# the compiler — set this explicitly when running transport-path tests:
 #   make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
 NIOBIUM_COMPILER_ROOT ?=
+
+# Which of the compiler's build dirs to use. Left empty, the test script
+# searches build/ (release) and dbuild/ (debug), preferring the flavour that
+# matches MODE and falling back to the other. Set it to pin one exactly.
+# Resolution lives in scripts/test_haze_integration.sh — the only place the
+# nbcc_fhetch_replay path is spelled out.
+NIOBIUM_COMPILER_BUILD ?=
 
 # Per-test artifact runs dir (tests cd here so libnbfhetch's program_dir
 # resolves under build/ and not into the source tree).
@@ -125,6 +136,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
         test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
+        check-transport-prereqs \
         clean clean-runs
 
 # ==============================================================================
@@ -152,7 +164,9 @@ Usage: make <target> [MODE=debug|release]
     test-e2e            Run e2e suite (public C ABI + stock OpenFHE, decrypt)
     test-readme         Compile + run the README examples (C + C++)
     test-transport      Run integration suite via nbcc_fhetch_replay
-                        (requires NIOBIUM_COMPILER_ROOT)
+                        (requires NIOBIUM_COMPILER_ROOT; picks up the
+                        compiler's build/ or dbuild/, preferring MODE's
+                        flavour. Pin one with NIOBIUM_COMPILER_BUILD)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
     test                Default: test-unit + test-sim + test-e2e + test-isolation
     test-all            test + test-transport
@@ -279,23 +293,27 @@ test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE mat
 	@cd "$(HAZE_RUNS_DIR)" && \
 	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
 
-test-transport: build ## Run integration suite via nbcc_fhetch_replay (opt-in)
-	@if [ -z "$(NIOBIUM_COMPILER_ROOT)" ]; then \
-		echo "ERROR: NIOBIUM_COMPILER_ROOT is not set."; \
-		echo "Run: make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler"; \
-		exit 2; \
-	fi
-	@if [ ! -x "$(NIOBIUM_COMPILER_ROOT)/build/nbcc_fhetch_replay" ]; then \
-		echo "ERROR: nbcc_fhetch_replay not found at $(NIOBIUM_COMPILER_ROOT)/build/nbcc_fhetch_replay"; \
-		echo "Build it with: (cd $(NIOBIUM_COMPILER_ROOT) && make release)"; \
-		exit 2; \
-	fi
-	@HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_tests" \
-	 NIOBIUM_COMPILER_ROOT="$(NIOBIUM_COMPILER_ROOT)" \
-	 OPENFHE_LIB="$(OPENFHE_INSTALL_DIR)/lib" \
-	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
-	 HAZE_TRANSPORT_TARGET=FUNC_SIM \
-	 scripts/test_haze_integration_standalone.sh
+# Env shared by the two transport recipes below. The compiler binary is NOT
+# resolved here: scripts/test_haze_integration.sh owns that (and the error
+# messages for it), so the path exists in exactly one place. HAZE_MODE only
+# orders its build/dbuild search — the haze binary under test comes from
+# HAZE_TEST_BIN.
+TRANSPORT_ENV = \
+	HAZE_TEST_BIN="$(CURDIR)/$(BUILD_DIR)/haze_tests" \
+	NIOBIUM_COMPILER_ROOT="$(NIOBIUM_COMPILER_ROOT)" \
+	NIOBIUM_COMPILER_BUILD="$(NIOBIUM_COMPILER_BUILD)" \
+	OPENFHE_LIB="$(OPENFHE_INSTALL_DIR)/lib" \
+	HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
+	HAZE_MODE=$(MODE) \
+	HAZE_TRANSPORT_TARGET=FUNC_SIM
+
+# First prerequisite of test-transport, so a missing compiler binary is
+# reported before haze is built rather than after.
+check-transport-prereqs: ## Resolve + validate the compiler's nbcc_fhetch_replay
+	@$(TRANSPORT_ENV) scripts/test_haze_integration.sh --check
+
+test-transport: check-transport-prereqs build ## Run integration suite via nbcc_fhetch_replay (opt-in)
+	@$(TRANSPORT_ENV) scripts/test_haze_integration.sh --mode=direct
 
 test-isolation: build ## Assert libhaze.so exports only the haze* C ABI (no leaked OpenFHE symbols)
 	# --no-tests=error: fail loudly if the test isn't registered (e.g. a
