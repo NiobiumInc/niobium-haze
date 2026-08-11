@@ -119,7 +119,8 @@ binary that gets produced.
 ```sh
 make sync                      # init vendor/niobium-fhetch (recursive)
 make build                     # configure + build (debug; build/ for release)
-make test                      # test-unit + test-sim (default)
+make test                      # default: test-unit + test-sim + test-e2e
+                               # + test-isolation + test-readme
 make test-unit                 # ~[integration] tag, HAZE_TARGET=local
 make test-sim                  # [integration] tag, in-process FHETCH simulator
 make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler

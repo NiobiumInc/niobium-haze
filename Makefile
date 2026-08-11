@@ -2,11 +2,13 @@
 # Haze — standalone build entry
 # ==============================================================================
 # Build directory convention: dbuild/ for MODE=debug, build/ for MODE=release.
-# All targets honour MODE; defaults to release. See `make help`.
+# All targets honour MODE; defaults to debug. See `make help`.
 #
 # Override knobs (parent or user can supply):
 #   MODE                     debug | release. Selects build dir (dbuild|build)
-#                            and CMake config (Debug|Release). Default: release.
+#                            and CMake config (Debug|Release). Default: debug,
+#                            so local iteration gets asserts and usable
+#                            diagnostics; CI forces release.
 #   NUM_CPUS                 Build parallelism. Auto-detected from sysctl/nproc;
 #                            override to throttle.
 #   NIOBIUM_HAZE_FHETCH_DIR  External niobium-fhetch source tree to use instead
@@ -148,7 +150,7 @@ define HAZE_HELP_TEXT
 Usage: make <target> [MODE=debug|release]
 
   Build:
-    config              Configure haze (uses MODE; default: release)
+    config              Configure haze (uses MODE; default: debug)
     build               Build haze
     config-openfhe      Configure OpenFHE
     build-openfhe       Build and install OpenFHE locally
@@ -168,7 +170,8 @@ Usage: make <target> [MODE=debug|release]
                         compiler's build/ or dbuild/, preferring MODE's
                         flavour. Pin one with NIOBIUM_COMPILER_BUILD)
     test-isolation      Assert libhaze.so exports only the haze* C ABI
-    test                Default: test-unit + test-sim + test-e2e + test-isolation
+    test                Default: test-unit + test-sim + test-e2e +
+                        test-isolation + test-readme
     test-all            test + test-transport
 
   Cleanup:
@@ -332,7 +335,7 @@ test-readme: build ## Compile + run the README examples (C + C++) via the local 
 	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
 	 scripts/test_readme_examples.sh
 
-test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard (no transport dependency)
+test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard + README examples (no transport dependency)
 
 test-all: test test-transport ## Run everything (transport path)
 
