@@ -383,14 +383,16 @@ C ABI.
 
 ```sh
 git submodule update --init --recursive   # or: make sync
-make build MODE=release                   # Release into build/ (the default)
-make build MODE=debug                     # Debug   into dbuild/
+make build                                # Debug   into dbuild/ (the default)
+make build MODE=release                   # Release into build/
 ```
 
-`MODE` defaults to `release`, so a bare `make build` is equivalent to
-`make build MODE=release`. The same `MODE=` selector applies to every target
+`MODE` defaults to `debug`, so a bare `make build` is equivalent to
+`make build MODE=debug`; CI forces `MODE=release` so the gates exercise the
+optimization level that ships. The same `MODE=` selector applies to every target
 that produces or consumes build artefacts (`config`, `build`, `test`,
-`test-unit`, `test-sim`, `test-transport`, `test-all`, `clean`).
+`test-unit`, `test-sim`, `test-e2e`, `test-readme`, `test-isolation`,
+`test-transport`, `test-all`, `clean`).
 
 The top-level `Makefile` builds OpenFHE (vendored at
 `vendor/niobium-fhetch/vendor/openfhe`), installs it under
@@ -447,8 +449,9 @@ Test:
                     compiler's build/ or dbuild/, preferring MODE's
                     flavour; NIOBIUM_COMPILER_BUILD pins one).
   test-isolation    Assert libhaze exports only the haze* C ABI.
-  test              Default: test-unit + test-sim + test-e2e + test-isolation.
-  test-all          test + test-readme + test-transport.
+  test              Default: test-unit + test-sim + test-e2e +
+                    test-isolation + test-readme.
+  test-all          test + test-transport.
 
 Cleanup:
   clean-runs        Remove test runs/ artifacts.
@@ -465,7 +468,7 @@ Make variables and / or environment:
 
 | Variable                  | Purpose                                                                                                     | Default                                   |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `release`                                 |
+| `MODE`                    | `debug` or `release`. Selects `dbuild`/`build` and CMake `Debug`/`Release`.                                 | `debug` (CI forces `release`).            |
 | `NUM_CPUS`                | Build parallelism.                                                                                          | Auto (`sysctl -n hw.ncpu` / `nproc`).     |
 | `NIOBIUM_HAZE_FHETCH_DIR` | External `niobium-fhetch` source tree to use instead of `vendor/niobium-fhetch`.                            | unset (vendor submodule).                 |
 | `OPENFHE_INSTALL_DIR`     | Where OpenFHE is installed (libs + headers).                                                                | `<fhetch>/vendor/lib/openfhe`.            |
