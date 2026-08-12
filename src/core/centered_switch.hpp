@@ -20,7 +20,8 @@ namespace haze {
 // Centered modulus switch q -> p: c(v) = v mod p for v <= (q-1)/2, else
 // (v - q) mod p. Emits fhetch's center_mod_q_into_p ThreeOp shape so the
 // hardware replay driver recognizes the chain and substitutes its own
-// SwitchModulus; intermediates must stay single-use SSA values.
+// SwitchModulus; a shared intermediate breaks that match, so every
+// intermediate must stay a single-use SSA value.
 niobium::fhetch::Polynomial emit_centered_switch(const niobium::fhetch::Polynomial &v, uint64_t q,
                                                  uint64_t p) noexcept;
 
