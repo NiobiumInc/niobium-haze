@@ -33,16 +33,12 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// FBC mode from engine config: reduced_noise selects the centered variant,
-// montgomery selects the 4-op (hardware SwitchModulus) center shape.
+// FBC mode from engine config: reduced_noise selects the centered variant. The
+// center shape stays fhetch's ThreeOp default, which the hardware replay
+// driver's switchmod matcher recognizes just as well as the 4-op form.
 fhetch::FbcVariant fbc_variant() noexcept {
     return replay_config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
                                            : fhetch::FbcVariant::Standard;
-}
-
-fhetch::FbcCenterShape fbc_center_shape() noexcept {
-    return replay_config().montgomery() ? fhetch::FbcCenterShape::FourOp
-                                        : fhetch::FbcCenterShape::ThreeOp;
 }
 
 // Validation helpers; each returns InvalidArgument with a debug-log
@@ -166,12 +162,11 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     }
 
     const fhetch::ModuliBase target_base(p.dst_base, p.dst_base + p.dst_base_len);
-    // Thread config()'s FBC variant/shape (matching mod_down/mod_up) rather than
-    // the 2-arg fast_base_convert default (ReducedNoise/ThreeOp): with reduced_noise
-    // off this Standard lift composes byte-for-byte against a split rescale/keyswitch
+    // Thread config()'s FBC variant (matching mod_down/mod_up) rather than the
+    // 2-arg fast_base_convert default (ReducedNoise): with reduced_noise off this
+    // Standard lift composes byte-for-byte against a split rescale/keyswitch
     // mod-down, and with it on tracks the centered variant automatically.
-    fhetch::MRP result =
-        fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant(), fbc_center_shape());
+    fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant());
     return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
 }
 
@@ -191,8 +186,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result =
-        fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant(), fbc_center_shape());
+    fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant());
     // result.base() == src_base \ rescale_base in original order; use it directly
     // so HAZE-side and backend-side agree on the dst layout.
     const auto &dst_base = result.base();
@@ -235,8 +229,8 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
     fhetch::ModuliBase target_base = x.base();
     target_base.insert(target_base.end(), p_base.begin(), p_base.end());
     for (size_t d = 0; d < p.digit_count; ++d) {
-        const fhetch::MRP digit = fhetch::fast_base_convert(
-            fhetch::mr_subset(x, digit_bases[d]), target_base, fbc_variant(), fbc_center_shape());
+        const fhetch::MRP digit = fhetch::fast_base_convert(fhetch::mr_subset(x, digit_bases[d]),
+                                                            target_base, fbc_variant());
         const auto &d_base = digit.base();
         auto stored =
             store_mrp_locked(dst + (d * d_base.size()), digit, d_base.data(), d_base.size());

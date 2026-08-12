@@ -127,8 +127,11 @@ make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
                                # [integration] via nbcc_fhetch_replay; opt-in.
                                # Takes the compiler's build/ or dbuild/,
                                # preferring MODE's flavour; pin one with
-                               # NIOBIUM_COMPILER_BUILD=<dir>
-make test-all                  # everything including transport
+                               # NIOBIUM_COMPILER_BUILD=<dir>. Override the
+                               # device with HAZE_TRANSPORT_TARGET=<id>
+make test-transport-hw NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
+                               # same suite against func_sim_hw (Montgomery)
+make test-all                  # everything including both transport modes
 make clean                     # build, dbuild, OpenFHE outputs (only if owned)
 make help                      # full target list
 ```
@@ -160,9 +163,33 @@ that constant.
 
 ### Test success criterion
 
-A change is considered green when both `make test-sim` (in-process FHETCH
-simulator) and `make test-transport NIOBIUM_COMPILER_ROOT=...` (HTTP transport
-to `nbcc_fhetch_replay`) exit 0 with Catch2 reporting no unexpected failures.
+A change is considered green when `make test-sim` (in-process FHETCH simulator),
+`make test-transport NIOBIUM_COMPILER_ROOT=...` (HTTP transport to
+`nbcc_fhetch_replay`, ordinary-form `FUNC_SIM`), and `make test-transport-hw
+NIOBIUM_COMPILER_ROOT=...` (the same suite against `func_sim_hw`, whose device
+spec sets `montgomery_enabled: true`) all exit 0 with Catch2 reporting no
+unexpected failures.
+
+The last of those is what keeps haze honest about data formats. haze records
+ordinary-form traces for every target and the replay driver applies any hardware
+transform itself, so the two transport runs assert the same oracles and must
+agree. Two documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
+`test-transport-hw`), via the helpers in `integration_helpers.hpp`:
+
+- `skip_if_hw_elision` — `hazeBroadcast*Mrp` with `operand_in_range` set. The
+  elision reuses the operand's word at another prime, which a hardware target
+  cannot reproduce because it holds every value as `v*R mod p` — including a
+  `hazeIsHalfModulus` mask, whose set bits are stored as `R mod p_aux`, not 1.
+  Setting the flag makes a recording ordinary-form-target only.
+- `skip_if_hw_coefficient_input` — cases that upload COEFFICIENT-form bytes and
+  transform them in-trace. haze declares every H2D input evaluation form (the C
+  ABI has no format tag), and the driver bit-reverses inputs on load, which
+  scrambles coefficient-form bytes before their NTT. See the input-format
+  contract on `hazeNTT` in `haze.h`. Real CKKS workloads are unaffected —
+  ciphertext limbs are already evaluation form. Elementwise ops commute with the
+  permutation and symmetric round-trips cancel it, so only direction-sensitive
+  checks against a coefficient-domain oracle are affected, and only on the SRP
+  raw-memory input path (the MRP arms are observed to pass; why is untraced).
 
 Sanitizers are mutually exclusive `cmake` cache options:
 `-DHAZE_SANITIZERS=ON` (ASAN+UBSAN) or `-DHAZE_TSAN=ON`. UBSAN's enum check

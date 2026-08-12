@@ -69,15 +69,15 @@ class FheParams {
     std::vector<uint64_t> twiddle_generators_; // stored for the trace; no reader yet
 };
 
-// Immutable hardware/replay configuration (target + program metadata + the
-// data-format toggles): a thin owning wrapper over the caller's hazeReplayConfig,
-// copied by create(). Read at backend bring-up, replay dispatch, and compute.
+// Immutable replay configuration (target + program metadata + the FBC variant):
+// a thin owning wrapper over the caller's hazeReplayConfig, copied by create().
+// Read at backend bring-up, replay dispatch, and compute.
 class ReplayConfig {
   public:
     // Copy the caller's struct into an immutable config; a NULL field keeps its
-    // default and a NULL struct yields all defaults. Infallible — montgomery/
-    // bit-reversal on a local target is an execution-compatibility concern checked
-    // at bring-up against the built config, not a config invariant.
+    // default and a NULL struct yields all defaults. Infallible — every field is
+    // either a string or an independent flag, so there is no cross-field invariant
+    // to reject.
     static ReplayConfig create(const hazeReplayConfig *raw) noexcept;
 
     ReplayConfig() = default; // defaults (target "local", program "haze"/"0.1"/...)
@@ -89,8 +89,6 @@ class ReplayConfig {
     const std::string &program_description() const noexcept { return program_description_; }
     bool has_program_directory() const noexcept { return program_dir_set_; }
     const std::string &program_directory() const noexcept { return program_dir_; }
-    bool montgomery() const noexcept { return montgomery_; }
-    bool bit_reversal() const noexcept { return bit_reversal_; }
     bool reduced_noise() const noexcept { return reduced_noise_; }
 
   private:
@@ -100,8 +98,6 @@ class ReplayConfig {
     std::string program_description_ = "HAZE runtime";
     std::string program_dir_;
     bool program_dir_set_ = false;
-    bool montgomery_ = false;
-    bool bit_reversal_ = false;
     bool reduced_noise_ = false;
 };
 

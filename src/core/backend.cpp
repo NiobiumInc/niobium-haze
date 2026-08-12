@@ -32,10 +32,10 @@ namespace haze {
 namespace {
 
 // Bring niobium::compiler() up from the frozen ReplayConfig (target, program
-// info, pinned directory, format flags), running the vendor init sequence once.
-// ensure_initialized is the sole caller and owns the idempotence guard, the
-// config-finalized precondition, and the montgomery/local compat check; this may
-// throw (vendor init), and that caller contains it.
+// info, pinned directory), running the vendor init sequence once.
+// ensure_initialized is the sole caller and owns the idempotence guard and the
+// config-finalized precondition; this may throw (vendor init), and that caller
+// contains it.
 void bootstrap_compiler() {
     const ReplayConfig &rc = replay_config();
     const std::string &program_name = rc.program_name();
@@ -46,24 +46,12 @@ void bootstrap_compiler() {
     // copies argv during the call, so function-local storage is safe.
     std::string prog_storage = program_name;
     std::string target_arg_storage = "--target=" + rc.target();
-    std::string montgomery_arg_storage = "--montgomery";
-    std::string bitrev_arg_storage = "--bit_reversal";
     std::string no_ring_check_storage = "--no-ring-dim-check";
     std::string no_prime_check_storage = "--no-prime-check";
-    // prog + --target + up to two optional format flags + the two always-on skip
-    // flags (--no-ring-dim-check, --no-prime-check) + NULL terminator = 7 slots.
-    char *argv[7] = {prog_storage.data(),
-                     target_arg_storage.data(),
-                     nullptr,
-                     nullptr,
-                     nullptr,
-                     nullptr,
-                     nullptr};
+    // prog + --target + the two always-on skip flags (--no-ring-dim-check,
+    // --no-prime-check) + NULL terminator = 5 slots.
+    char *argv[5] = {prog_storage.data(), target_arg_storage.data(), nullptr, nullptr, nullptr};
     int argc = 2;
-    if (rc.montgomery())
-        argv[argc++] = montgomery_arg_storage.data();
-    if (rc.bit_reversal())
-        argv[argc++] = bitrev_arg_storage.data();
     // Hardware ring-dim/prime compatibility is the compiler's job at
     // dispatch; the record/replay bridge always skips those checks.
     argv[argc++] = no_ring_check_storage.data();
@@ -101,16 +89,6 @@ std::expected<void, HazeInternalError> CompilerBackend::ensure_initialized() noe
                               "CompilerBackend::ensure_initialized: hazeConfigureDevice() "
                               "not called before first compute");
         return std::unexpected(HazeInternalError::NotConfigured);
-    }
-
-    // The local simulator runs ordinary-form traces only; reject the
-    // Montgomery / bit-reversal toggles here so the error names the real cause.
-    const ReplayConfig &rc = replay_config();
-    if ((rc.montgomery() || rc.bit_reversal()) && rc.target_is_local()) {
-        record_internal_error(HazeInternalError::UnsupportedDataFormat,
-                              "CompilerBackend::ensure_initialized (montgomery/bit_reversal "
-                              "require a transport target such as FUNC_SIM)");
-        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
     }
 
     // niobium::compiler() can throw (bad_alloc, config errors); catch here

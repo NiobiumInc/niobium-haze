@@ -1,7 +1,7 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
 // hazeIsHalfModulus / hazeIsHalfModulusMrp tests: [unit] validation and
-// trace-shape pinning, [integration] golden values, [hwfmt] transport cases.
+// trace-shape pinning, [integration] golden values.
 
 #include "integration_helpers.hpp"
 #include "mod_arith_ref.hpp"
@@ -18,7 +18,6 @@
 #include <haze/replay_bridge.h>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -277,9 +276,8 @@ TEST_CASE("hazeIsHalfModulus rejects mod_idx naming the aux slot", "[unit]") {
 }
 
 // ===========================================================================
-// Record-time trace shape ([unit][hwfmt]): the emitted instruction sequence and
-// its ordinary-form immediates are a replay-driver contract (the montgomery
-// path structurally recognizes the centered-switch quadruples), so pin them.
+// Record-time trace shape ([unit]): the emitted sequence and its ordinary-form
+// immediates are a replay-driver contract, so pin them.
 // ===========================================================================
 
 namespace {
@@ -293,8 +291,7 @@ std::string slurp(const std::filesystem::path &path) {
 }
 
 // JSON value text after `"key":` (up to comma/newline/brace), trimmed; string
-// search keeps the test free of a JSON library dependency (same approach as
-// test_hardware_format.cpp).
+// search keeps the test free of a JSON library dependency.
 std::string json_value_text(const std::string &doc, const std::string &key) {
     const std::string needle = "\"" + key + "\"";
     const std::size_t key_pos = doc.find(needle);
@@ -318,19 +315,16 @@ std::size_t count_occurrences(const std::string &haystack, const std::string &ne
     return count;
 }
 
-// Record one hazeIsHalfModulus(mod_idx=0) into a uniquely named program dir
-// (target FUNC_SIM so the format toggles are accepted; hazeWriteProgram needs
-// no replay binary) and return the program directory.
-std::filesystem::path record_ihm_program(const std::string &program_name, bool montgomery,
-                                         bool bit_reversal) {
+// Record one hazeIsHalfModulus(mod_idx=0) into a uniquely named program dir and
+// return it. The non-local target keeps this off the in-process simulator path;
+// hazeWriteProgram never replays, so no compiler binary is needed.
+std::filesystem::path record_ihm_program(const std::string &program_name) {
     const uint64_t moduli[] = {kQ0, kQ1, kQ2};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
     const hazeReplayConfig replay = {.target = "FUNC_SIM",
                                      .program_name = program_name.c_str(),
                                      .program_version = "0.1",
                                      .program_description = "is_half_modulus trace-shape test",
-                                     .montgomery = montgomery ? 1 : 0,
-                                     .bit_reversal = bit_reversal ? 1 : 0,
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t scaffold = 0;
@@ -351,7 +345,7 @@ std::filesystem::path record_ihm_program(const std::string &program_name, bool m
 // Immediates of the lowering for q = kQ0 against the generated aux kSmallQ:
 // h (subps + gadget shifts), -h mod p (gadget unshifts, exactly twice),
 // h mod p (the +h re-add), qinv (the final scale).
-void check_ihm_trace_shape(const std::string &trace, bool four_op) {
+void check_ihm_trace_shape(const std::string &trace) {
     const uint64_t q = kQ0;
     const uint64_t p = kSmallQ;
     const uint64_t h = (q - 1) / 2;
@@ -363,117 +357,22 @@ void check_ihm_trace_shape(const std::string &trace, bool four_op) {
     REQUIRE(trace.find(", " + std::to_string(h % p) + ",") != std::string::npos);
     REQUIRE(trace.find(", " + std::to_string(qinv) + ",") != std::string::npos);
 
-    // Montgomery-form immediates never appear client-side; the driver
-    // substitutes them at replay.
-    const auto sw_hw = niobium::mod_arith::compute_switchmodulus_immediates(q, p,
-                                                                            /*montgomery=*/true);
-    REQUIRE(trace.find(", " + std::to_string(sw_hw.imm[2]) + ",") == std::string::npos);
-    REQUIRE(trace.find(", " + std::to_string(sw_hw.imm[3]) + ",") == std::string::npos);
-
-    // Opcode census of the 10-op (ThreeOp) / 12-op (FourOp montgomery) lowering.
+    // Opcode census of the 10-op (ThreeOp) lowering.
     CHECK(count_occurrences(trace, "sr_subps ") == 1);
     CHECK(count_occurrences(trace, "sr_addps ") == 5);
-    CHECK(count_occurrences(trace, "sr_mulps ") == (four_op ? 5U : 3U));
+    CHECK(count_occurrences(trace, "sr_mulps ") == 3);
     CHECK(count_occurrences(trace, "sr_subp ") == 1);
 }
 
 } // namespace
 
-TEST_CASE("hazeIsHalfModulus record-time: ordinary-form ThreeOp trace", "[unit][hwfmt]") {
+// The recording is ordinary-form for every target; the driver recomputes its own
+// Montgomery constants when it substitutes the switchmod block.
+TEST_CASE("hazeIsHalfModulus record-time: ordinary-form ThreeOp trace", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto dir = record_ihm_program("haze_ihm_threeop", /*montgomery=*/false,
-                                        /*bit_reversal=*/false);
-    check_ihm_trace_shape(slurp(dir / "haze_ihm_threeop.fhetch"), /*four_op=*/false);
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeIsHalfModulus record-time: montgomery keeps ordinary immediates, FourOp shape",
-          "[unit][hwfmt]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto dir = record_ihm_program("haze_ihm_fourop", /*montgomery=*/true,
-                                        /*bit_reversal=*/true);
-    check_ihm_trace_shape(slurp(dir / "haze_ihm_fourop.fhetch"), /*four_op=*/true);
-    // niobium_hw describes the recording (always ordinary-form); the dispatch
-    // flag alone carries the replay-side format selection.
+    const auto dir = record_ihm_program("haze_ihm_threeop");
+    check_ihm_trace_shape(slurp(dir / "haze_ihm_threeop.fhetch"));
     REQUIRE(json_value_text(slurp(dir / "fhetch_replay.json"), "niobium_hw") == "false");
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-}
-
-// ===========================================================================
-// Transport hardware mode ([integration][hwfmt]: requires make test-transport).
-// Montgomery + bit-reversal are exact bijections decoded before probes are
-// written, so results must be byte-identical to ordinary mode — the A/B case is
-// the end-to-end gate that the driver recognizes the hand-emitted gadget
-// quadruples and substitutes SwitchModulus correctly.
-// ===========================================================================
-
-namespace {
-
-bool transport_target_active() {
-    const char *target = std::getenv("HAZE_TARGET");
-    return target != nullptr && target[0] != '\0' && std::string_view{target} != "local";
-}
-
-// Record + flush one hazeIsHalfModulus(mod_idx=0) through the transport under
-// the given data-format toggles (default shared "haze" program dir) and return
-// the D2H result.
-std::vector<uint64_t> run_ihm_computation(const char *target, bool montgomery, bool bit_reversal) {
-    const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-    const hazeReplayConfig replay = {.target = target,
-                                     .montgomery = montgomery ? 1 : 0,
-                                     .bit_reversal = bit_reversal ? 1 : 0,
-                                     .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-
-    const std::vector<uint64_t> input = boundary_input(kQ0, /*seed=*/909090ULL);
-    void *d_src = nullptr;
-    void *d_dst = nullptr;
-    REQUIRE(hazeMalloc(&d_src, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&d_dst, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(d_src, input.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeIsHalfModulus(d_dst, d_src, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(d_dst) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
-
-    std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL);
-    REQUIRE(hazeMemcpy(got.data(), d_dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_src) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(d_dst) == HAZE_SUCCESS);
-    return got;
-}
-
-} // namespace
-
-TEST_CASE("hazeIsHalfModulus transport: byte-exact vs oracle under data format",
-          "[integration][hwfmt]") {
-    if (!transport_target_active())
-        SKIP("data format requires a transport target (run under make test-transport)");
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-
-    const auto got = run_ihm_computation(haze::test::target_from_env(), /*montgomery=*/true,
-                                         /*bit_reversal=*/true);
-    const std::vector<uint64_t> input = boundary_input(kQ0, /*seed=*/909090ULL);
-    for (std::size_t k = 0; k < kRingDim; ++k) {
-        INFO("slot " << k << " input " << input[k]);
-        REQUIRE(got[k] == is_half_ref(input[k], kQ0));
-    }
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeIsHalfModulus transport: A/B byte-exact vs ordinary mode", "[integration][hwfmt]") {
-    if (!transport_target_active())
-        SKIP("data format requires a transport target (run under make test-transport)");
-
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto ordinary = run_ihm_computation(haze::test::target_from_env(), /*montgomery=*/false,
-                                              /*bit_reversal=*/false);
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const auto encoded = run_ihm_computation(haze::test::target_from_env(), /*montgomery=*/true,
-                                             /*bit_reversal=*/true);
-    REQUIRE(ordinary == encoded);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
@@ -640,40 +539,6 @@ TEST_CASE("hazeIsHalfModulusMrp rejects invalid arguments", "[unit]") {
 
     REQUIRE(hazeFree(d_a) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_b) == HAZE_SUCCESS);
-}
-
-TEST_CASE("hazeIsHalfModulusMrp transport: A/B byte-exact vs ordinary mode",
-          "[integration][hwfmt]") {
-    if (!transport_target_active())
-        SKIP("data format requires a transport target (run under make test-transport)");
-
-    // Two arms: a partial base and one spanning the whole data chain (the case
-    // only the generated aux can serve).
-    const std::vector<std::vector<uint64_t>> bases = {{kQ0, kQ1}, {kQ0, kQ1, kQ2}};
-    auto run_once = [&](const std::vector<uint64_t> &limb_base, bool montgomery,
-                        bool bit_reversal) {
-        const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-        const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-        const hazeReplayConfig replay = {.target = haze::test::target_from_env(),
-                                         .montgomery = montgomery ? 1 : 0,
-                                         .bit_reversal = bit_reversal ? 1 : 0,
-                                         .reduced_noise = 1};
-        REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-        uint64_t scaffold = 0;
-        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
-        return run_ihm_mrp(limb_base, /*seed=*/838383ULL);
-    };
-
-    for (const std::vector<uint64_t> &limb_base : bases) {
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        const auto ordinary = run_once(limb_base, /*montgomery=*/false, /*bit_reversal=*/false);
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        const auto encoded = run_once(limb_base, /*montgomery=*/true, /*bit_reversal=*/true);
-        INFO("base_len " << limb_base.size());
-        REQUIRE(ordinary == encoded);
-        check_ihm_mrp_results(limb_base, /*seed=*/838383ULL, encoded);
-    }
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
 TEST_CASE("hazeIsHalfModulus with unknown addresses returns error", "[unit]") {

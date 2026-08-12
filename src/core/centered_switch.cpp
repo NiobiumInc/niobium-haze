@@ -13,8 +13,6 @@
 
 #include "core/centered_switch.hpp"
 
-#include "core/config.hpp"
-
 #include <cstdint>
 #include <niobium/fhetch_api.h>
 
@@ -23,13 +21,11 @@ namespace haze {
 namespace fhetch = niobium::fhetch;
 
 niobium::fhetch::Polynomial emit_centered_switch(const niobium::fhetch::Polynomial &v, uint64_t q,
-                                                 uint64_t p) {
+                                                 uint64_t p) noexcept {
     const uint64_t half_q = (q - 1) / 2;
     const uint64_t half_mod_p = half_q % p;
     const uint64_t neg_half = (half_mod_p == 0) ? 0 : p - half_mod_p;
-    const fhetch::Polynomial shift_in =
-        replay_config().montgomery() ? fhetch::sr_mulps(v, fhetch::Scalar::from_int(1), q) : v;
-    const auto shifted = fhetch::sr_addps(shift_in, fhetch::Scalar::from_int(half_q), q);
+    const auto shifted = fhetch::sr_addps(v, fhetch::Scalar::from_int(half_q), q);
     const auto rebased = fhetch::sr_mulps(shifted, fhetch::Scalar::from_int(1), p);
     return fhetch::sr_addps(rebased, fhetch::Scalar::from_int(neg_half), p);
 }

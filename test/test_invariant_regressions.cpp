@@ -217,44 +217,6 @@ TEST_CASE("hazeMemcpy(D2D) validates dst liveness and count", "[unit]") {
 }
 
 // ---------------------------------------------------------------------------
-// Failed backend bring-up gates compute (montgomery + local target).
-// ---------------------------------------------------------------------------
-
-TEST_CASE("montgomery on local target fails at first compute; shadow round-trips survive",
-          "[unit][hwfmt]") {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const hazeFheParams fhe = {.ring_dim = kRingDim};
-    const hazeReplayConfig replay = {.target = "local", .montgomery = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-
-    void *a = nullptr;
-    void *b = nullptr;
-    void *c = nullptr;
-    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
-
-    // H2D stays a plain shadow write (no backend needed)...
-    std::vector<uint64_t> data(kRingDim, 9);
-    REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    // ...but compute must fail loudly (haze.h: first compute or flush reports
-    // NOT_SUPPORTED); previously it returned HAZE_SUCCESS and silently dropped the
-    // op.
-    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_ERROR_NOT_SUPPORTED);
-    hazeGetLastError();
-    // The compute-free D2H round-trip still works.
-    std::vector<uint64_t> out(kRingDim, 0);
-    REQUIRE(hazeMemcpy(out.data(), a, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
-    REQUIRE(out == data);
-
-    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-}
-
-// ---------------------------------------------------------------------------
 // CRT base validation (MRP compute + basis conversion).
 // ---------------------------------------------------------------------------
 
@@ -570,7 +532,7 @@ TEST_CASE("ciphertext-modulus count is bounded by the device envelope", "[unit]"
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
-TEST_CASE("bridge pre-init requires an explicit configure", "[unit][hwfmt]") {
+TEST_CASE("bridge pre-init requires an explicit configure", "[unit]") {
     // The bridge pre-init reads the frozen replay config via bootstrap_compiler,
     // so it must run after hazeConfigureDevice(); calling it earlier is rejected.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);

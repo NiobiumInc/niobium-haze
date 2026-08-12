@@ -19,7 +19,6 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "core/centered_switch.hpp"
-#include "core/config.hpp"
 #include "core/epoch.hpp"
 #include "core/mrp_polymap.hpp"
 
@@ -37,11 +36,9 @@ namespace fhetch = niobium::fhetch;
 namespace {
 
 // dst[i] = src[i] op lift(operand) per limb (kReversed swaps the operands).
-// The lift is skipped when the limb already lives in the operand's ring, or
-// when the caller asserts in-range coefficients and the RECORDED format is
-// ordinary (under montgomery the switch is the data-format conversion and
-// cannot be elided; an ordinary-form direct-path recording is not portable to
-// --niobium_hw replay — see the haze.h contract).
+// The lift is skipped when the limb already lives in the operand's ring, or when
+// the caller sets operand_in_range, which makes the recording ordinary-form-target
+// only (see the hazeBroadcastAddMrp contract in haze.h).
 template <auto OpFn, bool kReversed = false>
 std::expected<void, HazeInternalError>
 broadcast_op(void *const *dst, const void *const *src, const void *operand, bool operand_in_range,
@@ -75,7 +72,7 @@ broadcast_op(void *const *dst, const void *const *src, const void *operand, bool
     if (!m)
         return std::unexpected(m.error());
 
-    const bool direct = operand_in_range && !replay_config().montgomery();
+    const bool direct = operand_in_range;
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
     pairs.reserve(base_len);
     for (std::size_t i = 0; i < base_len; ++i) {

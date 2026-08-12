@@ -39,8 +39,6 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
         return HAZE_ERROR_SOURCE_UNAVAILABLE;
     case HazeInternalError::OutputNotFlushed:
         return HAZE_ERROR_NOT_FLUSHED;
-    case HazeInternalError::UnsupportedDataFormat:
-        return HAZE_ERROR_NOT_SUPPORTED;
     // Internal: haze invariants / backend failed; caller can't recover, but the
     // specific variant survives in the HAZE_DEBUG=1 stderr log.
     case HazeInternalError::BackendInitFailed:
@@ -104,8 +102,6 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "compute / D2D source was never written: hazeMemcpy(H2D) or compute into it first";
     case HazeInternalError::OutputNotFlushed:
         return "D2H read of address with no materialized bytes (tag output + flush before D2H)";
-    case HazeInternalError::UnsupportedDataFormat:
-        return "montgomery/bit-reversal not supported on this target (use FUNC_SIM, not local)";
     }
     return "unknown";
 }
