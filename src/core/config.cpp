@@ -132,8 +132,6 @@ ReplayConfig ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
         rc.program_dir_ = raw->program_directory;
         rc.program_dir_set_ = true;
     }
-    rc.montgomery_ = raw->montgomery != 0;
-    rc.bit_reversal_ = raw->bit_reversal != 0;
     rc.reduced_noise_ = raw->reduced_noise != 0;
     return rc;
 }

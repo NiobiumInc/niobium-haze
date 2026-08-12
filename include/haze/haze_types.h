@@ -131,18 +131,18 @@ typedef struct {
     size_t twiddle_count;
 } hazeFheParams;
 
-// Hardware/replay configuration. Every field is optional: a NULL string takes
-// its default (target "local"; program "haze" / "0.1" / "HAZE runtime";
-// program directory <cwd>/<program_name>) and the int flags default off. Pass
-// a NULL hazeReplayConfig* to hazeConfigureDevice to accept all defaults.
+// Replay configuration. Every field is optional: a NULL string takes its
+// default (target "local"; program "haze" / "0.1" / "HAZE runtime"; program
+// directory <cwd>/<program_name>) and the int flags default off. Pass a NULL
+// hazeReplayConfig* to hazeConfigureDevice to accept all defaults. Recorded
+// traces are always ordinary-form: hardware data formats are the replay
+// target's business, so nothing here selects them.
 typedef struct {
     const char *target;
     const char *program_name;
     const char *program_version;
     const char *program_description;
     const char *program_directory;
-    int montgomery;
-    int bit_reversal;
     int reduced_noise;
 } hazeReplayConfig;
 

@@ -137,7 +137,8 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
         config build \
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
-        test-unit test-sim test-e2e test-readme test-transport test-isolation test test-all \
+        test-unit test-sim test-e2e test-readme test-transport test-transport-hw \
+        test-isolation test test-all \
         check-transport-prereqs \
         clean clean-runs
 
@@ -168,11 +169,15 @@ Usage: make <target> [MODE=debug|release]
     test-transport      Run integration suite via nbcc_fhetch_replay
                         (requires NIOBIUM_COMPILER_ROOT; picks up the
                         compiler's build/ or dbuild/, preferring MODE's
-                        flavour. Pin one with NIOBIUM_COMPILER_BUILD)
+                        flavour. Pin one with NIOBIUM_COMPILER_BUILD.
+                        Override the device with HAZE_TRANSPORT_TARGET)
+    test-transport-hw   Same suite against func_sim_hw, so replay runs in
+                        hardware (Montgomery) mode; results must match
+                        test-transport
     test-isolation      Assert libhaze.so exports only the haze* C ABI
     test                Default: test-unit + test-sim + test-e2e +
                         test-isolation + test-readme
-    test-all            test + test-transport
+    test-all            test + test-transport + test-transport-hw
 
   Cleanup:
     clean-runs          Remove test runs/ artifacts
@@ -182,6 +187,7 @@ Usage: make <target> [MODE=debug|release]
     make test                                        # default tests
     make test MODE=debug                             # debug build
     make test-transport NIOBIUM_COMPILER_ROOT=/path  # transport path
+    make test-transport-hw NIOBIUM_COMPILER_ROOT=/path # hardware mode
     cd niobium-client && make test-haze              # parent-driven
 
 endef
@@ -296,7 +302,18 @@ test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE mat
 	@cd "$(HAZE_RUNS_DIR)" && \
 	  HAZE_TARGET=local "$(CURDIR)/$(BUILD_DIR)/haze_tests" "[integration]"
 
-# Env shared by the two transport recipes below. The compiler binary is NOT
+# Replay target for the transport recipes; override on the command line (e.g.
+# HAZE_TRANSPORT_TARGET=fpga8.0). The compiler resolves it against its
+# devices/<id>/spec.yaml, whose montgomery_enabled selects hardware mode. Pass
+# HAZE_TRANSPORT_HW=1 too when that device is a Montgomery one, or the
+# ordinary-form-only cases below will run and fail.
+HAZE_TRANSPORT_TARGET ?= FUNC_SIM
+
+# Set by test-transport-hw only; the suite reads it to skip the cases that are
+# ordinary-form-only by contract (see integration_helpers.hpp).
+HAZE_TRANSPORT_HW ?=
+
+# Env shared by the transport recipes below. The compiler binary is NOT
 # resolved here: scripts/test_haze_integration.sh owns that (and the error
 # messages for it), so the path exists in exactly one place. HAZE_MODE only
 # orders its build/dbuild search — the haze binary under test comes from
@@ -308,7 +325,8 @@ TRANSPORT_ENV = \
 	OPENFHE_LIB="$(OPENFHE_INSTALL_DIR)/lib" \
 	HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
 	HAZE_MODE=$(MODE) \
-	HAZE_TRANSPORT_TARGET=FUNC_SIM
+	HAZE_TRANSPORT_HW="$(HAZE_TRANSPORT_HW)" \
+	HAZE_TRANSPORT_TARGET="$(HAZE_TRANSPORT_TARGET)"
 
 # First prerequisite of test-transport, so a missing compiler binary is
 # reported before haze is built rather than after.
@@ -317,6 +335,12 @@ check-transport-prereqs: ## Resolve + validate the compiler's nbcc_fhetch_replay
 
 test-transport: check-transport-prereqs build ## Run integration suite via nbcc_fhetch_replay (opt-in)
 	@$(TRANSPORT_ENV) scripts/test_haze_integration.sh --mode=direct
+
+# Same suite against a Montgomery device spec, so replay exercises the hardware
+# data format the driver applies on its own; that the oracles still hold is what
+# proves haze needs no data-format config of its own.
+test-transport-hw: ## Run the integration suite in hardware mode (func_sim_hw)
+	@$(MAKE) test-transport HAZE_TRANSPORT_TARGET=func_sim_hw HAZE_TRANSPORT_HW=1
 
 test-isolation: build ## Assert libhaze.so exports only the haze* C ABI (no leaked OpenFHE symbols)
 	# --no-tests=error: fail loudly if the test isn't registered (e.g. a
@@ -337,7 +361,7 @@ test-readme: build ## Compile + run the README examples (C + C++) via the local 
 
 test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard + README examples (no transport dependency)
 
-test-all: test test-transport ## Run everything (transport path)
+test-all: test test-transport test-transport-hw ## Run everything (both transport modes)
 
 # ==============================================================================
 # Cleanup

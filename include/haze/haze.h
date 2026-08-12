@@ -163,12 +163,10 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  *   2. "FHE_SIM"/"FUNC_SIM"/"FPGA_TRI"/"fhetch_sim": dispatched over the HTTP
  *      transport (see niobium-client/scripts/fhetch_server.sh), requiring a
  *      built nbcc_fhetch_replay binary on PATH plus a running FHETCH server.
- * Target dispatch happens inside hazeFlush(). The montgomery/bit_reversal
- * toggles record alternate trace representations (Montgomery-form residues,
- * bit-reversed coefficient order); replay decodes outputs back to ordinary form
- * so D2H results are byte-identical. The in-process "local" simulator runs
- * ordinary-form traces only — either toggle on "local" is reported at the first
- * compute as HAZE_ERROR_NOT_SUPPORTED; use a transport target. reduced_noise
+ * Target dispatch happens inside hazeFlush(). Recordings are always
+ * ordinary-form: a hardware target applies its own data format (Montgomery
+ * residues, bit-reversed coefficient order) at replay and decodes results back
+ * before they are read, so the same trace runs on every target. reduced_noise
  * selects centered FBC matching OpenFHE WITH_REDUCED_NOISE. */
 HAZE_API hazeError_t hazeConfigureDevice(const hazeFheParams *fhe,
                                          const hazeReplayConfig *replay) HAZE_NOEXCEPT;
@@ -228,6 +226,12 @@ HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
                                        hazeStream_t stream) HAZE_NOEXCEPT;
 
 // Number-theoretic transform (NTT) and its inverse.
+//
+// INPUT FORMAT: hazeMemcpy(H2D) bytes are evaluation form, natural order (what
+// CKKS ciphertext limbs already are), since the C ABI carries no format tag.
+// Uploading coefficient-form bytes and calling hazeNTT on them works on an
+// ordinary-form target but not a hardware one, whose driver bit-reverses inputs
+// on load and so scrambles them before the NTT runs.
 
 HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
                              hazeStream_t stream) HAZE_NOEXCEPT;
@@ -289,12 +293,13 @@ HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *s
 // is rejected — run it through a modulus-carrying op first. A base prime equal to p
 // passes the operand through verbatim; on transport targets p must be
 // bridge-synthesizable, i.e. a prime ≡ 1 mod 2*ring_dim. Non-zero `operand_in_range`
-// asserts every coefficient is <= (p-1)/2 and that the coefficient is below every
-// base prime (e.g. a hazeIsHalfModulus mask) — unvalidated — and elides the lift
-// wherever the RECORDED data format allows; an ordinary-form recording that used the
-// flag with base_len > 1 must not be replayed under --niobium_hw (the driver
-// re-encodes each input under one modulus only). Sub subtracts the lifted operand;
-// Rsub subtracts src from it.
+// asserts every coefficient is <= (p-1)/2 and below every base prime — unvalidated —
+// and elides the lift, reusing the operand's residue verbatim at each base prime.
+// That is valid for ordinary-form replay only: a hardware target holds every value as
+// v*R mod p, so reusing the word at another prime is wrong however the operand was
+// produced — a hazeIsHalfModulus mask included. Leave the flag zero to keep a
+// recording portable across targets.
+// Sub subtracts the lifted operand; Rsub subtracts src from it.
 HAZE_API hazeError_t hazeBroadcastAddMrp(void *const *dst, const void *const *src,
                                          const void *operand, int operand_in_range,
                                          const uint64_t *base, size_t base_len,

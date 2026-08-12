@@ -50,8 +50,7 @@ enum class HazeInternalError : std::uint8_t {
     BridgeHookFailed,           // replay_bridge post-recording hook reported failures
     PoolMapDesync,              // pool_free_ entry has no `alloc_set_` peer
     SourceUnavailable,          // compute / D2D source has no shadow data and no poly_map_ binding
-    OutputNotFlushed,           // D2H of an address with no materialized bytes: tag + flush first
-    UnsupportedDataFormat       // montgomery/bit-reversal enabled on a target that can't run it
+    OutputNotFlushed            // D2H of an address with no materialized bytes: tag + flush first
 };
 
 // Map an internal error to the public hazeError_t; adding a variant requires

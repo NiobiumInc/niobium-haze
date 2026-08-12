@@ -18,11 +18,10 @@
 namespace haze {
 
 // Centered modulus switch q -> p: c(v) = v mod p for v <= (q-1)/2, else
-// (v - q) mod p. Emits the exact shape of fhetch's center_mod_q_into_p
-// (vendor-internal; montgomery keying as basis_convert.cpp's fbc_center_shape)
-// so the hardware replay driver recognizes and substitutes the chain;
-// intermediates must stay single-use SSA values. Callers validate q, p != 0.
+// (v - q) mod p. Emits fhetch's center_mod_q_into_p ThreeOp shape so the
+// hardware replay driver recognizes the chain and substitutes its own
+// SwitchModulus; intermediates must stay single-use SSA values.
 niobium::fhetch::Polynomial emit_centered_switch(const niobium::fhetch::Polynomial &v, uint64_t q,
-                                                 uint64_t p);
+                                                 uint64_t p) noexcept;
 
 } // namespace haze

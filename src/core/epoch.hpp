@@ -72,8 +72,8 @@ class EpochState {
     // Initialise the compiler backend (idempotent) and start recording.
     void ensure_recording_locked() HAZE_REQUIRES(mutex_);
 
-    // Compute-prelude gate: UnsupportedDataFormat for the
-    // montgomery/bit-reversal-on-local refusal, BackendInitFailed otherwise.
+    // Compute-prelude gate: NotConfigured when hazeConfigureDevice() never ran,
+    // BackendInitFailed otherwise.
     std::expected<void, HazeInternalError> require_recording_locked() const noexcept
         HAZE_REQUIRES(mutex_);
 

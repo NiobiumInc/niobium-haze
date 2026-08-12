@@ -43,7 +43,8 @@ namespace {
 // b = [x > h], h = (q-1)/2: g1 = c(x-h) == x-h (signed), g2 = c(x) == x - q*b,
 // so ((g1 - g2 + h) mod p) * q^-1 == b exactly, for any prime p != q.
 // Immediates are pre-reduced (replay backends assume scalars below the modulus).
-fhetch::Polynomial lower_is_half_modulus(const fhetch::Polynomial &x, uint64_t q, uint64_t p) {
+fhetch::Polynomial lower_is_half_modulus(const fhetch::Polynomial &x, uint64_t q,
+                                         uint64_t p) noexcept {
     const uint64_t h = (q - 1) / 2;
     const auto w = fhetch::sr_subps(x, fhetch::Scalar::from_int(h), q);
     const auto g1 = emit_centered_switch(w, q, p);

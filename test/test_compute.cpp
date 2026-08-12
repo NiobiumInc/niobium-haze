@@ -465,6 +465,11 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
     // lands at X^(j*k mod 2N) (sign-flipped if ≥ N). With k=5, j=1, j*k=5<N,
     // expected is +1 at position 5; the round-trip test alone is symmetric
     // and wouldn't catch a substitution-direction bug.
+    // Direction-sensitivity is also why this needs the coefficient-input skip
+    // while the symmetric round-trip above does not: there the load-time
+    // permutation cancels, here it does not.
+    if constexpr (TestType::kNumResidues == 1)
+        haze::test::skip_if_hw_coefficient_input();
     TestType d;
     d.setup();
 
@@ -661,6 +666,11 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
                                                     const std::vector<std::vector<uint64_t>> &b) {
     REQUIRE(a.size() == Driver::kNumResidues);
     REQUIRE(b.size() == Driver::kNumResidues);
+    // a and b are chosen COEFFICIENT vectors uploaded by H2D. Only the SRP
+    // raw-memory input path is affected; the MRP arm is observed to pass under
+    // func_sim_hw, so it stays live (the path that spares it is untraced).
+    if constexpr (Driver::kNumResidues == 1)
+        haze::test::skip_if_hw_coefficient_input();
 
     auto d_a = haze::test::allocate_and_h2d_residues(a);
     auto d_b = haze::test::allocate_and_h2d_residues(b);

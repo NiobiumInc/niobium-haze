@@ -64,15 +64,6 @@ std::expected<void, HazeInternalError> EpochState::require_recording_locked() co
                               "require_recording_locked: hazeConfigureDevice() not called");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
-    // Configured but recording refused: name the montgomery/bit-reversal-on-local
-    // case distinctly from a backend-init failure.
-    const ReplayConfig &rc = replay_config();
-    if ((rc.montgomery() || rc.bit_reversal()) && rc.target_is_local()) {
-        record_internal_error(HazeInternalError::UnsupportedDataFormat,
-                              "require_recording_locked (montgomery/bit_reversal require a "
-                              "transport target such as FUNC_SIM)");
-        return std::unexpected(HazeInternalError::UnsupportedDataFormat);
-    }
     record_internal_error(HazeInternalError::BackendInitFailed,
                           "require_recording_locked: backend init failed; compute cannot record");
     return std::unexpected(HazeInternalError::BackendInitFailed);
@@ -374,9 +365,6 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {
-    // The montgomery/bit-reversal-on-local refusal is enforced at bring-up
-    // against the frozen replay config; the format can't change afterwards, so
-    // no flush-time re-check is needed.
     return epoch().replay_and_populate();
 }
 

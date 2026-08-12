@@ -14,6 +14,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <string_view>
 #include <vector>
 
 namespace haze::test {
@@ -26,12 +27,44 @@ inline const char *target_from_env() {
     return (t != nullptr && t[0] != '\0') ? t : nullptr;
 }
 
+// True when a non-local replay target is configured, i.e. the suite is running
+// under make test-transport / test-transport-hw.
+inline bool transport_target_active() {
+    const char *t = target_from_env();
+    return t != nullptr && std::string_view{t} != "local";
+}
+
+// True when the replay target applies a hardware data format, set by `make
+// test-transport-hw`. Read from an env var rather than sniffed from the target
+// string so the compiler's devices/<id>/spec.yaml list stays out of haze.
+inline bool hw_target_active() {
+    const char *v = std::getenv("HAZE_TRANSPORT_HW");
+    return v != nullptr && v[0] != '\0';
+}
+
+// Skip a case that uploads COEFFICIENT-form bytes and transforms them in-trace;
+// see the hazeNTT input-format contract in haze.h.
+inline void skip_if_hw_coefficient_input() {
+    if (hw_target_active())
+        SKIP("uploads coefficient-form input; hardware targets require evaluation form "
+             "(see the hazeNTT input-format contract in haze.h)");
+}
+
+// Skip a case that elides the lift via operand_in_range, which a hardware target
+// cannot reproduce (it holds every value as v*R, whatever produced the operand);
+// see the hazeBroadcastAddMrp contract in haze.h.
+inline void skip_if_hw_elision() {
+    if (hw_target_active())
+        SKIP("operand_in_range elision is ordinary-form only "
+             "(see the hazeBroadcastAddMrp contract in haze.h)");
+}
+
 // MODULUS CONTRACT (single source of truth): the primes in hazeFheParams::moduli
 // ARE the .fhetch trace moduli, and both replay paths reconstruct under them;
 // hazeReplayBridgeInitCryptoContext's scaffold prime is overwritten with the
 // trace primes at synthesis (bridge switch_tower_modulus) and never consulted
 // for results, so tests set the slot to the intended prime and oracle against it
-// (verified by "trace modulus is authoritative ..." in test_hardware_format.cpp).
+// (verified by "trace modulus is authoritative ..." in test_trace_modulus.cpp).
 // Modulus-less SRP ops are trace-authoritative too (haze recovers and binds the
 // source modulus) except a copy of a never-modulus-bound (raw H2D) address,
 // which has none.
