@@ -189,7 +189,8 @@ agree. Two documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
   ciphertext limbs are already evaluation form. Elementwise ops commute with the
   permutation and symmetric round-trips cancel it, so only direction-sensitive
   checks against a coefficient-domain oracle are affected, and only on the SRP
-  raw-memory input path (the MRP arms are observed to pass; why is untraced).
+  raw-memory input path (the MRP arms pass under `func_sim_hw`, though which
+  driver path spares them was never pinned down).
 
 Sanitizers are mutually exclusive `cmake` cache options:
 `-DHAZE_SANITIZERS=ON` (ASAN+UBSAN) or `-DHAZE_TSAN=ON`. UBSAN's enum check
