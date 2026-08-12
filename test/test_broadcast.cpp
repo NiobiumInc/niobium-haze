@@ -8,7 +8,6 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -164,12 +163,17 @@ std::vector<uint64_t> boundary_operand(uint64_t p, uint64_t seed) {
 // Golden values ([integration]: runs under test-sim and test-transport).
 // ===========================================================================
 
-TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[integration]") {
+namespace {
+
+// Multiply every limb by a hazeIsHalfModulus mask and check each coefficient
+// against the host predicate. Split by in_range so the per-target matrix is
+// explicit: in_range=1 elides the lift and is ordinary-form only.
+void run_mask_broadcast(int in_range) {
     haze::test::setup_integration_mrp3_config(kRingDim, kQ0); // {kQ0, kQ1, kQ2}
 
     // Mask: SRP predicate of a value under kQ0; recorded under the generated aux.
     // make_residue alone lands entirely below h, which would make every mask bit
-    // 0 and the multiply below vacuous; lift the odd slots above h.
+    // 0 and the multiply below vacuous; lift the odd slots into (h, kQ0-1].
     std::vector<uint64_t> pred_in = haze::test::make_residue(kQ0, 424242ULL, kRingDim);
     const uint64_t h_q0 = (kQ0 - 1) / 2;
     for (std::size_t k = 1; k < kRingDim; k += 2)
@@ -194,9 +198,6 @@ TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
 
-    const int in_range = GENERATE(0, 1);
-    if (in_range == 1)
-        haze::test::skip_if_hw_elision();
     REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_mask, in_range, base.data(),
                                 base.size(), nullptr) == HAZE_SUCCESS);
     for (void *out : d_dst)
@@ -219,6 +220,17 @@ TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask applied to all limbs", "[
     haze::test::free_all_residues(d_dst);
     REQUIRE(hazeFree(d_pred_in) == HAZE_SUCCESS);
     REQUIRE(hazeFree(d_mask) == HAZE_SUCCESS);
+}
+
+} // namespace
+
+TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask, lifted", "[integration]") {
+    run_mask_broadcast(/*in_range=*/0);
+}
+
+TEST_CASE("hazeBroadcastMulMrp: hazeIsHalfModulus mask, lift elided", "[integration]") {
+    haze::test::skip_if_hw_elision();
+    run_mask_broadcast(/*in_range=*/1);
 }
 
 TEST_CASE("hazeBroadcast: general values, small operand prime (p < q)", "[integration]") {
