@@ -667,8 +667,8 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
     REQUIRE(a.size() == Driver::kNumResidues);
     REQUIRE(b.size() == Driver::kNumResidues);
     // a and b are chosen COEFFICIENT vectors uploaded by H2D. Only the SRP
-    // raw-memory input path is affected; the MRP arm passes under func_sim_hw so
-    // it stays live, though which driver path spares it was never pinned down.
+    // raw-memory input path needs the skip (see CLAUDE.md's coefficient-input
+    // exception); the MRP arm passes under func_sim_hw and stays live.
     if constexpr (Driver::kNumResidues == 1)
         haze::test::skip_if_hw_coefficient_input();
 

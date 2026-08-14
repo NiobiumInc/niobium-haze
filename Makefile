@@ -305,8 +305,8 @@ test-sim: build ## Run sim suite (in-process FHETCH simulator; validates FHE mat
 # Replay target for the transport recipes; override on the command line (e.g.
 # HAZE_TRANSPORT_TARGET=fpga8.0). The compiler resolves it against its
 # devices/<id>/spec.yaml, whose montgomery_enabled selects hardware mode. Pass
-# HAZE_TRANSPORT_HW=1 too when that device is a Montgomery one, or the
-# ordinary-form-only cases below will run and fail.
+# HAZE_TRANSPORT_HW=1 too when that device is a Montgomery one, or the suite's
+# ordinary-form-only cases (see integration_helpers.hpp) will run and fail.
 HAZE_TRANSPORT_TARGET ?= FUNC_SIM
 
 # Set by test-transport-hw only; the suite reads it to skip the cases that are
