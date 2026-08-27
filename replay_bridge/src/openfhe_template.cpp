@@ -546,15 +546,28 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // failures don't leak forward" contract.
     hook_had_error_flag().store(false, std::memory_order_relaxed);
 
+    // Keeping the artifacts needs no program directory, so answer before asking the compiler
+    // for one: the query can throw, and there is nothing to do with the answer either way.
+    // Set and non-zero means the caller preserves serialized_probes/ and
+    // ciphertext_templates/ for an external replay of that project via
+    // nbcc_fhetch_replay --project=<dir>.
+    //
+    // The flag is process-wide, so it suppresses this cleanup on EVERY reset path, including
+    // the rollback of a failed loadContext. That direction is safe, and strictly safer than
+    // the default: the flag can only ever leave debris behind, never destroy a good project.
+    // Two cases, both fine. A rollback after the bridge was initialised points at that
+    // attempt's own directory, which is unique -- HazeEngine assigns
+    // ctx<ctxCounter.fetch_add(1)> per attempt, rolled back or not, so it is never a
+    // directory anything else uses. A rollback BEFORE the bridge was initialised may still
+    // point at a previous context's directory, and there the default behaviour is the
+    // hazardous one: it would delete a good project's artifacts. Setting the flag suppresses
+    // that too.
+    if (should_keep_replay_artifacts())
+        return;
+
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
     // program_dir is queried live — DeviceState::reset() runs us before the vendor reset.
-    // Skipped if HAZE_KEEP_REPLAY_ARTIFACTS is set and non-zero; the caller may need
-    // to preserve serialized_probes/ and ciphertext_templates/ for external replay via
-    // nbcc_fhetch_replay --project=<dir>. The flag is process-wide, so it also suppresses
-    // the hygiene cleanup on a failed loadContext's rollback. That is accepted: each
-    // loadContext takes a fresh program directory, so rolled-back debris cannot clobber a
-    // good project -- it only accumulates beside one.
     fs::path program_dir;
     try {
         program_dir = niobium::compiler().get_program_directory();
@@ -562,9 +575,6 @@ extern "C" void hazeReplayBridgeReset() noexcept {
         return;
     }
     if (program_dir.empty())
-        return;
-
-    if (should_keep_replay_artifacts())
         return;
 
     try {

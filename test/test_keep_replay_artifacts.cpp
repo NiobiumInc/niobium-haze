@@ -53,13 +53,13 @@ class ScopedEnv {
   private:
     void apply(const char *value) const {
         if (value == nullptr) {
-            ::unsetenv(name_);
+            ::unsetenv(name_.c_str());
         } else {
-            ::setenv(name_, value, 1);
+            ::setenv(name_.c_str(), value, 1);
         }
     }
 
-    const char *name_;
+    std::string name_;
     bool had_prior_ = false;
     std::string prior_;
 };
@@ -174,9 +174,46 @@ TEST_CASE("hazeReplayBridgeReset preserves artifacts when flag is set", "[replay
     CHECK(count_files_in_dir(probes_dir) == 1);
     CHECK(count_files_in_dir(templates_dir) == 1);
 
-    // The guard restores the flag; this removes the artifacts it preserved.
+    // The flag is still '1' here -- the guard's destructor runs after this scope -- so the
+    // reset below preserves the artifacts too. Removing them is this line's job, not the
+    // guard's.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     fs::remove_all(program_dir, ec);
+}
+
+TEST_CASE("HAZE_KEEP_REPLAY_ARTIFACTS set but empty removes artifacts", "[replay_bridge]") {
+    // Set-but-empty is the third state the reader distinguishes (v[0] != '\0'), and an empty
+    // value is what an unset-looking `export HAZE_KEEP_REPLAY_ARTIFACTS=` actually produces.
+    const ScopedEnv guard("HAZE_KEEP_REPLAY_ARTIFACTS", "");
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = kN};
+    const hazeReplayConfig replay = {.target = "local"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+    uint64_t picked = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ, &picked) == HAZE_SUCCESS);
+
+    const fs::path program_dir = niobium::compiler().get_program_directory();
+    REQUIRE(!program_dir.empty());
+
+    const fs::path probes_dir = program_dir / "serialized_probes";
+    const fs::path templates_dir = program_dir / "ciphertext_templates";
+    std::error_code ec;
+    fs::create_directories(probes_dir, ec);
+    fs::create_directories(templates_dir, ec);
+    const fs::path probe_marker = probes_dir / "marker.txt";
+    const fs::path template_marker = templates_dir / "marker.txt";
+    { std::ofstream f(probe_marker); f << "probe marker"; }
+    { std::ofstream f(template_marker); f << "template marker"; }
+    REQUIRE(fs::exists(probe_marker));
+    REQUIRE(fs::exists(template_marker));
+
+    hazeReplayBridgeReset();
+
+    CHECK(!fs::exists(probe_marker));
+    CHECK(!fs::exists(template_marker));
+
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
 TEST_CASE("HAZE_KEEP_REPLAY_ARTIFACTS with value '0' removes artifacts", "[replay_bridge]") {
