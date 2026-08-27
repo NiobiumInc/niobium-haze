@@ -24,6 +24,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <expected>
 #include <filesystem>
@@ -529,6 +530,17 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
     }
 }
 
+namespace {
+
+// Read on every call rather than memoized: this runs once per device reset, not in a hot
+// loop, and a cached first read would make the flag untestable from inside one process.
+bool should_keep_replay_artifacts() noexcept {
+    const char *v = std::getenv("HAZE_KEEP_REPLAY_ARTIFACTS");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+} // namespace
+
 extern "C" void hazeReplayBridgeReset() noexcept {
     // Clear first so any early-return below still honors the "prior
     // failures don't leak forward" contract.
@@ -537,6 +549,12 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // Disk-only cleanup so stale template/probe names from prior tests don't
     // pollute MRP lookups; the hook lambda is freed by compiler().reset().
     // program_dir is queried live — DeviceState::reset() runs us before the vendor reset.
+    // Skipped if HAZE_KEEP_REPLAY_ARTIFACTS is set and non-zero; the caller may need
+    // to preserve serialized_probes/ and ciphertext_templates/ for external replay via
+    // nbcc_fhetch_replay --project=<dir>. The flag is process-wide, so it also suppresses
+    // the hygiene cleanup on a failed loadContext's rollback. That is accepted: each
+    // loadContext takes a fresh program directory, so rolled-back debris cannot clobber a
+    // good project -- it only accumulates beside one.
     fs::path program_dir;
     try {
         program_dir = niobium::compiler().get_program_directory();
@@ -544,6 +562,9 @@ extern "C" void hazeReplayBridgeReset() noexcept {
         return;
     }
     if (program_dir.empty())
+        return;
+
+    if (should_keep_replay_artifacts())
         return;
 
     try {
