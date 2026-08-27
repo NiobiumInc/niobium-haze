@@ -46,7 +46,7 @@ inline void check_mrp_against_per_residue(const std::vector<uint64_t> &base,
     };
 
     // At least one captured group should match; multiple is fine since
-    // disk cleanup at hazeReplayBridgeReset prevents stale-file leaks.
+    // the bridge init's stale-artifact clear prevents stale-file leaks.
     bool found = false;
     std::string matched_name;
     for (const auto &entry : fs::directory_iterator(probes_dir)) {
