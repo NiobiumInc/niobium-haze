@@ -203,8 +203,14 @@ TEST_CASE("HAZE_KEEP_REPLAY_ARTIFACTS set but empty removes artifacts", "[replay
     fs::create_directories(templates_dir, ec);
     const fs::path probe_marker = probes_dir / "marker.txt";
     const fs::path template_marker = templates_dir / "marker.txt";
-    { std::ofstream f(probe_marker); f << "probe marker"; }
-    { std::ofstream f(template_marker); f << "template marker"; }
+    {
+        std::ofstream f(probe_marker);
+        f << "probe marker";
+    }
+    {
+        std::ofstream f(template_marker);
+        f << "template marker";
+    }
     REQUIRE(fs::exists(probe_marker));
     REQUIRE(fs::exists(template_marker));
 
