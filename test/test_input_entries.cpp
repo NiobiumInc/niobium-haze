@@ -11,11 +11,12 @@
 // decode, or adapt the Product; or (iv) remove any proprietary notices
 // from the Product.
 //
-// On-disk shape of a recorded project's inputs. Nothing else in the tree reads
-// <prog>.inputs.json or the .ids files it names, which is how each ciphertext
-// residue came to be recorded twice - once as a modulus-less haze_in_<n> and
-// again inside a haze_mrp_in_<m>. These assert the invariant that replaced it:
-// every address is bound by exactly one entry, the one its upload declared.
+// On-disk shape of a recorded project's inputs and outputs. Nothing else in the
+// tree reads <prog>.inputs.json or the .ids files it names, which is how each
+// ciphertext residue came to be recorded twice - once as a modulus-less
+// haze_in_<n> and again inside a haze_mrp_in_<m>, and symmetrically as a
+// haze_out_<n> beside its haze_mrp_out_<m>. These assert the invariant that
+// replaced it: every address is carried by exactly one entry on each side.
 
 #include "integration_helpers.hpp"
 
@@ -130,6 +131,22 @@ std::vector<std::vector<uint64_t>> residues_for(const std::vector<uint64_t> &bas
     for (std::size_t i = 0; i < base.size(); ++i)
         r[i] = haze::test::make_residue(base[i], seed + i, kRingDim);
     return r;
+}
+
+// Output manifest entries carry a name and inline ciphertext_data rather than a
+// .bin/.ids pair, so the names alone answer the one-entry-per-residue question.
+std::vector<std::string> output_names(const std::filesystem::path &dir,
+                                      const std::string &program_name) {
+    return json_string_values(slurp(dir / (program_name + ".outputs.json")), "name");
+}
+
+std::size_t count_with_prefix(const std::vector<std::string> &names, const std::string &prefix) {
+    std::size_t n = 0;
+    for (const auto &name : names) {
+        if (name.starts_with(prefix))
+            ++n;
+    }
+    return n;
 }
 
 std::size_t count_prefixed(const std::vector<InputEntry> &entries, const std::string &prefix) {
@@ -293,6 +310,71 @@ TEST_CASE("recorded inputs: an MRP op refuses a residue uploaded without a modul
                        haze::test::to_const(src).data(), base.data(), base.size(),
                        nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("recorded outputs: a grouped output emits one group entry, not one per residue",
+          "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const auto dir = record_one_group("haze_outputs_grouped", base);
+    const auto names = output_names(dir, "haze_outputs_grouped");
+
+    REQUIRE(count_with_prefix(names, "haze_mrp_out_") == 1);
+    // The pre-fix shape also probed each residue individually as haze_out_<n>.
+    REQUIRE(count_with_prefix(names, "haze_out_") == 0);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("recorded outputs: a non-grouped output keeps its own probe", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_outputs_single", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x7070ULL));
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst, src[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto names =
+        output_names(std::filesystem::path{"haze_outputs_single"}, "haze_outputs_single");
+    REQUIRE(count_with_prefix(names, "haze_out_") == 1);
+    REQUIRE(count_with_prefix(names, "haze_mrp_out_") == 0);
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("recorded outputs: every residue of a grouped output is still populated",
+          "[integration]") {
+    // Readback moved to the group's MRP probe, so a missed residue would surface
+    // as a stale or unflushed D2H rather than a recording-shape difference.
+    const auto base = haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    const auto inputs = residues_for(base, 0x8080ULL);
+    const auto src = haze::test::allocate_and_h2d_residues(inputs, base);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        std::vector<uint64_t> got(kRingDim, 0);
+        REQUIRE(hazeMemcpy(got.data(), dst[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        for (uint64_t k = 0; k < kRingDim; ++k) {
+            const uint64_t want = haze::test::add_mod(inputs[i][k], inputs[i][k], base[i]);
+            if (got[k] != want) {
+                INFO("residue " << i << " slot " << k);
+                REQUIRE(got[k] == want);
+            }
+        }
+    }
 
     haze::test::free_all_residues(src);
     haze::test::free_all_residues(dst);
