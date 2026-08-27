@@ -34,7 +34,7 @@ constexpr uint64_t kQ = 576460752303415297ULL;
 /// failure between a bare setenv and a bare unsetenv would leak the flag into every later case;
 /// the guard's destructor runs during that unwind.
 class ScopedEnv {
-public:
+  public:
     ScopedEnv(const char *name, const char *value) : name_(name) {
         if (const char *prior = std::getenv(name)) {
             had_prior_ = true;
@@ -50,7 +50,7 @@ public:
     ScopedEnv(ScopedEnv &&) = delete;
     ScopedEnv &operator=(ScopedEnv &&) = delete;
 
-private:
+  private:
     void apply(const char *value) const {
         if (value == nullptr) {
             ::unsetenv(name_);
