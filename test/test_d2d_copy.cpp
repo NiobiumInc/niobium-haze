@@ -90,7 +90,7 @@ TEST_CASE("hazeMemcpy(D2D) copies a residue into an MRP-registered addr", "[inte
         haze::test::make_residue(kQ2, /*seed=*/3, kRingDimMrp),
     };
 
-    auto srcs = haze::test::allocate_and_h2d_residues(src_residues);
+    auto srcs = haze::test::allocate_and_h2d_residues(src_residues, base);
     auto outs = haze::test::allocate_dst_residues(3, kBytesMrp);
 
     // MRP op binds outs[0..2] in poly_map_ AND registers them as a group.
@@ -201,7 +201,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) copies a compute-produced MRP via per-residue IR",
         haze::test::make_residue(base[1], /*seed=*/2, kRingDim),
         haze::test::make_residue(base[2], /*seed=*/3, kRingDim),
     };
-    auto srcs = haze::test::allocate_and_h2d_residues(res);
+    auto srcs = haze::test::allocate_and_h2d_residues(res, base);
     auto computed = haze::test::allocate_dst_residues(3, kBytes);
     auto copied = haze::test::allocate_dst_residues(3, kBytes);
 
@@ -239,7 +239,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) promotes H2D'd sources and registers the output gr
         haze::test::make_residue(base[1], /*seed=*/5, kRingDim),
         haze::test::make_residue(base[2], /*seed=*/6, kRingDim),
     };
-    auto srcs = haze::test::allocate_and_h2d_residues(res);
+    auto srcs = haze::test::allocate_and_h2d_residues(res, base);
     auto dst = haze::test::allocate_dst_residues(3, kBytes);
 
     REQUIRE(hazeMemcpyMrp(dst.data(), haze::test::to_const(srcs).data(), kBytes,

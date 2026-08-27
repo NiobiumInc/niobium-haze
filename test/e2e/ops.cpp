@@ -255,8 +255,8 @@ KsContribution hybrid_keyswitch(const OpCtx &ctx, const Allocs &src, std::size_t
             a_trim[towers + t] = key.a_limbs[d][orig];
             b_trim[towers + t] = key.b_limbs[d][orig];
         }
-        a_dev_per_digit.emplace_back(a_trim);
-        b_dev_per_digit.emplace_back(b_trim);
+        a_dev_per_digit.emplace_back(a_trim, qp_base);
+        b_dev_per_digit.emplace_back(b_trim, qp_base);
     }
 
     Allocs accum_a(qp_towers, ctx.poly_bytes);
@@ -323,14 +323,19 @@ Allocs::Allocs(std::size_t count, std::size_t bytes) {
     }
 }
 
-Allocs::Allocs(const std::vector<std::vector<uint64_t>> &residues) {
+Allocs::Allocs(const std::vector<std::vector<uint64_t>> &residues,
+               const std::vector<uint64_t> &base) {
+    REQUIRE(residues.size() == base.size());
     ptrs_.assign(residues.size(), nullptr);
+    std::vector<const void *> srcs(residues.size(), nullptr);
+    std::size_t bytes = 0;
     for (std::size_t i = 0; i < residues.size(); ++i) {
-        const std::size_t bytes = residues[i].size() * sizeof(uint64_t);
+        bytes = residues[i].size() * sizeof(uint64_t);
         REQUIRE(hazeMalloc(&ptrs_[i], bytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(ptrs_[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
+        srcs[i] = residues[i].data();
     }
+    REQUIRE(hazeMemcpyMrp(ptrs_.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
 }
 
 Allocs::~Allocs() {
@@ -490,8 +495,11 @@ Ct h2d_ct(const OpCtx &ctx, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &src)
     }
     REQUIRE(c0_data.size() == c1_data.size());
     const std::size_t towers = c0_data.size();
-    Allocs c0_alloc(c0_data);
-    Allocs c1_alloc(c1_data);
+    // A ciphertext's limbs sit on the first `towers` primes of Q.
+    const std::vector<uint64_t> base(ctx.q_base.begin(),
+                                     ctx.q_base.begin() + static_cast<std::ptrdiff_t>(towers));
+    Allocs c0_alloc(c0_data, base);
+    Allocs c1_alloc(c1_data, base);
     return {std::move(c0_alloc), std::move(c1_alloc), towers,
             static_cast<std::uint32_t>(src->GetNoiseScaleDeg())};
 }

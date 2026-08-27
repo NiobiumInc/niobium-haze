@@ -68,27 +68,31 @@ std::expected<void, HazeInternalError> require_allocated_array(void *const *ptrs
 std::expected<fhetch::MRP, HazeInternalError>
 build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len) {
     std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-    std::vector<DevAddr> addrs;
     pairs.reserve(len);
-    addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
         DevAddr a = to_dev_addr(polys[i]);
+        // A live-in with no declared modulus reached an MRP op through a plain
+        // hazeMemcpy, which cannot say which prime the bytes hold. Inputs are
+        // declared at upload now, so there is no later moment to recover it:
+        // refuse instead of recording a ciphertext residue whose entry would
+        // carry modulus 0. Computed sources are exempt: replay reproduces them.
+        if (len > 1 && epoch().is_input_locked(a) &&
+            epoch().recorded_modulus_locked(a) == kCopyModulus) {
+            record_internal_error(HazeInternalError::InvalidArgument,
+                                  "build_mrp_locked: MRP operand residue was uploaded without a "
+                                  "declared modulus; upload ciphertext residues with "
+                                  "hazeMemcpyMrp(HAZE_MEMCPY_HOST_TO_DEVICE, base, base_len)");
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
         auto poly = epoch().lookup_or_create_locked(a);
         if (!poly) {
             return std::unexpected(poly.error());
         }
         pairs.emplace_back(std::move(*poly), base[i]);
-        addrs.push_back(a);
     }
-    auto mrp = fhetch::MRP::from_pairs(pairs);
-    // Tag a multi-tower MRP input (so a transport target can synthesize its CT) only for a
-    // genuine live-in — replay reproduces computed sources, so tagging them bloats the working
-    // set; the leading residue represents the group (a ciphertext's residues move as a unit).
-    if (len > 1 && epoch().is_input_locked(addrs.front())) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/false, addrs.front());
-        epoch().tag_mrp_input_if_new_locked(group_name, mrp);
-    }
-    return mrp;
+    // No input tagging here: hazeMemcpyMrp(H2D) already emitted the one
+    // authoritative entry for every uploaded residue.
+    return fhetch::MRP::from_pairs(pairs);
 }
 
 std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
@@ -106,30 +110,32 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
         addrs.push_back(a);
     }
     if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
+        auto group_name = epoch().mrp_group_name_locked(addrs.front());
         return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
     }
     return {};
 }
 
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
-                                                    std::size_t count, std::size_t len) noexcept {
-    if (len > static_cast<std::size_t>(kMaxCiphertextModuli)) {
-        record_internal_error(HazeInternalError::InvalidArgument, "copy_h2d_mrp: base_len bound");
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    }
+                                                    std::size_t count, const uint64_t *base,
+                                                    std::size_t len) noexcept {
+    // Same base contract as the D2D arm: the primes are recorded now, so a
+    // malformed base would poison the input entry rather than one instruction.
+    if (auto v = validate_moduli_base(base, len); !v)
+        return v;
     if (count == 0)
         return {}; // zero-byte copy: success no-op, no shadow / tag side effects
-    // Write every residue's shadow first, then tag them under one session:
-    // tag promotes the just-written bytes to a fhetch input per residue.
+    // Write every residue's shadow first, then tag the group under one session:
+    // tagging promotes the just-written bytes to a single fhetch MRP input.
     for (std::size_t i = 0; i < len; ++i)
         if (auto h2d = allocator().copy_h2d(to_dev_addr(dst[i]), src[i], count); !h2d)
             return h2d;
-    EpochSession session;
+    std::vector<DevAddr> addrs;
+    addrs.reserve(len);
     for (std::size_t i = 0; i < len; ++i)
-        if (auto tag = epoch().tag_h2d_input_locked(to_dev_addr(dst[i])); !tag)
-            return tag;
-    return {};
+        addrs.push_back(to_dev_addr(dst[i]));
+    EpochSession session;
+    return epoch().tag_h2d_mrp_input_locked(addrs, std::span(base, len));
 }
 
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
@@ -184,7 +190,7 @@ copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t 
         addrs.push_back(d);
     }
     if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(/*output=*/true, addrs.front());
+        auto group_name = epoch().mrp_group_name_locked(addrs.front());
         return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
     }
     return {};

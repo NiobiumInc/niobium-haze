@@ -27,7 +27,9 @@ class Allocs {
   public:
     Allocs() = default;
     Allocs(std::size_t count, std::size_t bytes);
-    explicit Allocs(const std::vector<std::vector<uint64_t>> &residues);
+    // Upload declaring each residue's prime: ciphertext and key limbs are MRP
+    // operands, and an MRP operand uploaded without a modulus is refused.
+    Allocs(const std::vector<std::vector<uint64_t>> &residues, const std::vector<uint64_t> &base);
 
     ~Allocs();
     Allocs(Allocs &&other) noexcept;

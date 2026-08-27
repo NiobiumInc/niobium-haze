@@ -124,8 +124,10 @@ inline std::vector<uint64_t> make_residue(uint64_t prime, uint64_t seed, std::si
     return r;
 }
 
-// Allocate one slot per residue and H2D each row; ownership stays with the
-// caller (free with free_all_residues, REQUIRE-aborts on any haze error).
+// Allocate one slot per residue and H2D each row WITHOUT declaring a modulus;
+// ownership stays with the caller (free with free_all_residues, REQUIRE-aborts
+// on any haze error). For anything an MRP op will consume, use the `base`
+// overload below - a modulus-less residue is refused there by design.
 inline std::vector<void *>
 allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
     std::vector<void *> ptrs(residues.size(), nullptr);
@@ -135,6 +137,25 @@ allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
         REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
                 HAZE_SUCCESS);
     }
+    return ptrs;
+}
+
+// Same, but declaring each residue's prime, so the upload records one MRP input
+// carrying the moduli; this is how a ciphertext's residues must be uploaded.
+inline std::vector<void *>
+allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues,
+                          const std::vector<uint64_t> &base) {
+    REQUIRE(residues.size() == base.size());
+    std::vector<void *> ptrs(residues.size(), nullptr);
+    std::vector<const void *> srcs(residues.size(), nullptr);
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < residues.size(); ++i) {
+        bytes = residues[i].size() * sizeof(uint64_t);
+        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+        srcs[i] = residues[i].data();
+    }
+    REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
     return ptrs;
 }
 

@@ -164,7 +164,7 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
         return set_error(HAZE_ERROR_INVALID_VALUE);
 
     if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
-        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base_len));
+        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
         return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)

@@ -91,8 +91,13 @@ HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *
 
 // Per-residue (MRP) variant of hazeMemcpy: `dst`/`src` are arrays of `base_len` poly pointers
 // and `count` is bytes-per-residue, applied to every residue under `kind`. `base` (the
-// per-residue primes, see the MRP block below) is consulted only by D2D, which records a
-// per-residue pass-through copy under base[i] and registers the dst as an MRP output group.
+// per-residue primes, see the MRP block below) is validated for every `kind` and carried by
+// H2D and D2D. H2D records the upload as ONE MRP input holding base[i] per residue - the only
+// input entry those addresses ever get, so a consumer never has to decide which of several
+// recorded entries governs an address; upload a ciphertext's residues this way rather than
+// through a per-limb hazeMemcpy loop, which cannot name their primes and is rejected by any
+// later MRP op (HAZE_ERROR_INVALID_VALUE). D2D records a per-residue pass-through copy under
+// base[i] and registers the dst as an MRP output group. D2H is a pure shadow read.
 HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
@@ -289,8 +294,9 @@ HAZE_API hazeError_t hazeIsHalfModulusMrp(void *const *dst, const void *const *s
 // hazeBroadcastAddMrp records dst[i]_k = src[i]_k + lift(operand)_k mod base[i]:
 // `operand` is one single-residue polynomial lifted into every base prime by the
 // centered modulus switch. Its ring p is the modulus haze recorded for the op that
-// produced it (e.g. the hazeIsHalfModulus aux prime); a raw H2D operand has none and
-// is rejected — run it through a modulus-carrying op first. A base prime equal to p
+// produced it (e.g. the hazeIsHalfModulus aux prime) or that its hazeMemcpyMrp upload
+// declared; an operand uploaded by plain hazeMemcpy has none and is rejected - run it
+// through a modulus-carrying op first. A base prime equal to p
 // passes the operand through verbatim; on transport targets p must be
 // bridge-synthesizable, i.e. a prime ≡ 1 mod 2*ring_dim. Non-zero `operand_in_range`
 // asserts every coefficient is <= (p-1)/2 and below every base prime — unvalidated —

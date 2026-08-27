@@ -27,8 +27,8 @@
 namespace haze {
 
 // Per-epoch MRP group bookkeeping (membership, pending output export, stable per-leading-addr
-// names); a pure value type — no locks, no fhetch, no polymap — owned by EpochState under its
-// mutex. Invariants: an addr belongs to AT MOST one group; registration is latest-write-wins
+// output names); a pure value type — no locks, no fhetch, no polymap — owned by EpochState under
+// its mutex. Invariants: an addr belongs to AT MOST one group; registration is latest-write-wins
 // (identical re-registration no-ops, any other overlap evicts the competing group wholesale);
 // pending names are always a subset of known names.
 class MrpGroupRegistry {
@@ -38,16 +38,20 @@ class MrpGroupRegistry {
         std::vector<uint64_t> moduli; // base[i] paired with addrs[i]
     };
 
-    // Drop every group that names `addr`, plus its leading-addr names, so a
+    // Drop every group that names `addr`, plus its leading-addr name, so a
     // recycled allocation cannot resurrect stale state.
     void invalidate(DevAddr addr);
 
-    // Stable counter name ("haze_mrp_in_N" / "haze_mrp_out_N") for the group
-    // led by `leading`; invalidate() drops it.
-    std::string group_name(bool output, DevAddr leading);
+    // Stable counter name ("haze_mrp_out_N") for the output group led by
+    // `leading`; invalidate() drops it.
+    std::string group_name(DevAddr leading);
 
-    // True exactly once per name; the caller then emits the fhetch input tag.
-    bool mark_input_tagged(const std::string &name);
+    // Fresh name ("haze_mrp_in_N") for one H2D upload. Deliberately NOT keyed on
+    // the leading addr: every upload builds new fhetch polynomials (each
+    // Polynomial::from_data allocates a fresh address), so re-uploading to the
+    // same addrs needs its own entry or the trace would read addresses that no
+    // .ids file binds.
+    std::string next_input_group_name();
 
     // Record `addrs`/`moduli` as the current MRP group `name` (latest-write-wins), returning
     // true if it was already a tagged output so the caller re-tags its members.
@@ -74,9 +78,7 @@ class MrpGroupRegistry {
     std::unordered_set<std::string> pending_; // subset of known_ keys
     // Reverse index addr -> group names (at most one after any registration).
     std::unordered_map<DevAddr, std::unordered_set<std::string>> addr_to_groups_;
-    std::unordered_map<DevAddr, std::string> in_names_;
     std::unordered_map<DevAddr, std::string> out_names_;
-    std::unordered_set<std::string> input_tagged_;
     uint64_t in_counter_ = 0;
     uint64_t out_counter_ = 0;
 };

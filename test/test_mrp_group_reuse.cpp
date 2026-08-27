@@ -113,8 +113,8 @@ TEST_CASE("MRP group reuse: identical in-place re-registration is a dedup no-op"
         }
     }
 
-    auto acc = haze::test::allocate_and_h2d_residues(acc_data);
-    auto x = haze::test::allocate_and_h2d_residues(x_data);
+    auto acc = haze::test::allocate_and_h2d_residues(acc_data, base);
+    auto x = haze::test::allocate_and_h2d_residues(x_data, base);
 
     // Three in-place accumulations: acc ← acc + x each time.
     // src1 = acc (aliased), src2 = x.  Identical dst[0] → same group name
@@ -206,8 +206,8 @@ TEST_CASE("MRP group reuse: same dst[0] re-registered with fewer residues export
 
     // Allocate destination slots for op1: a[0..2].
     auto a = haze::test::allocate_dst_residues(3, kBytes);
-    auto x1 = haze::test::allocate_and_h2d_residues(x1_data);
-    auto y1 = haze::test::allocate_and_h2d_residues(y1_data);
+    auto x1 = haze::test::allocate_and_h2d_residues(x1_data, base3);
+    auto y1 = haze::test::allocate_and_h2d_residues(y1_data, base2);
 
     // op1: write [a0,a1,a2] with 3-residue group.
     REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(x1).data(), haze::test::to_const(x1).data(),
@@ -291,8 +291,8 @@ TEST_CASE("MRP group reuse: a tagged group replaced by a smaller shape exports t
     }
 
     auto a = haze::test::allocate_dst_residues(3, kBytes);
-    auto x1 = haze::test::allocate_and_h2d_residues(x1_data);
-    auto y1 = haze::test::allocate_and_h2d_residues(y1_data);
+    auto x1 = haze::test::allocate_and_h2d_residues(x1_data, base3);
+    auto y1 = haze::test::allocate_and_h2d_residues(y1_data, base2);
 
     // op1 registers the 3-residue group; TAG IT NOW (before the replacement).
     REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(x1).data(), haze::test::to_const(x1).data(),
@@ -389,8 +389,8 @@ TEST_CASE("MRP group reuse: addr migrating to a new group evicts the old group w
     // a[0..2] for group A; b[0..1] for group B (b[0] is new dst[0]).
     auto a = haze::test::allocate_dst_residues(3, kBytes);
     auto b = haze::test::allocate_dst_residues(2, kBytes); // b[0], b[1]
-    auto xa = haze::test::allocate_and_h2d_residues(xa_data);
-    auto xb = haze::test::allocate_and_h2d_residues(xb_data);
+    auto xa = haze::test::allocate_and_h2d_residues(xa_data, base);
+    auto xb = haze::test::allocate_and_h2d_residues(xb_data, base);
 
     // op_A: [a0,a1,a2] ← xa + xa; registers group A with dst[0]=a[0].
     REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
@@ -482,8 +482,8 @@ TEST_CASE("MRP group reuse: a tagged group evicted by addr migration drops its M
 
     auto a = haze::test::allocate_dst_residues(3, kBytes);
     auto b = haze::test::allocate_dst_residues(2, kBytes);
-    auto xa = haze::test::allocate_and_h2d_residues(xa_data);
-    auto xb = haze::test::allocate_and_h2d_residues(xb_data);
+    auto xa = haze::test::allocate_and_h2d_residues(xa_data, base);
+    auto xb = haze::test::allocate_and_h2d_residues(xb_data, base);
 
     // op_A registers group A; TAG IT NOW, before the migration.
     REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
@@ -646,7 +646,7 @@ TEST_CASE("MRP group reuse: freed and recycled dst[0] starts clean", "[integrati
 
     // Allocate a[0..2] and run op1 to establish group A.
     auto a = haze::test::allocate_dst_residues(3, kBytes);
-    auto xa = haze::test::allocate_and_h2d_residues(xa_data);
+    auto xa = haze::test::allocate_and_h2d_residues(xa_data, base3);
 
     REQUIRE(hazeAddMrp(a.data(), haze::test::to_const(xa).data(), haze::test::to_const(xa).data(),
                        base3.data(), base3.size(), nullptr) == HAZE_SUCCESS);
@@ -670,7 +670,7 @@ TEST_CASE("MRP group reuse: freed and recycled dst[0] starts clean", "[integrati
     REQUIRE(hazeMalloc(&c1, kBytes) == HAZE_SUCCESS);
 
     // H2D fresh op2 inputs (reuse existing xb_data).
-    auto xb = haze::test::allocate_and_h2d_residues(xb_data);
+    auto xb = haze::test::allocate_and_h2d_residues(xb_data, base2);
 
     // op2: [a0_recycled, c1] ← xb + xb; fresh 2-residue group.
     const std::vector<void *> dst2 = {a0_recycled, c1};

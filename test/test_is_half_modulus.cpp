@@ -390,7 +390,7 @@ std::vector<std::vector<uint64_t>> run_ihm_mrp(const std::vector<uint64_t> &base
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = boundary_input(base[i], seed + i);
 
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
     REQUIRE(hazeIsHalfModulusMrp(d_dst.data(), src_view.data(), base.data(), base.size(),
@@ -451,7 +451,7 @@ TEST_CASE("hazeIsHalfModulusMrp: in-place dst == src", "[integration]") {
     for (std::size_t i = 0; i < limb_base.size(); ++i)
         inputs[i] = boundary_input(limb_base[i], /*seed=*/848484ULL + i);
 
-    const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(inputs, limb_base);
     const std::vector<const void *> src_view = haze::test::to_const(d_x);
     REQUIRE(hazeIsHalfModulusMrp(d_x.data(), src_view.data(), limb_base.data(), limb_base.size(),
                                  nullptr) == HAZE_SUCCESS);

@@ -52,22 +52,19 @@ void MrpGroupRegistry::invalidate(DevAddr addr) {
             evict_group(name);
     }
     // A recycled allocation leading a new group gets a fresh name.
-    in_names_.erase(addr);
     out_names_.erase(addr);
 }
 
-std::string MrpGroupRegistry::group_name(bool output, DevAddr leading) {
-    auto &names = output ? out_names_ : in_names_;
-    if (auto it = names.find(leading); it != names.end())
+std::string MrpGroupRegistry::group_name(DevAddr leading) {
+    if (auto it = out_names_.find(leading); it != out_names_.end())
         return it->second;
-    auto &counter = output ? out_counter_ : in_counter_;
-    std::string name = (output ? "haze_mrp_out_" : "haze_mrp_in_") + std::to_string(counter++);
-    names.emplace(leading, name);
+    std::string name = "haze_mrp_out_" + std::to_string(out_counter_++);
+    out_names_.emplace(leading, name);
     return name;
 }
 
-bool MrpGroupRegistry::mark_input_tagged(const std::string &name) {
-    return input_tagged_.insert(name).second;
+std::string MrpGroupRegistry::next_input_group_name() {
+    return "haze_mrp_in_" + std::to_string(in_counter_++);
 }
 
 std::expected<bool, HazeInternalError>
@@ -160,9 +157,7 @@ void MrpGroupRegistry::clear() {
     known_.clear();
     pending_.clear();
     addr_to_groups_.clear();
-    in_names_.clear();
     out_names_.clear();
-    input_tagged_.clear();
     in_counter_ = 0;
     out_counter_ = 0;
 }

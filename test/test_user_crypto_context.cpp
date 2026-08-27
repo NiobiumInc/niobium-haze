@@ -81,8 +81,8 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
             expected[i][k] = add_mod(a[i][k], b[i][k], base[i]);
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = haze::test::allocate_and_h2d_residues(a, base);
+    auto db = haze::test::allocate_and_h2d_residues(b, base);
     auto dst = haze::test::allocate_dst_residues(3, kBytes);
 
     auto da_const = haze::test::to_const(da);

@@ -202,9 +202,40 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     return {};
 }
 
-void EpochState::tag_mrp_input_if_new_locked(const std::string &name, const fhetch::MRP &mrp) {
-    if (mrp_.mark_input_tagged(name))
-        fhetch::tag_input(name, mrp);
+std::expected<void, HazeInternalError>
+EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
+                                     std::span<const uint64_t> moduli) noexcept {
+    // No recording (failed init): keep H2D as a plain shadow write and skip the
+    // tag, matching tag_h2d_input_locked.
+    if (!recording_) {
+        return {};
+    }
+    const uint64_t ring_dim = fhe_params().ring_dim();
+    std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+    pairs.reserve(addrs.size());
+    for (std::size_t i = 0; i < addrs.size(); ++i) {
+        // Non-evicting read: the shadow must survive for a compute-free D2H.
+        auto components = allocator().read_polynomial_components(addrs[i], ring_dim);
+        if (!components)
+            return std::unexpected(components.error());
+        pairs.emplace_back(fhetch::Polynomial::from_data(std::move(*components), ring_dim,
+                                                         fhetch::Format::Evaluation),
+                           moduli[i]);
+    }
+    // One entry per upload under a fresh name: every from_data above minted a new
+    // fhetch address, so reusing a name keyed on the leading addr would leave a
+    // re-upload's addresses bound by no .ids file.
+    fhetch::tag_input(mrp_.next_input_group_name(), fhetch::MRP::from_pairs(pairs));
+    for (std::size_t i = 0; i < addrs.size(); ++i) {
+        // The caller declared this residue's prime, so bind it rather than
+        // erasing as the modulus-less single-H2D path must.
+        fhetch::bind_modulus(pairs[i].first, moduli[i]);
+        poly_map_.insert_or_assign(addrs[i], pairs[i].first);
+        pending_outputs_.erase(addrs[i]);
+        addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
+        input_addrs_.insert(addrs[i]);
+    }
+    return {};
 }
 
 std::expected<void, HazeInternalError>
@@ -329,8 +360,8 @@ void EpochState::clear_state_locked() noexcept {
     CompilerBackend::clear_captured();
 }
 
-std::string EpochState::mrp_group_name_locked(bool output, DevAddr leading) {
-    return mrp_.group_name(output, leading);
+std::string EpochState::mrp_group_name_locked(DevAddr leading) {
+    return mrp_.group_name(leading);
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noexcept {

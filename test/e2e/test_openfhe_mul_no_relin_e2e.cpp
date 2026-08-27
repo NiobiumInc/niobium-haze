@@ -235,10 +235,10 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
         return host;
     };
 
-    auto da_c0 = haze::test::allocate_and_h2d_residues(a_c0);
-    auto da_c1 = haze::test::allocate_and_h2d_residues(a_c1);
-    auto db_c0 = haze::test::allocate_and_h2d_residues(b_c0);
-    auto db_c1 = haze::test::allocate_and_h2d_residues(b_c1);
+    auto da_c0 = haze::test::allocate_and_h2d_residues(a_c0, base);
+    auto da_c1 = haze::test::allocate_and_h2d_residues(a_c1, base);
+    auto db_c0 = haze::test::allocate_and_h2d_residues(b_c0, base);
+    auto db_c1 = haze::test::allocate_and_h2d_residues(b_c1, base);
 
     // kPreRescale materializes rescaled chains; otherwise the H2D inputs feed
     // the tensor directly.

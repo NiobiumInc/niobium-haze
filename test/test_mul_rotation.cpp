@@ -44,6 +44,11 @@ struct SrpDriver {
 
     std::vector<uint64_t> base;
 
+    // Single-tower values keep the plain modulus-less H2D path.
+    static std::vector<void *> h2d(const std::vector<std::vector<uint64_t>> &residues) {
+        return haze::test::allocate_and_h2d_residues(residues);
+    }
+
     uint64_t setup() {
         const uint64_t q =
             haze::test::setup_integration_compute_config(kRingDim, kQ0, /*mod_idx=*/0);
@@ -66,6 +71,11 @@ struct MrpDriver {
     static constexpr const char *kShape = "MRP";
 
     std::vector<uint64_t> base;
+
+    // Ciphertext residues declare their primes at upload.
+    std::vector<void *> h2d(const std::vector<std::vector<uint64_t>> &residues) const {
+        return haze::test::allocate_and_h2d_residues(residues, base);
+    }
 
     uint64_t setup() {
         REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
@@ -159,8 +169,8 @@ TEMPLATE_TEST_CASE("mul→automorph→automorph: two rotations sharing one produ
         r2_expected[i] = sigma(c_i, kIdx2);
     }
 
-    auto d_a = haze::test::allocate_and_h2d_residues(a);
-    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto d_a = d.h2d(a);
+    auto d_b = d.h2d(b);
     auto d_c = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_r1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_r2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
