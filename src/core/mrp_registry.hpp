@@ -63,6 +63,11 @@ class MrpGroupRegistry {
     // `addr` is in no group.
     std::optional<std::vector<DevAddr>> mark_group_output(DevAddr addr);
 
+    // Name of the pending group `addr` belongs to, or nullptr if it is in none.
+    // Resolved at flush time because latest-write-wins eviction can drop an addr
+    // out of its group after the output tag was taken.
+    const std::string *pending_group_for(DevAddr addr) const;
+
     // Pending-group view for flush-time export (resolved through the latest
     // registration).
     bool has_pending() const { return !pending_.empty(); }

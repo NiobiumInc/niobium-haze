@@ -144,6 +144,19 @@ std::optional<std::vector<DevAddr>> MrpGroupRegistry::mark_group_output(DevAddr 
     return members;
 }
 
+const std::string *MrpGroupRegistry::pending_group_for(DevAddr addr) const {
+    auto rev = addr_to_groups_.find(addr);
+    if (rev == addr_to_groups_.end())
+        return nullptr;
+    // At most one group per addr after any registration; the loop mirrors
+    // mark_group_output's defense in depth should that invariant relax.
+    for (const auto &name : rev->second) {
+        if (auto it = pending_.find(name); it != pending_.end())
+            return &*it;
+    }
+    return nullptr;
+}
+
 std::vector<std::string> MrpGroupRegistry::pending_names() const {
     return {pending_.begin(), pending_.end()};
 }

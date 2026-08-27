@@ -17,12 +17,14 @@
 #include "core/epoch.hpp"
 #include "core/polynomial_io.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/replay_bridge.h>
 #include <ios>
 #include <niobium/fhetch_api.h>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -61,7 +63,46 @@ std::expected<void, HazeInternalError> EpochState::materialize_epoch(bool run_re
 
     // Step 3: per-output shadow population; any failure aborts so a stale
     // shadow can't surface as a silent wrong-value D2H.
+    //
+    // A grouped residue is populated from its group's MRP probe - the only
+    // entry it has - and everything else from its own SRP probe. The split
+    // mirrors tag_pending_outputs_locked exactly; read it alongside this.
+    for (const auto &name : mrp_.pending_names()) {
+        const auto *g = mrp_.find(name);
+        if (g == nullptr) {
+            // pending is a subset of known; a miss is a registry bug.
+            record_internal_error(
+                HazeInternalError::BackendOutputMissing,
+                ("materialize_epoch: pending MRP group '" + name + "' missing from the registry")
+                    .c_str());
+            return std::unexpected(HazeInternalError::BackendOutputMissing);
+        }
+        fhetch::MRP result_mrp;
+        if (!fhetch::result(name, result_mrp)) {
+            record_internal_error(HazeInternalError::BackendOutputMissing,
+                                  ("result('" + name + "') unavailable for the MRP group").c_str());
+            return std::unexpected(HazeInternalError::BackendOutputMissing);
+        }
+        for (std::size_t i = 0; i < g->addrs.size(); ++i) {
+            std::vector<uint64_t> values;
+            if (!decode_result_values(result_mrp[g->moduli[i]], values)) {
+                std::ostringstream body;
+                body << "failed to extract values for MRP output '" << name << "' residue "
+                     << g->moduli[i] << " at addr 0x" << std::hex << to_uintptr(g->addrs[i])
+                     << std::dec;
+                record_internal_error(HazeInternalError::BackendOutputDecodeFailed,
+                                      body.str().c_str());
+                return std::unexpected(HazeInternalError::BackendOutputDecodeFailed);
+            }
+            if (auto r = allocator().update_shadow(g->addrs[i], std::move(values)); !r) {
+                return std::unexpected(r.error());
+            }
+        }
+    }
+
     for (const auto &[addr, name] : pending_outputs_) {
+        if (mrp_.pending_group_for(addr) != nullptr)
+            continue;
         fhetch::Polynomial result_poly;
         if (!fhetch::result(name, result_poly)) {
             std::ostringstream body;

@@ -256,6 +256,13 @@ std::expected<void, HazeInternalError> EpochState::tag_pending_outputs_locked() 
     // pending_outputs_ and poly_map_ stay in lockstep via store + invalidate,
     // so a missing binding here is a state-management bug, not recoverable.
     for (auto &[addr, name] : pending_outputs_) {
+        // A residue of a pending MRP group is carried by that group's entry
+        // below; emitting an SRP probe too would record the address twice and
+        // leave a reader to decide which one governs it. Membership is settled
+        // only now: latest-write-wins eviction can drop an addr out of its group
+        // after tag_output_locked ran, and such an addr keeps its SRP probe.
+        if (mrp_.pending_group_for(addr) != nullptr)
+            continue;
         auto it = poly_map_.find(addr);
         if (it == poly_map_.end()) {
             std::ostringstream body;
@@ -267,9 +274,9 @@ std::expected<void, HazeInternalError> EpochState::tag_pending_outputs_locked() 
         fhetch::tag_output(name, it->second);
     }
 
-    // Also tag each pending MRP group as a fhetch MRP output so external
-    // callers can pull the multi-residue view via fhetch::result(name, MRP&);
-    // find() resolves the latest registration for the name.
+    // Tag each pending MRP group as a fhetch MRP output: the sole entry for its
+    // residues, read back per-residue at materialize via fhetch::result(name,
+    // MRP&); find() resolves the latest registration for the name.
     for (const auto &name : mrp_.pending_names()) {
         const auto *g = mrp_.find(name);
         if (g == nullptr) {
