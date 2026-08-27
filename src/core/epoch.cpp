@@ -80,6 +80,7 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
     input_addrs_.erase(addr);
+    undeclared_uploads_.erase(addr);
 }
 
 std::expected<niobium::fhetch::Polynomial, HazeInternalError>
@@ -113,10 +114,15 @@ bool EpochState::is_input_locked(DevAddr addr) const noexcept {
     return input_addrs_.contains(addr);
 }
 
+bool EpochState::is_undeclared_upload_locked(DevAddr addr) const noexcept {
+    return undeclared_uploads_.contains(addr);
+}
+
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
     input_addrs_.erase(addr);
+    undeclared_uploads_.erase(addr);
     // A no-modulus (kCopyModulus) result drops any stale entry so a later
     // copy/automorph can't recover a previous occupant's modulus here.
     if (modulus != kCopyModulus)
@@ -199,6 +205,7 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
     input_addrs_.insert(addr);
+    undeclared_uploads_.insert(addr);
     return {};
 }
 
@@ -234,6 +241,7 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
         pending_outputs_.erase(addrs[i]);
         addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
         input_addrs_.insert(addrs[i]);
+        undeclared_uploads_.erase(addrs[i]);
     }
     return {};
 }
@@ -358,6 +366,7 @@ void EpochState::clear_state_locked() noexcept {
     pending_outputs_.clear();
     addr_modulus_.clear();
     input_addrs_.clear();
+    undeclared_uploads_.clear();
     mrp_.clear();
     recording_ = false;
     input_counter_ = 0;

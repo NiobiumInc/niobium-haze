@@ -95,9 +95,10 @@ HAZE_API hazeError_t hazeMemcpyPeerAsync(void *dst, int dst_device, const void *
 // H2D and D2D. H2D records the upload as ONE MRP input holding base[i] per residue - the only
 // input entry those addresses ever get, so a consumer never has to decide which of several
 // recorded entries governs an address; upload a ciphertext's residues this way rather than
-// through a per-limb hazeMemcpy loop, which cannot name their primes and is rejected by any
-// later MRP op (HAZE_ERROR_INVALID_VALUE). D2D records a per-residue pass-through copy under
-// base[i] and registers the dst as an MRP output group. D2H is a pure shadow read.
+// through a per-limb hazeMemcpy loop, which cannot name their primes and so is rejected
+// (HAZE_ERROR_INVALID_VALUE) by a later multi-residue MRP op. D2D records a per-residue
+// pass-through copy under base[i] and registers the dst as an MRP output group. D2H is a
+// pure shadow read.
 HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;

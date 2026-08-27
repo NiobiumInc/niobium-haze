@@ -71,13 +71,13 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
     pairs.reserve(len);
     for (std::size_t i = 0; i < len; ++i) {
         DevAddr a = to_dev_addr(polys[i]);
-        // A live-in with no declared modulus reached an MRP op through a plain
-        // hazeMemcpy, which cannot say which prime the bytes hold. Inputs are
-        // declared at upload now, so there is no later moment to recover it:
-        // refuse instead of recording a ciphertext residue whose entry would
-        // carry modulus 0. Computed sources are exempt: replay reproduces them.
-        if (len > 1 && epoch().is_input_locked(a) &&
-            epoch().recorded_modulus_locked(a) == kCopyModulus) {
+        // These bytes arrived by a plain hazeMemcpy, which cannot say which prime
+        // they hold. Inputs are declared at upload now, so there is no later
+        // moment to recover it: refuse rather than record a ciphertext residue
+        // whose entry would carry modulus 0. Asks the epoch what it recorded at
+        // upload time rather than inferring provenance from live-in-ness, which
+        // an op-time promotion of never-uploaded bytes also satisfies.
+        if (len > 1 && epoch().is_undeclared_upload_locked(a)) {
             record_internal_error(HazeInternalError::InvalidArgument,
                                   "build_mrp_locked: MRP operand residue was uploaded without a "
                                   "declared modulus; upload ciphertext residues with "

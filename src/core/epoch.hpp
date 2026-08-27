@@ -86,6 +86,13 @@ class EpochState {
     // opposed to a value the trace produces (compute result / D2D copy).
     bool is_input_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
 
+    // True if `addr` currently holds bytes uploaded by a plain hazeMemcpy(H2D),
+    // which names no prime. Recorded when the upload happens rather than
+    // reconstructed later: an op-time promotion of never-uploaded bytes
+    // (lookup_or_create_locked) is also a live-in without a modulus, so the two
+    // are indistinguishable after the fact.
+    bool is_undeclared_upload_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
+
     // Bind `addr` to `poly` (output-hood stays explicit via tag_output_locked);
     // `modulus` records the residue's real modulus (kCopyModulus = unknown)
     // for later copy/automorph recovery, and any stale shadow at `addr` is
@@ -180,6 +187,9 @@ class EpochState {
     // addr -> real modulus from the last modulus-carrying op, in lockstep with
     // poly_map_; cleared per epoch and dropped on invalidate.
     std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);
+    // Addrs whose current bytes arrived by a plain modulus-less hazeMemcpy(H2D);
+    // backs is_undeclared_upload_locked. Written only where the upload happens.
+    std::unordered_set<DevAddr> undeclared_uploads_ HAZE_GUARDED_BY(mutex_);
     // MRP group bookkeeping; invariants documented on MrpGroupRegistry.
     MrpGroupRegistry mrp_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
