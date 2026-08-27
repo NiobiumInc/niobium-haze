@@ -442,7 +442,6 @@ add_executable(haze_tests
   test/test_d2d_copy.cpp
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
-  test/test_keep_replay_artifacts.cpp
   test/test_trace_modulus.cpp
   test/test_invariant_regressions.cpp
   test/test_mrp_registry.cpp

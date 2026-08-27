@@ -479,10 +479,9 @@ Make variables and / or environment:
 
 Runtime selector (consumed by `libhaze` itself, not the Makefile):
 
-| Variable                       | Purpose                                                                                                                                                                                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HAZE_TARGET`                  | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read at the first `hazeFlush()`. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
-| `HAZE_KEEP_REPLAY_ARTIFACTS`   | Set and non-empty and first character not `0` to preserve `serialized_probes/` and `ciphertext_templates/` across `hazeReplayBridgeReset()` (which both FIDESlib call sites invoke directly, ahead of their own `hazeDeviceReset()`) for external replay via `nbcc_fhetch_replay --project=<dir>`. Default: `0` (wipe both directories). |
+| Variable      | Purpose                                                                                                                                                                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HAZE_TARGET` | Replay target: `local` (default; in-process simulator) or one of `FHE_SIM`, `FUNC_SIM`, `FPGA_TRI`, `fhetch_sim` (HTTP transport to `nbcc_fhetch_replay`). Read at the first `hazeFlush()`. See [`include/haze/haze.h`](include/haze/haze.h) for the full table. |
 
 CMake-level toggles (`-D...`):
 
