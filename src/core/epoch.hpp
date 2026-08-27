@@ -112,9 +112,19 @@ class EpochState {
 
     // Eagerly tag the H2D'd shadow bytes at `addr` as a fhetch input via a non-evicting read
     // (shadow survives for compute-free D2H); violated H2D post-conditions (ring_dim set,
-    // shadow populated) are internal errors.
+    // shadow populated) are internal errors. Modulus-less by construction: a plain hazeMemcpy
+    // carries no prime, so any stale one is dropped (see tag_h2d_mrp_input_locked for the
+    // declared-modulus path).
     std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
         HAZE_REQUIRES(mutex_);
+
+    // Tag one MRP input for an H2D upload whose caller declared `moduli` (hazeMemcpyMrp),
+    // binding each residue's real modulus instead of erasing it. Emits exactly one entry per
+    // upload - the sole input tag a grouped residue ever gets, so nothing downstream has to
+    // decide which of two entries governs an address.
+    std::expected<void, HazeInternalError>
+    tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
+                             std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
 
     // Register an MRP-shaped grouping so replay emits a single fhetch::tag_output(name, MRP);
     // re-registration is latest-write-wins (identical membership no-ops, anything else
@@ -124,15 +134,9 @@ class EpochState {
                                                                    std::string &&name)
         HAZE_REQUIRES(mutex_);
 
-    // Pass-through to fhetch::tag_input(name, MRP) with first-wins dedup by name (unlike the
-    // latest-write-wins output groups); input-side dst[0] reuse staleness is a known
-    // limitation.
-    void tag_mrp_input_if_new_locked(const std::string &name, const niobium::fhetch::MRP &mrp)
-        HAZE_REQUIRES(mutex_);
-
-    // Stable per-epoch counter name ("haze_mrp_in_N" / "haze_mrp_out_N") for the group led by
-    // `leading`; invalidate() drops it so a recycled allocation gets a fresh name.
-    std::string mrp_group_name_locked(bool output, DevAddr leading) HAZE_REQUIRES(mutex_);
+    // Stable per-epoch counter name ("haze_mrp_out_N") for the output group led by `leading`;
+    // invalidate() drops it so a recycled allocation gets a fresh name.
+    std::string mrp_group_name_locked(DevAddr leading) HAZE_REQUIRES(mutex_);
 
     EpochState(const EpochState &) = delete;
     EpochState &operator=(const EpochState &) = delete;

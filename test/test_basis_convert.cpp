@@ -238,10 +238,13 @@ TEST_CASE("hazeBasisConvert: shared-modulus copies produce input values", "[inte
     constexpr uint64_t kInput1 = 42;
     std::vector<uint64_t> poly_a(kRingDim, kInput0);
     std::vector<uint64_t> poly_b(kRingDim, kInput1);
-    REQUIRE(hazeMemcpy(s0, poly_a.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, poly_b.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
     const uint64_t src_base[] = {kQ0, kQ1};
+    // Basis-convert sources are MRP operands: declare their primes at upload.
+    void *const src_slots[] = {s0, s1};
+    const void *const src_hosts[] = {poly_a.data(), poly_b.data()};
+    REQUIRE(hazeMemcpyMrp(src_slots, src_hosts, kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, src_base, 2) ==
+            HAZE_SUCCESS);
+
     const uint64_t dst_base[] = {kQ0, kQ1, kQ2};
     const void *src_polys[] = {s0, s1};
     void *dst_polys[] = {d0, d1, d2};
@@ -287,10 +290,12 @@ TEST_CASE("hazeBasisConvert: zero input produces zero output", "[integration]") 
     REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
     const uint64_t src_base[] = {kQ0, kQ1};
+    void *const src_slots[] = {s0, s1};
+    const void *const src_hosts[] = {zeros.data(), zeros.data()};
+    REQUIRE(hazeMemcpyMrp(src_slots, src_hosts, kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, src_base, 2) ==
+            HAZE_SUCCESS);
+
     const uint64_t dst_base[] = {kQ0, kQ2};
     const void *src_polys[] = {s0, s1};
     void *dst_polys[] = {d0, d1};
@@ -377,11 +382,12 @@ TEST_CASE("hazeModDown: zero input rescales to zero output", "[integration]") {
     REQUIRE(hazeMalloc(&d1, kBytes) == HAZE_SUCCESS);
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s2, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
     const uint64_t src_base[] = {kQ0, kQ1, kQ2};
+    void *const src_slots[] = {s0, s1, s2};
+    const void *const src_hosts[] = {zeros.data(), zeros.data(), zeros.data()};
+    REQUIRE(hazeMemcpyMrp(src_slots, src_hosts, kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, src_base, 3) ==
+            HAZE_SUCCESS);
+
     const uint64_t rescale_base[] = {kQ2};
     const void *src_polys[] = {s0, s1, s2};
     void *dst_polys[] = {d0, d1};
@@ -435,10 +441,12 @@ TEST_CASE("hazeModUp: zero input produces zero output across both digits", "[int
     }
 
     std::vector<uint64_t> zeros(kRingDim, 0);
-    REQUIRE(hazeMemcpy(s0, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(s1, zeros.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-
     const uint64_t src_base[] = {kQ0, kQ1};
+    void *const src_slots[] = {s0, s1};
+    const void *const src_hosts[] = {zeros.data(), zeros.data()};
+    REQUIRE(hazeMemcpyMrp(src_slots, src_hosts, kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, src_base, 2) ==
+            HAZE_SUCCESS);
+
     const uint64_t digit_bases_flat[] = {kQ0, kQ1};
     const size_t digit_base_lens[] = {1, 1};
     const uint64_t p_base[] = {kQ2};
@@ -742,13 +750,18 @@ std::vector<std::vector<std::vector<uint64_t>>> dig_decomp(
 // returned vector is a parallel index of dev pointers; ownership stays
 // with the test (free with hazeFree per slot). Aborts the test on any
 // HAZE error to keep the body of the test linear.
-std::vector<void *> allocate_and_h2d(const std::vector<std::vector<uint64_t>> &residues) {
+std::vector<void *> allocate_and_h2d(const std::vector<std::vector<uint64_t>> &residues,
+                                     const std::vector<uint64_t> &base) {
+    REQUIRE(residues.size() == base.size());
     std::vector<void *> ptrs(residues.size(), nullptr);
+    std::vector<const void *> srcs(residues.size(), nullptr);
     for (size_t i = 0; i < residues.size(); ++i) {
         REQUIRE(hazeMalloc(&ptrs[i], kBytes) == HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
+        srcs[i] = residues[i].data();
     }
+    // The basis-convert source is an MRP operand, so its primes are declared here.
+    REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
     return ptrs;
 }
 
@@ -801,7 +814,7 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[int
         residues[i] = make_residue(src_base[i], /*seed=*/424242ULL + i);
     }
 
-    auto src_ptrs = allocate_and_h2d(residues);
+    auto src_ptrs = allocate_and_h2d(residues, src_base);
     auto dst_ptrs = allocate_dst(dst_base.size());
 
     std::vector<const void *> src_const_ptrs(src_ptrs.begin(), src_ptrs.end());
@@ -838,7 +851,7 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
         residues[i] = make_residue(src_base[i], /*seed=*/911223ULL + i);
     }
 
-    auto src_ptrs = allocate_and_h2d(residues);
+    auto src_ptrs = allocate_and_h2d(residues, src_base);
     const size_t dst_count = src_base.size() - rescale_base.size();
     auto dst_ptrs = allocate_dst(dst_count);
 
@@ -891,7 +904,7 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
         residues[i] = make_residue(src_base[i], /*seed=*/777111ULL + i);
     }
 
-    auto src_ptrs = allocate_and_h2d(residues);
+    auto src_ptrs = allocate_and_h2d(residues, src_base);
     // Output layout: digit_count × (src_base_len + p_base_len) polys,
     // digit-major order matching src/core/basis_convert.cpp:202-208.
     const size_t per_digit = src_base.size() + p_base.size();

@@ -109,7 +109,7 @@ void run_broadcast_golden(Op op, const std::vector<uint64_t> &base, uint64_t p, 
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], seed + i, kRingDim);
 
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const auto [d_raw, d_m] = bind_operand(operand_vals, p_idx);
 
@@ -194,7 +194,7 @@ void run_mask_broadcast(int in_range) {
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], 515151ULL + i, kRingDim);
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
 
@@ -309,7 +309,7 @@ TEST_CASE("hazeBroadcast: H2D overwrite clears a stale recorded operand modulus"
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], 777700ULL + i, kRingDim);
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
     // The stale kQ2 recording is gone: the raw bytes are rejected...
@@ -347,7 +347,7 @@ TEST_CASE("hazeBroadcast: in-place dst == src", "[integration]") {
         inputs[i] = haze::test::make_residue(base[i], 656565ULL + i, kRingDim);
     const std::vector<uint64_t> mask = binary_mask(0xA5A5ULL);
 
-    const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(inputs, base);
     const auto [d_raw, d_m] = bind_operand(mask, /*mod_idx=*/2); // kSmallQ
 
     const std::vector<const void *> src_view = haze::test::to_const(d_x);
@@ -415,16 +415,17 @@ TEST_CASE("hazeBroadcast rejects an operand recorded under an even modulus", "[i
     // bound under an even chain entry is rejected at recovery.
     setup_chain_config({kQ0, kQ1, 2}); // 2: the one even prime the config accepts
 
-    const uint64_t base[] = {kQ0, kQ1};
+    const std::vector<uint64_t> base = {kQ0, kQ1};
     const std::vector<void *> d_src =
         haze::test::allocate_and_h2d_residues({haze::test::make_residue(kQ0, 1ULL, kRingDim),
-                                               haze::test::make_residue(kQ1, 2ULL, kRingDim)});
+                                               haze::test::make_residue(kQ1, 2ULL, kRingDim)},
+                                              base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(2, kBytes);
     const std::vector<const void *> src_view = haze::test::to_const(d_src);
     const auto [d_raw, d_m] = bind_operand(binary_mask(0x1B1BULL), /*mod_idx=*/2);
 
-    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_m, 0, base, 2, nullptr) ==
-            HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(hazeBroadcastMulMrp(d_dst.data(), src_view.data(), d_m, 0, base.data(), base.size(),
+                                nullptr) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 
     haze::test::free_all_residues(d_src);
@@ -477,7 +478,7 @@ std::string record_broadcast_trace(const std::string &program_name, int in_range
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], 686868ULL + i, kRingDim);
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const auto [d_raw, d_m] = bind_operand(binary_mask(0x5A5AULL), p_idx);
 
@@ -557,7 +558,7 @@ TEST_CASE("hazeBroadcast transport: non-synthesizable operand modulus fails loud
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)
         inputs[i] = haze::test::make_residue(base[i], 797979ULL + i, kRingDim);
-    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs);
+    const std::vector<void *> d_src = haze::test::allocate_and_h2d_residues(inputs, base);
     const std::vector<void *> d_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<uint64_t> vals = haze::test::make_residue(kBadP, 808080ULL, kRingDim);
     const auto [d_raw, d_m] = bind_operand(vals, /*mod_idx=*/2);

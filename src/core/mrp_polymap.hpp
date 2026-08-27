@@ -51,8 +51,12 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
 
 // Per-residue fan-out backing hazeMemcpyMrp; each manages its own EpochSession (call without
 // the lock held), mirroring the single-ptr copy_* free functions in epoch.hpp.
+
+// H2D honours `base`: the caller declares each residue's prime, so the upload is recorded as
+// ONE MRP input carrying them, rather than as `len` modulus-less polynomials.
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
-                                                    std::size_t count, std::size_t len) noexcept;
+                                                    std::size_t count, const uint64_t *base,
+                                                    std::size_t len) noexcept;
 
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
                                                         std::size_t count,

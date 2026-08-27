@@ -34,25 +34,27 @@ const std::vector<uint64_t> kQ3 = {97, 193, 389};
 
 } // namespace
 
-TEST_CASE("registry: group names are stable per leading addr and side", "[unit]") {
+TEST_CASE("registry: output group names are stable per leading addr", "[unit]") {
     MrpGroupRegistry reg;
-    const auto in0 = reg.group_name(false, addr(1));
-    const auto out0 = reg.group_name(true, addr(1));
-    REQUIRE(in0 == "haze_mrp_in_0");
+    const auto out0 = reg.group_name(addr(1));
     REQUIRE(out0 == "haze_mrp_out_0");
-    REQUIRE(reg.group_name(false, addr(1)) == in0); // stable on re-ask
-    REQUIRE(reg.group_name(false, addr(2)) == "haze_mrp_in_1");
+    REQUIRE(reg.group_name(addr(1)) == out0); // stable on re-ask
+    REQUIRE(reg.group_name(addr(2)) == "haze_mrp_out_1");
     // invalidate() drops the name so a recycled addr gets a fresh one.
     reg.invalidate(addr(1));
-    REQUIRE(reg.group_name(false, addr(1)) == "haze_mrp_in_2");
+    REQUIRE(reg.group_name(addr(1)) == "haze_mrp_out_2");
 }
 
-TEST_CASE("registry: input tag dedup fires exactly once per name", "[unit]") {
+TEST_CASE("registry: every input group name is fresh", "[unit]") {
     MrpGroupRegistry reg;
-    REQUIRE(reg.mark_input_tagged("g"));
-    REQUIRE_FALSE(reg.mark_input_tagged("g"));
+    // Deliberately NOT keyed on an addr: each H2D upload builds new fhetch
+    // polynomials, so re-uploading to the same addrs needs its own entry.
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_0");
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_1");
+    reg.invalidate(addr(1));
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_2");
     reg.clear();
-    REQUIRE(reg.mark_input_tagged("g"));
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_0");
 }
 
 TEST_CASE("registry: addr/moduli length mismatch is rejected", "[unit]") {
@@ -128,14 +130,14 @@ TEST_CASE("registry: clear resets groups, pending, names, and counters", "[unit]
     MrpGroupRegistry reg;
     REQUIRE(reg.record_mrp_group(addrs({1, 2}), kQ2, "g").has_value());
     REQUIRE(reg.mark_group_output(addr(1)).has_value());
-    REQUIRE(reg.group_name(false, addr(1)) == "haze_mrp_in_0");
-    REQUIRE(reg.group_name(true, addr(1)) == "haze_mrp_out_0");
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_0");
+    REQUIRE(reg.group_name(addr(1)) == "haze_mrp_out_0");
     reg.clear();
     REQUIRE(reg.find("g") == nullptr);
     REQUIRE_FALSE(reg.has_pending());
     REQUIRE_FALSE(reg.mark_group_output(addr(1)).has_value());
-    REQUIRE(reg.group_name(false, addr(1)) == "haze_mrp_in_0"); // counters restart
-    REQUIRE(reg.group_name(true, addr(1)) == "haze_mrp_out_0");
+    REQUIRE(reg.next_input_group_name() == "haze_mrp_in_0"); // counters restart
+    REQUIRE(reg.group_name(addr(1)) == "haze_mrp_out_0");
 }
 
 TEST_CASE("registry: invalidate detaches only the touched addr's group", "[unit]") {

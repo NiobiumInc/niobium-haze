@@ -46,6 +46,21 @@ struct SrpDriver {
     // Populated by setup(); test body uses base[i] as the per-residue modulus.
     std::vector<uint64_t> base;
 
+    // Single-tower values keep the plain modulus-less H2D path, which stays
+    // legal (and covered) for anything no MRP op consumes.
+    static std::vector<void *> h2d(const std::vector<std::vector<uint64_t>> &residues) {
+        return haze::test::allocate_and_h2d_residues(residues);
+    }
+
+    // Re-upload into already-allocated slots.
+    static void h2d_into(const std::vector<void *> &ptrs,
+                         const std::vector<std::vector<uint64_t>> &residues) {
+        REQUIRE(ptrs.size() == residues.size());
+        for (std::size_t i = 0; i < ptrs.size(); ++i)
+            REQUIRE(hazeMemcpy(ptrs[i], residues[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+                    HAZE_SUCCESS);
+    }
+
     // Returns the picked prime so callers (e.g. negacyclic_conv_ref) get q
     // without re-deriving from `base`.
     uint64_t setup() {
@@ -104,6 +119,24 @@ struct MrpDriver {
     static constexpr const char *kShape = "MRP";
 
     std::vector<uint64_t> base;
+
+    // Ciphertext residues declare their primes at upload; an MRP op refuses a
+    // modulus-less one.
+    std::vector<void *> h2d(const std::vector<std::vector<uint64_t>> &residues) const {
+        return haze::test::allocate_and_h2d_residues(residues, base);
+    }
+
+    // Re-upload into already-allocated slots; each upload is its own declaration
+    // and gets its own recorded entry.
+    void h2d_into(const std::vector<void *> &ptrs,
+                  const std::vector<std::vector<uint64_t>> &residues) const {
+        REQUIRE(ptrs.size() == residues.size());
+        std::vector<const void *> srcs(residues.size(), nullptr);
+        for (std::size_t i = 0; i < residues.size(); ++i)
+            srcs[i] = residues[i].data();
+        REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE,
+                              base.data(), base.size()) == HAZE_SUCCESS);
+    }
 
     uint64_t setup() {
         REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
@@ -259,8 +292,8 @@ TEMPLATE_TEST_CASE("hazeAdd: pointwise sum retrieved after D2H", "[integration]"
     make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/424242ULL,
                             /*seed_b=*/911223ULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.add(dst, haze::test::to_const(da), haze::test::to_const(db));
@@ -282,8 +315,8 @@ TEMPLATE_TEST_CASE("hazeSub: pointwise difference retrieved after D2H", "[integr
     make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/123456ULL,
                             /*seed_b=*/789012ULL, sub_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.sub(dst, haze::test::to_const(da), haze::test::to_const(db));
@@ -305,8 +338,8 @@ TEMPLATE_TEST_CASE("hazeMul: pointwise product retrieved after D2H", "[integrati
     make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xC0FFEEULL,
                             /*seed_b=*/0xBEEFFEEDULL, mul_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.mul(dst, haze::test::to_const(da), haze::test::to_const(db));
@@ -352,7 +385,7 @@ TEMPLATE_TEST_CASE("hazeAddScalar: pointwise scalar addition retrieved after D2H
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto da = d.h2d(a);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.add_scalar(dst, haze::test::to_const(da), scalars);
@@ -378,7 +411,7 @@ TEMPLATE_TEST_CASE("hazeSubScalar: pointwise scalar subtraction retrieved after 
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto da = d.h2d(a);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.sub_scalar(dst, haze::test::to_const(da), scalars);
@@ -404,7 +437,7 @@ TEMPLATE_TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H"
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto da = d.h2d(a);
     auto dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
     d.mul_scalar(dst, haze::test::to_const(da), scalars);
@@ -433,7 +466,7 @@ TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriv
         }
     }
 
-    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_src = d.h2d(src);
     auto d_ntt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_intt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -491,7 +524,7 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
         row[out_pos] = 1;
     }
 
-    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_src = d.h2d(src);
     auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_back = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
@@ -530,7 +563,7 @@ TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == 
         src[i] = haze::test::make_residue(d.base[i], 0xA170ULL + i, kRingDim);
     }
 
-    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_src = d.h2d(src);
     auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
@@ -592,7 +625,7 @@ TEST_CASE("hazeRotAutomorphCoeffMrp: impulse lands at the spec-defined position"
     REQUIRE(expected[0][1] == 0);
     REQUIRE(expected[0][kRingDim - 2] == 0);
 
-    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_src = d.h2d(src);
     auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_rot = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
@@ -630,7 +663,7 @@ TEST_CASE("hazeRotAutomorphCoeffMrp: rot(_, k) ∘ rot(_, N-k) == -x", "[integra
         }
     }
 
-    auto d_src = haze::test::allocate_and_h2d_residues(src);
+    auto d_src = d.h2d(src);
     auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_aut1 = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
@@ -672,8 +705,8 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
     if constexpr (Driver::kNumResidues == 1)
         haze::test::skip_if_hw_coefficient_input();
 
-    auto d_a = haze::test::allocate_and_h2d_residues(a);
-    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto d_a = d.h2d(a);
+    auto d_b = d.h2d(b);
     auto d_a_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
     auto d_b_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
     auto d_c_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
@@ -864,8 +897,8 @@ TEMPLATE_TEST_CASE("hazeAdd in-place (dst == src1) produces correct result", "[i
     std::vector<std::vector<uint64_t>> expected;
     make_two_residue_inputs(d.base, a, b, expected, 0x1ULL, 0x2ULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
 
     // dst aliases src1 (in-place update of `da`).
     d.add(da, haze::test::to_const(da), haze::test::to_const(db));
@@ -885,8 +918,8 @@ TEMPLATE_TEST_CASE("hazeAdd in-place (dst == src2) produces correct result", "[i
     std::vector<std::vector<uint64_t>> expected;
     make_two_residue_inputs(d.base, a, b, expected, 0x10ULL, 0x20ULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
 
     // dst aliases src2 (in-place update of `db`).
     d.add(db, haze::test::to_const(da), haze::test::to_const(db));
@@ -912,7 +945,7 @@ TEMPLATE_TEST_CASE("hazeAdd in-place squaring-style (dst == src1 == src2)", "[in
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto da = d.h2d(a);
     d.add(da, haze::test::to_const(da), haze::test::to_const(da));
     check_against_per_residue(d, da, expected);
     haze::test::free_all_residues(da);
@@ -928,8 +961,8 @@ TEMPLATE_TEST_CASE("hazeMul in-place (dst == src1) produces correct result", "[i
     std::vector<std::vector<uint64_t>> expected;
     make_two_residue_inputs(d.base, a, b, expected, 0xA1ULL, 0xB2ULL, mul_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
 
     d.mul(da, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, da, expected);
@@ -948,8 +981,8 @@ TEMPLATE_TEST_CASE("hazeMul in-place (dst == src2) produces correct result", "[i
     std::vector<std::vector<uint64_t>> expected;
     make_two_residue_inputs(d.base, a, b, expected, 0xA10ULL, 0xB20ULL, mul_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
 
     d.mul(db, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, db, expected);
@@ -973,7 +1006,7 @@ TEMPLATE_TEST_CASE("hazeMul in-place squaring-style (dst == src1 == src2)", "[in
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
+    auto da = d.h2d(a);
     d.mul(da, haze::test::to_const(da), haze::test::to_const(da));
     check_against_per_residue(d, da, expected);
     haze::test::free_all_residues(da);
@@ -1004,8 +1037,8 @@ TEMPLATE_TEST_CASE("multi-operation chain: add then mulscalar in one recording",
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto d_t = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -1037,8 +1070,8 @@ TEMPLATE_TEST_CASE("multi-operation chain: mul then add in one recording", "[int
         }
     }
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto d_t = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_dst = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -1063,8 +1096,8 @@ TEMPLATE_TEST_CASE("multiple materializations: two independent D2H cycles", "[in
     std::vector<std::vector<uint64_t>> exp1;
     make_two_residue_inputs(d.base, a1, b1, exp1, 0x111ULL, 0x222ULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a1);
-    auto db = haze::test::allocate_and_h2d_residues(b1);
+    auto da = d.h2d(a1);
+    auto db = d.h2d(b1);
     auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -1082,11 +1115,9 @@ TEMPLATE_TEST_CASE("multiple materializations: two independent D2H cycles", "[in
         for (uint64_t k = 0; k < kRingDim; ++k) {
             exp2[i][k] = add_mod(a2[i][k], b2[i][k], d.base[i]);
         }
-        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
-        REQUIRE(hazeMemcpy(db[i], b2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
     }
+    d.h2d_into(da, a2);
+    d.h2d_into(db, b2);
     d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, d_dst2, exp2);
 
@@ -1107,8 +1138,8 @@ TEMPLATE_TEST_CASE("H2D after compute invalidates the polymap binding", "[integr
     std::vector<std::vector<uint64_t>> exp1;
     make_two_residue_inputs(d.base, a1, b, exp1, 0xAA1ULL, 0xBBBULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a1);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a1);
+    auto db = d.h2d(b);
     auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -1124,9 +1155,10 @@ TEMPLATE_TEST_CASE("H2D after compute invalidates the polymap binding", "[integr
         for (uint64_t k = 0; k < kRingDim; ++k) {
             exp2[i][k] = add_mod(a2[i][k], b[i][k], d.base[i]);
         }
-        REQUIRE(hazeMemcpy(da[i], a2[i].data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
-                HAZE_SUCCESS);
     }
+    // Mid-recording re-upload: each upload is its own declaration, so dst2 must
+    // reflect the new values, not the first upload's.
+    d.h2d_into(da, a2);
     d.add(d_dst2, haze::test::to_const(da), haze::test::to_const(db));
     check_against_per_residue(d, d_dst2, exp2);
 
@@ -1147,8 +1179,8 @@ TEMPLATE_TEST_CASE("memset after compute invalidates the polymap binding", "[int
     std::vector<std::vector<uint64_t>> exp1;
     make_two_residue_inputs(d.base, a, b, exp1, 0xAA1ULL, 0xBBBULL, add_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto d_dst1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_dst2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -1500,8 +1532,8 @@ TEST_CASE("MRP output round-trip: hazeMulMrp result via fhetch::result(name, MRP
     make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xFACEFEEDULL,
                             /*seed_b=*/0xDEADC0DEULL, mul_mod);
 
-    auto da = haze::test::allocate_and_h2d_residues(a);
-    auto db = haze::test::allocate_and_h2d_residues(b);
+    auto da = d.h2d(a);
+    auto db = d.h2d(b);
     auto dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
 
     d.mul(dst, haze::test::to_const(da), haze::test::to_const(db));
@@ -1536,8 +1568,8 @@ TEST_CASE("hazeFree mid-recording on MRP output addrs does not break replay", "[
     make_two_residue_inputs(d.base, a, b, expected, /*seed_a=*/0xCAFE1111ULL,
                             /*seed_b=*/0xBABE2222ULL, add_mod);
 
-    auto d_a = haze::test::allocate_and_h2d_residues(a);
-    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto d_a = d.h2d(a);
+    auto d_b = d.h2d(b);
     // dst is pre-allocated so the post-free hazeAddMrp does not recycle
     // [intt_dst...] from pool_free_ before the flush triggers replay; otherwise
     // lookup_or_create_locked rebinds them via shadow and hides the bug.
@@ -1582,14 +1614,14 @@ TEST_CASE("hazeFree mid-recording does not leak MRP group through allocator recy
     std::error_code ec;
     fs::remove_all(probes_dir, ec);
 
-    auto d_src1 = haze::test::allocate_and_h2d_residues(src1);
+    auto d_src1 = d.h2d(src1);
     auto ntt_dst = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     d.ntt(ntt_dst, haze::test::to_const(d_src1));
 
     haze::test::free_all_residues(ntt_dst);
 
-    auto d_a = haze::test::allocate_and_h2d_residues(a);
-    auto d_b = haze::test::allocate_and_h2d_residues(b);
+    auto d_a = d.h2d(a);
+    auto d_b = d.h2d(b);
     auto recycled = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     d.add(recycled, haze::test::to_const(d_a), haze::test::to_const(d_b));
 
