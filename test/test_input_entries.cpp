@@ -380,3 +380,34 @@ TEST_CASE("recorded outputs: every residue of a grouped output is still populate
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
+
+TEST_CASE("recorded inputs: an op-time promotion is not mistaken for an upload", "[integration]") {
+    // A memset buffer has no uploaded bytes and no declared prime, yet it is a
+    // live-in the moment an op promotes it. Inferring "uploaded modulus-less"
+    // from live-in-ness therefore refuses it - and only from the second operand
+    // build onward, since the first promotes it. The refusal must key on what
+    // the upload recorded, so this stays legal and order-independent.
+    const auto base = haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+    const auto declared =
+        haze::test::allocate_and_h2d_residues(residues_for(base, 0x9090ULL), base);
+    const auto zeroed = haze::test::allocate_dst_residues(base.size(), kBytes);
+    for (void *p : zeroed)
+        REQUIRE(hazeMemset(p, 0, kBytes) == HAZE_SUCCESS);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        INFO("pass " << pass);
+        REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(declared).data(),
+                           haze::test::to_const(zeroed).data(), base.data(), base.size(),
+                           nullptr) == HAZE_SUCCESS);
+    }
+    // Both operands of one op may be the same promoted buffer.
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(zeroed).data(),
+                       haze::test::to_const(zeroed).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+
+    haze::test::free_all_residues(declared);
+    haze::test::free_all_residues(zeroed);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
