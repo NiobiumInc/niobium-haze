@@ -219,8 +219,11 @@ TEST_CASE("recorded inputs: an MRP upload emits one group entry, not one per res
     const auto entries = read_manifest(dir, "haze_inputs_grouped");
 
     REQUIRE(count_prefixed(entries, "haze_mrp_in_") == 1);
-    // The pre-fix shape also carried three modulus-less haze_in_<n> entries for
-    // exactly these addresses.
+    // Zero is the regression target, not an arbitrary bound: before this shape
+    // existed the same three addresses ALSO appeared as modulus-less
+    // haze_in_<n> entries minted per residue at H2D, which a compute op then
+    // duplicated into the group above. Any haze_in_* here means a residue took
+    // the undeclared upload path and the duplication has grown back.
     REQUIRE(count_prefixed(entries, "haze_in_") == 0);
     REQUIRE(read_ids(dir / entries.front().ids_file).size() == base.size());
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
