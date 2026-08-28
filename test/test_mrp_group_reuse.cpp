@@ -65,12 +65,11 @@ std::size_t count_mrp_out_probe_files() {
     return count;
 }
 
-// hazeDeviceReset wipes serialized_probes/ via hazeReplayBridgeReset, but the
-// wipe is a no-op for the FIRST case a binary runs: the program dir isn't
-// established until recording starts, so leftovers from a previous invocation
-// survive into whichever case Catch2 schedules first. Counting tests call this
-// right before hazeFlush (recording active → program dir set; probes are only
-// written at flush) so their post-flush counts are exact.
+// The bridge init clears serialized_probes/ when a recording begins, but that clear cannot help
+// the FIRST case a binary runs if the program dir was not yet established, so leftovers from a
+// previous invocation survive into whichever case Catch2 schedules first. Counting tests call this
+// right before hazeFlush (recording active → program dir set; probes are only written at flush)
+// so their post-flush counts are exact.
 void clear_serialized_probes() {
     namespace fs = std::filesystem;
     std::error_code ec;

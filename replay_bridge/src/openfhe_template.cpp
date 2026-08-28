@@ -487,6 +487,43 @@ void install_post_recording_hook(HookCtx hctx) {
 
 } // namespace
 
+namespace {
+
+// Drop any artifacts a previous epoch left in this program directory. Called when a recording is
+// about to begin, not when one ends: stale template/probe names pollute the NEXT epoch's MRP
+// lookups, so the moment that matters is before fresh ones are written. Clearing at teardown
+// instead would dismantle a project hazeWriteProgram() had just published.
+void clear_stale_replay_artifacts() noexcept {
+    fs::path program_dir;
+    try {
+        program_dir = niobium::compiler().get_program_directory();
+    } catch (...) {
+        return;
+    }
+    if (program_dir.empty())
+        return;
+
+    try {
+        for (const auto *sub : {"serialized_probes", "ciphertext_templates"}) {
+            std::error_code ec;
+            fs::remove_all(program_dir / sub, ec);
+            if (ec) {
+                std::ostringstream body;
+                body << "clear_stale_replay_artifacts: remove_all('" << (program_dir / sub).string()
+                     << "') failed: " << ec.message();
+                haze::log_error("replay_bridge", body.str());
+            }
+        }
+    } catch (const std::exception &e) {
+        haze::log_error("replay_bridge",
+                        std::string{"clear_stale_replay_artifacts threw: "} + e.what());
+    } catch (...) {
+        haze::log_error("replay_bridge", "clear_stale_replay_artifacts threw (unknown)");
+    }
+}
+
+} // namespace
+
 extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
                                                          uint64_t desired_modulus,
                                                          uint64_t *picked_modulus) noexcept {
@@ -507,6 +544,10 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         // program directory.
         if (auto init = haze::backend().ensure_initialized(); !init)
             return set_error(haze::to_public_error(init.error()));
+
+        // The program directory is pinned by ensure_initialized above, so this is the first
+        // point where a previous epoch's artifacts are both locatable and known to be stale.
+        clear_stale_replay_artifacts();
 
         auto built = build_context(ring_dim, {desired_modulus});
         if (!built)
@@ -530,39 +571,12 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
 }
 
 extern "C" void hazeReplayBridgeReset() noexcept {
-    // Clear first so any early-return below still honors the "prior
-    // failures don't leak forward" contract.
+    // The artifact directories are deliberately NOT cleared here. hazeWriteProgram() promises a
+    // complete project on disk for replay elsewhere, and teardown running after it would delete
+    // two directories of the project it was asked to produce. The stale-file hygiene this used to
+    // provide now happens at hazeReplayBridgeInitCryptoContext, i.e. before a recording writes
+    // fresh artifacts, which is the moment the staleness actually matters.
     hook_had_error_flag().store(false, std::memory_order_relaxed);
-
-    // Disk-only cleanup so stale template/probe names from prior tests don't
-    // pollute MRP lookups; the hook lambda is freed by compiler().reset().
-    // program_dir is queried live — DeviceState::reset() runs us before the vendor reset.
-    fs::path program_dir;
-    try {
-        program_dir = niobium::compiler().get_program_directory();
-    } catch (...) {
-        return;
-    }
-    if (program_dir.empty())
-        return;
-
-    try {
-        for (const auto *sub : {"serialized_probes", "ciphertext_templates"}) {
-            std::error_code ec;
-            fs::remove_all(program_dir / sub, ec);
-            if (ec) {
-                std::ostringstream body;
-                body << "hazeReplayBridgeReset: remove_all('" << (program_dir / sub).string()
-                     << "') failed: " << ec.message();
-                haze::log_error("replay_bridge", body.str());
-            }
-        }
-    } catch (const std::exception &e) {
-        haze::log_error("replay_bridge",
-                        std::string{"hazeReplayBridgeReset: disk cleanup threw: "} + e.what());
-    } catch (...) {
-        haze::log_error("replay_bridge", "hazeReplayBridgeReset: disk cleanup threw (unknown)");
-    }
 }
 
 extern "C" int hazeReplayBridgeTakeHookHadError() noexcept {

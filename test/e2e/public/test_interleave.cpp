@@ -92,12 +92,11 @@ void stock_interlude(const ops::OpCtx &ctx) {
 // recorded ops, before the flush), and between two recordings. Returns the set
 // of output probe files the haze epochs produced.
 std::set<std::string> run_epochs(bool interleave) {
-    // hazeDeviceReset fires hazeReplayBridgeReset, which wipes
-    // serialized_probes/ on disk AND rewinds device-address allocation. Both are
-    // load-bearing for the control-vs-interleaved comparison below: the wipe
-    // means collect_probe_names() sees only THIS run's probes (no stale files
-    // from the prior run_epochs call in the same process), and the deterministic
-    // allocation makes the probe filenames identical across the two runs.
+    // hazeDeviceReset rewinds device-address allocation, and the bridge init that make_ctx
+    // performs below clears stale artifacts. Both are load-bearing for the
+    // control-vs-interleaved comparison: the clear means collect_probe_names() sees only THIS
+    // run's probes (no stale files from the prior run_epochs call in the same process), and the
+    // deterministic allocation makes the probe filenames identical across the two runs.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 
     auto ctx = ops::make_ctx({.mode = lbcrypto::FIXEDMANUAL,
