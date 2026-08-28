@@ -82,10 +82,6 @@ class EpochState {
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
-    // True if `addr` is a live-in input (H2D upload or fresh shadow read), as
-    // opposed to a value the trace produces (compute result / D2D copy).
-    bool is_input_locked(DevAddr addr) const noexcept HAZE_REQUIRES(mutex_);
-
     // True if `addr` currently holds bytes uploaded by a plain hazeMemcpy(H2D),
     // which names no prime. Recorded when the upload happens rather than
     // reconstructed later: an op-time promotion of never-uploaded bytes
@@ -181,9 +177,6 @@ class EpochState {
     // Every poly in flight this epoch; pending_outputs_ is the addr-keyed subset naming outputs.
     std::unordered_map<DevAddr, niobium::fhetch::Polynomial> poly_map_ HAZE_GUARDED_BY(mutex_);
     std::unordered_map<DevAddr, std::string> pending_outputs_ HAZE_GUARDED_BY(mutex_);
-    // Subset of poly_map_ addrs that are live-in inputs (H2D upload / fresh
-    // shadow read), kept in lockstep with poly_map_; backs is_input_locked.
-    std::unordered_set<DevAddr> input_addrs_ HAZE_GUARDED_BY(mutex_);
     // addr -> real modulus from the last modulus-carrying op, in lockstep with
     // poly_map_; cleared per epoch and dropped on invalidate.
     std::unordered_map<DevAddr, uint64_t> addr_modulus_ HAZE_GUARDED_BY(mutex_);

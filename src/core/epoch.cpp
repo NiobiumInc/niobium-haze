@@ -79,7 +79,6 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     poly_map_.erase(addr);
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
-    input_addrs_.erase(addr);
     undeclared_uploads_.erase(addr);
 }
 
@@ -106,12 +105,7 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
     fhetch::tag_input(name, poly);
     poly_map_.emplace(addr, poly);
-    input_addrs_.insert(addr);
     return poly;
-}
-
-bool EpochState::is_input_locked(DevAddr addr) const noexcept {
-    return input_addrs_.contains(addr);
 }
 
 bool EpochState::is_undeclared_upload_locked(DevAddr addr) const noexcept {
@@ -121,7 +115,6 @@ bool EpochState::is_undeclared_upload_locked(DevAddr addr) const noexcept {
 void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Polynomial poly,
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
-    input_addrs_.erase(addr);
     undeclared_uploads_.erase(addr);
     // A no-modulus (kCopyModulus) result drops any stale entry so a later
     // copy/automorph can't recover a previous occupant's modulus here.
@@ -194,18 +187,30 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     auto components = allocator().read_polynomial_components(addr, ring_dim);
     if (!components)
         return std::unexpected(components.error());
-    fhetch::Polynomial poly =
-        fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
-    const std::string name = "haze_in_" + std::to_string(input_counter_++);
-    fhetch::tag_input(name, poly);
-    // New H2D bytes overwrite the binding, drop any output tag and stale
-    // modulus, and reclassify the addr as a live-in input (MRP-group claims
-    // stay).
-    poly_map_.insert_or_assign(addr, std::move(poly));
-    pending_outputs_.erase(addr);
-    addr_modulus_.erase(addr);
-    input_addrs_.insert(addr);
-    undeclared_uploads_.insert(addr);
+    // Same containment as tag_h2d_mrp_input_locked, and for a sharper reason
+    // than the terminate: undeclared_uploads_ is recorded LAST, so a throw
+    // there leaves an addr that really is a modulus-less upload but is not
+    // marked as one. The refusal in build_mrp_locked would then stay silent and
+    // a later multi-residue op would record this residue per-tower again -
+    // exactly the shape the refusal exists to make loud.
+    try {
+        fhetch::Polynomial poly = fhetch::Polynomial::from_data(std::move(*components), ring_dim,
+                                                                fhetch::Format::Evaluation);
+        const std::string name = "haze_in_" + std::to_string(input_counter_++);
+        fhetch::tag_input(name, poly);
+        // New H2D bytes overwrite the binding, drop any output tag and stale
+        // modulus, and mark the addr as carrying bytes no prime was declared for
+        // (MRP-group claims stay).
+        poly_map_.insert_or_assign(addr, std::move(poly));
+        pending_outputs_.erase(addr);
+        addr_modulus_.erase(addr);
+        undeclared_uploads_.insert(addr);
+    } catch (...) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "tag_h2d_input_locked threw; epoch state cleared");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
     return {};
 }
 
@@ -248,7 +253,6 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
             poly_map_.insert_or_assign(addrs[i], pairs[i].first);
             pending_outputs_.erase(addrs[i]);
             addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
-            input_addrs_.insert(addrs[i]);
             undeclared_uploads_.erase(addrs[i]);
         }
     } catch (...) {
@@ -379,7 +383,6 @@ void EpochState::clear_state_locked() noexcept {
     poly_map_.clear();
     pending_outputs_.clear();
     addr_modulus_.clear();
-    input_addrs_.clear();
     undeclared_uploads_.clear();
     mrp_.clear();
     recording_ = false;
