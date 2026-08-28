@@ -73,7 +73,22 @@ TEST_CASE("registry: identical re-registration is a no-op", "[unit]") {
     REQUIRE(reg.record_mrp_group(a, kQ2, "g").has_value());
     auto again = reg.record_mrp_group(a, kQ2, "g");
     REQUIRE(again.has_value());
-    REQUIRE_FALSE(again.value_or(true)); // no re-tag needed
+    REQUIRE_FALSE(again.value_or(true)); // not pending: no re-tag needed
+    REQUIRE(reg.find("g") != nullptr);
+}
+
+TEST_CASE("registry: identical re-registration of a PENDING group reports pending", "[unit]") {
+    // The return value answers "do the members need an output tag". Once the
+    // group is pending its members do, whether or not the shape changed, and
+    // the same-name/new-shape path already reports it - so the identical path
+    // must agree rather than rely on the members happening to be tagged.
+    MrpGroupRegistry reg;
+    const auto a = addrs({1, 2});
+    REQUIRE(reg.record_mrp_group(a, kQ2, "g").has_value());
+    REQUIRE(reg.mark_group_output(addr(1)).has_value()); // promotes "g" to pending
+    auto again = reg.record_mrp_group(a, kQ2, "g");
+    REQUIRE(again.has_value());
+    REQUIRE(again.value_or(false));
     REQUIRE(reg.find("g") != nullptr);
 }
 

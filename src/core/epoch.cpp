@@ -218,30 +218,44 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
         return {};
     }
     const uint64_t ring_dim = fhe_params().ring_dim();
-    std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-    pairs.reserve(addrs.size());
-    for (std::size_t i = 0; i < addrs.size(); ++i) {
-        // Non-evicting read: the shadow must survive for a compute-free D2H.
-        auto components = allocator().read_polynomial_components(addrs[i], ring_dim);
-        if (!components)
-            return std::unexpected(components.error());
-        pairs.emplace_back(fhetch::Polynomial::from_data(std::move(*components), ring_dim,
-                                                         fhetch::Format::Evaluation),
-                           moduli[i]);
-    }
-    // One entry per upload under a fresh name: every from_data above minted a new
-    // fhetch address, so reusing a name keyed on the leading addr would leave a
-    // re-upload's addresses bound by no .ids file.
-    fhetch::tag_input(mrp_.next_input_group_name(), fhetch::MRP::from_pairs(pairs));
-    for (std::size_t i = 0; i < addrs.size(); ++i) {
-        // The caller declared this residue's prime, so bind it rather than
-        // erasing as the modulus-less single-H2D path must.
-        fhetch::bind_modulus(pairs[i].first, moduli[i]);
-        poly_map_.insert_or_assign(addrs[i], pairs[i].first);
-        pending_outputs_.erase(addrs[i]);
-        addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
-        input_addrs_.insert(addrs[i]);
-        undeclared_uploads_.erase(addrs[i]);
+    // from_data / from_pairs / tag_input / bind_modulus all allocate and none is
+    // declared no-throw, so a bad_alloc would cross this noexcept boundary and
+    // terminate under the lock. It would also leave a half-applied binding: the
+    // trace's input entry names every residue, so an addr this loop never reached
+    // would be re-tagged by a later compute and land in the project twice - the
+    // duplication this entry shape exists to prevent. The epoch cannot be
+    // repaired from here, so clear it and report, as finalize_guarded_locked does.
+    try {
+        std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+        pairs.reserve(addrs.size());
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            // Non-evicting read: the shadow must survive for a compute-free D2H.
+            auto components = allocator().read_polynomial_components(addrs[i], ring_dim);
+            if (!components)
+                return std::unexpected(components.error());
+            pairs.emplace_back(fhetch::Polynomial::from_data(std::move(*components), ring_dim,
+                                                             fhetch::Format::Evaluation),
+                               moduli[i]);
+        }
+        // One entry per upload under a fresh name: every from_data above minted a
+        // new fhetch address, so reusing a name keyed on the leading addr would
+        // leave a re-upload's addresses bound by no .ids file.
+        fhetch::tag_input(mrp_.next_input_group_name(), fhetch::MRP::from_pairs(pairs));
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            // The caller declared this residue's prime, so bind it rather than
+            // erasing as the modulus-less single-H2D path must.
+            fhetch::bind_modulus(pairs[i].first, moduli[i]);
+            poly_map_.insert_or_assign(addrs[i], pairs[i].first);
+            pending_outputs_.erase(addrs[i]);
+            addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
+            input_addrs_.insert(addrs[i]);
+            undeclared_uploads_.erase(addrs[i]);
+        }
+    } catch (...) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "tag_h2d_mrp_input_locked threw; epoch state cleared");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
     return {};
 }

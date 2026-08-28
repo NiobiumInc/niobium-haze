@@ -77,13 +77,17 @@ MrpGroupRegistry::record_mrp_group(std::span<const DevAddr> addrs, std::span<con
         record_internal_error(HazeInternalError::MrpGroupAddrModuliMismatch, body.str().c_str());
         return std::unexpected(HazeInternalError::MrpGroupAddrModuliMismatch);
     }
-    // Identical re-registration (e.g. an in-place accumulation loop) is a
-    // no-op; a competing registration would already have evicted this group.
+    // Identical re-registration (e.g. an in-place accumulation loop) leaves
+    // membership untouched; a competing registration would already have evicted
+    // this group. Still report pending-ness, because the return value answers
+    // "do the members need an output tag", not "did the shape change" - the
+    // members of an already-pending group do, and answering false here would be
+    // right only by accident (they happen to be tagged already).
     auto existing = known_.find(name);
     if (existing != known_.end() && existing->second.addrs.size() == addrs.size() &&
         std::equal(addrs.begin(), addrs.end(), existing->second.addrs.begin()) &&
         std::equal(moduli.begin(), moduli.end(), existing->second.moduli.begin())) {
-        return false;
+        return pending_.contains(name);
     }
 
     // Latest write wins: any other group claiming one of the new addrs no
@@ -99,7 +103,12 @@ MrpGroupRegistry::record_mrp_group(std::span<const DevAddr> addrs, std::span<con
     }
 
     if (existing != known_.end()) {
-        // Same name, new shape: replace membership in place.
+        // Same name, new shape: replace membership in place. Reachable in real
+        // workloads - a level drop reuses the same leading addr with fewer
+        // residues - and deliberate: a member the new shape drops keeps its
+        // poly_map_ binding and its own output tag, so it flushes as a
+        // standalone SRP probe rather than vanishing. test_mrp_group_reuse.cpp's
+        // "replaced by a smaller shape" case asserts exactly that read-back.
         for (DevAddr old_addr : existing->second.addrs) {
             auto o = addr_to_groups_.find(old_addr);
             if (o == addr_to_groups_.end())
@@ -158,7 +167,13 @@ const std::string *MrpGroupRegistry::pending_group_for(DevAddr addr) const {
 }
 
 std::vector<std::string> MrpGroupRegistry::pending_names() const {
-    return {pending_.begin(), pending_.end()};
+    // Sorted: pending_ is an unordered_set, so raw iteration order varies with
+    // hashing and would reorder the recorded manifest run to run. Callers tag
+    // and read back groups in this order, so a stable one keeps two recordings
+    // of the same program byte-comparable.
+    std::vector<std::string> names(pending_.begin(), pending_.end());
+    std::ranges::sort(names);
+    return names;
 }
 
 const MrpGroupRegistry::Group *MrpGroupRegistry::find(const std::string &name) const {

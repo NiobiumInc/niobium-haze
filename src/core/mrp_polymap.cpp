@@ -77,6 +77,14 @@ build_mrp_locked(const void *const *polys, const uint64_t *base, std::size_t len
         // whose entry would carry modulus 0. Asks the epoch what it recorded at
         // upload time rather than inferring provenance from live-in-ness, which
         // an op-time promotion of never-uploaded bytes also satisfies.
+        //
+        // `len > 1` is load-bearing, not a cheap early-out. A single-residue
+        // operand is not part of a ciphertext group, so its bare-POLY entry is
+        // already the only entry for that address - no duplication to prevent -
+        // and every sr_* op calls remember_modulus on its operands, so that
+        // entry serializes under a real prime rather than 0. Dropping the guard
+        // would refuse legitimate single-tower uploads (plaintexts, scalars, key
+        // material) that have no MRP upload path to switch to.
         if (len > 1 && epoch().is_undeclared_upload_locked(a)) {
             record_internal_error(HazeInternalError::InvalidArgument,
                                   "build_mrp_locked: MRP operand residue was uploaded without a "
