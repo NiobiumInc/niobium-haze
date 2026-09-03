@@ -18,6 +18,8 @@
 // haze_out_<n> beside its haze_mrp_out_<m>. These assert the invariant that
 // replaced it: every address is carried by exactly one entry on each side.
 
+#include "common/errors.hpp"
+#include "core/input_spill.hpp"
 #include "integration_helpers.hpp"
 
 #include <catch2/catch_message.hpp>
@@ -413,4 +415,88 @@ TEST_CASE("recorded inputs: an op-time promotion is not mistaken for an upload",
     haze::test::free_all_residues(zeroed);
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("spilled inputs are consumed by the post-recording hook", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+
+    // Control: an ordinary recording with the spill store inactive, so the hook
+    // synthesizes from rec.per_residue_values (seed A) as it does today.
+    std::filesystem::remove_all("haze_spill_control");
+    const auto control_dir = record_one_group("haze_spill_control", base);
+
+    // Same upload seed as the control (0x5150, record_one_group's), so the uploaded
+    // bytes are identical; before hazeWriteProgram runs the hook, the group's name is
+    // spilled with a different residue seed (B), which is the only thing that can
+    // make the two .bin files differ.
+    std::filesystem::remove_all("haze_spill_consumed");
+    configure("haze_spill_consumed", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x5150ULL), base);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+
+    const std::filesystem::path spilled_dir{"haze_spill_consumed"};
+    REQUIRE(haze::input_spill().activate(spilled_dir / "input_spill").has_value());
+    REQUIRE(haze::input_spill().put("haze_mrp_in_0", residues_for(base, 0xB000ULL)).has_value());
+
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    // The hook consumed the record: a second take() on the same name fails, and
+    // its file is gone.
+    auto second_take = haze::input_spill().take("haze_mrp_in_0");
+    REQUIRE_FALSE(second_take.has_value());
+    REQUIRE(second_take.error() == haze::HazeInternalError::SpillRecordMissing);
+    REQUIRE_FALSE(std::filesystem::exists(spilled_dir / "input_spill" / "haze_mrp_in_0.spill"));
+
+    // Same shape and moduli in both runs, only the values differ: bytes
+    // differing proves the hook synthesized from the spill, not the trace.
+    const auto control_entries = read_manifest(control_dir, "haze_spill_control");
+    const auto spilled_entries = read_manifest(spilled_dir, "haze_spill_consumed");
+    REQUIRE(control_entries.size() == 1);
+    REQUIRE(spilled_entries.size() == 1);
+    REQUIRE(slurp(control_dir / control_entries.front().bin_file) !=
+            slurp(spilled_dir / spilled_entries.front().bin_file));
+
+    haze::input_spill().clear();
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(control_dir);
+    std::filesystem::remove_all(spilled_dir);
+}
+
+TEST_CASE("a missing spill record fails the flush", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_spill_missing";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xC000ULL), base);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+
+    REQUIRE(haze::input_spill().activate(dir / "input_spill").has_value());
+    // No put(): the hook's take() must fail the flush rather than fall back to
+    // the trace's own recorded values.
+    REQUIRE(hazeWriteProgram() != HAZE_SUCCESS);
+
+    // A second attempt must not crash: finalize_locked already cleared
+    // recording_ on the first (failed) flush, and must not silently produce a
+    // zero-filled .bin for the group.
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+    REQUIRE_FALSE(std::filesystem::exists(dir / (program_name + ".input_haze_mrp_in_0.bin")));
+
+    haze::input_spill().clear();
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
 }
