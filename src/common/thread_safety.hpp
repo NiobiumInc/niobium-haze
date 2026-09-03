@@ -27,6 +27,11 @@
 //
 //   EpochState::mutex_ -> DeviceAllocator::mutex_
 //   EpochState::mutex_ -> CompilerBackend::init_mutex_
+//   EpochState::mutex_ -> InputSpillStore::mutex_
+//
+// The InputSpillStore edge: the replay-bridge post-recording hook runs under
+// epoch_mutex_ and calls into the spill store. InputSpillStore is a LEAF like the
+// allocator: its code must never call into epoch, allocator, or backend.
 //
 // The init_mutex_ edge: first-compute bring-up takes init_mutex_ while holding
 // epoch_mutex_ (EpochState::ensure_recording_locked calls ensure_initialized

@@ -51,6 +51,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::BackendOutputDecodeFailed:
     case HazeInternalError::BridgeHookFailed:
     case HazeInternalError::PoolMapDesync:
+    case HazeInternalError::SpillIoFailed:
+    case HazeInternalError::SpillRecordMissing:
         return HAZE_ERROR_INTERNAL;
     }
     // Unreachable: the switch is exhaustive, but if a new variant skips this table
@@ -102,6 +104,10 @@ const char *internal_error_name(HazeInternalError err) noexcept {
         return "compute / D2D source was never written: hazeMemcpy(H2D) or compute into it first";
     case HazeInternalError::OutputNotFlushed:
         return "D2H read of address with no materialized bytes (tag output + flush before D2H)";
+    case HazeInternalError::SpillIoFailed:
+        return "input spill store I/O failure or misuse";
+    case HazeInternalError::SpillRecordMissing:
+        return "input spill record not found for the given name";
     }
     return "unknown";
 }

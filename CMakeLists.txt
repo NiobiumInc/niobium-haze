@@ -191,6 +191,7 @@ add_library(haze_objs OBJECT
   src/core/device.cpp
   src/core/device_state.cpp
   src/core/epoch.cpp
+  src/core/input_spill.cpp
   src/core/is_half_modulus.cpp
   src/core/materialize.cpp
   src/core/mrp_polymap.cpp
@@ -446,6 +447,7 @@ add_executable(haze_tests
   test/test_trace_modulus.cpp
   test/test_invariant_regressions.cpp
   test/test_input_entries.cpp
+  test/test_input_spill.cpp
   test/test_mrp_registry.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
