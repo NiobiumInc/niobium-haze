@@ -35,6 +35,8 @@ DeviceState &DeviceState::instance() noexcept {
 
 void DeviceState::reset() noexcept {
     epoch.reset();
+    // Spill records are recording state, torn down with the epoch.
+    input_spill.clear();
     backend.reset();
     allocator.reset();
     fhe_params = {}; // back to unconfigured; hazeConfigureDevice must run again
@@ -55,6 +57,9 @@ CompilerBackend &backend() noexcept {
 }
 DeviceAllocator &allocator() noexcept {
     return device_state().allocator;
+}
+InputSpillStore &input_spill() noexcept {
+    return device_state().input_spill;
 }
 EpochState &epoch() noexcept {
     return device_state().epoch;

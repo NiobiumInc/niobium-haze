@@ -50,7 +50,9 @@ enum class HazeInternalError : std::uint8_t {
     BridgeHookFailed,           // replay_bridge post-recording hook reported failures
     PoolMapDesync,              // pool_free_ entry has no `alloc_set_` peer
     SourceUnavailable,          // compute / D2D source has no shadow data and no poly_map_ binding
-    OutputNotFlushed            // D2H of an address with no materialized bytes: tag + flush first
+    OutputNotFlushed,           // D2H of an address with no materialized bytes: tag + flush first
+    SpillIoFailed,              // input spill store I/O or misuse (write/read/create_directories)
+    SpillRecordMissing          // spill record not found for a tagged input name
 };
 
 // Map an internal error to the public hazeError_t; adding a variant requires
