@@ -17,6 +17,7 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -438,6 +439,32 @@ TEST_CASE("bridge honors a custom program name for cryptocontext.dat", "[integra
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     fs::remove_all("haze_custom_prog_review");
+}
+
+TEST_CASE("local flush without bridge init fails loudly", "[integration]") {
+    // Disk-driven local replay reads cryptocontext.dat and the hook-written
+    // .bin/.ids inputs; skipping the bridge init leaves the project incomplete,
+    // so the flush must fail rather than silently replaying stale state.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig replay = {.target = "local",
+                                     .program_name = "haze_no_bridge_init_review"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+
+    auto a = haze::test::make_residue(kQ0, 3, kRingDim);
+    auto devs = haze::test::allocate_and_h2d_residues({a}, {kQ0});
+    auto dst = haze::test::allocate_dst_residues(1, kBytes);
+    REQUIRE(hazeAdd(dst[0], devs[0], devs[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() != HAZE_SUCCESS);
+    hazeGetLastError();
+
+    haze::test::free_all_residues(devs);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::error_code ec;
+    std::filesystem::remove_all("haze_no_bridge_init_review", ec);
 }
 
 TEST_CASE("failed materialize clears the epoch: retag fails, next flush is a no-op", "[unit]") {

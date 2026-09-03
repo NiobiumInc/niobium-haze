@@ -23,9 +23,16 @@
 
 #include <atomic>
 #include <expected>
+#include <filesystem>
 #include <niobium/compiler.h>
 #include <niobium/openfhe/probes.h>
 #include <string>
+
+// Defined in vendor/niobium-fhetch/src/local_replay.cpp, linked in via
+// libnbfhetch.a; forward-declared because its header is private to the vendor tree.
+namespace niobium {
+bool run_local_replay_from_project(const std::filesystem::path &dir);
+} // namespace niobium
 
 namespace haze {
 
@@ -171,6 +178,11 @@ bool CompilerBackend::replay() noexcept {
     // replay() can throw on transport-route resource exhaustion (e.g. fork
     // failure); catch so the C ABI surfaces BackendReplayFailed cleanly.
     try {
+        // Local replays the on-disk project so every target consumes identical
+        // artifacts; the in-process captured_inputs path is retired.
+        if (replay_config().target_is_local())
+            return niobium::run_local_replay_from_project(
+                niobium::compiler().get_program_directory());
         return niobium::compiler().replay();
     } catch (...) {
         record_internal_error(HazeInternalError::BackendReplayFailed, "CompilerBackend::replay");
