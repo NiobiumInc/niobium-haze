@@ -17,7 +17,6 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <string_view>
-#include <system_error>
 #include <vector>
 
 namespace {
@@ -441,16 +440,43 @@ TEST_CASE("bridge honors a custom program name for cryptocontext.dat", "[integra
     fs::remove_all("haze_custom_prog_review");
 }
 
-TEST_CASE("local flush without bridge init fails loudly", "[integration]") {
-    // Disk-driven local replay reads cryptocontext.dat and the hook-written
-    // .bin/.ids inputs; skipping the bridge init leaves the project incomplete,
-    // so the flush must fail rather than silently replaying stale state.
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+TEST_CASE("local flush without cryptocontext.dat fails loudly", "[integration]") {
+    namespace fs = std::filesystem;
     const uint64_t moduli[] = {kQ0};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
-    const hazeReplayConfig replay = {.target = "local",
-                                     .program_name = "haze_no_bridge_init_review"};
+
+    // Fixture proof: a full bridge-init round trip flushes clean once, so the
+    // failure below is caused by the deleted file, not a broken setup.
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const hazeReplayConfig fixture_replay = {.target = "local",
+                                             .program_name = "haze_missing_cc_fixture_review"};
+    REQUIRE(hazeConfigureDevice(&fhe, &fixture_replay) == HAZE_SUCCESS);
+    uint64_t fixture_scaffold = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &fixture_scaffold) == HAZE_SUCCESS);
+    {
+        auto a = haze::test::make_residue(kQ0, 3, kRingDim);
+        auto devs = haze::test::allocate_and_h2d_residues({a}, {kQ0});
+        auto dst = haze::test::allocate_dst_residues(1, kBytes);
+        REQUIRE(hazeAdd(dst[0], devs[0], devs[0], 0, nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeTagOutput(dst[0]) == HAZE_SUCCESS);
+        REQUIRE(hazeFlush() == HAZE_SUCCESS);
+        haze::test::free_all_residues(devs);
+        haze::test::free_all_residues(dst);
+    }
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    fs::remove_all("haze_missing_cc_fixture_review");
+
+    // capture_crypto_context (auto_facade.cpp) runs only inside
+    // hazeReplayBridgeInitCryptoContext, never again before flush. Deleting
+    // cryptocontext.dat here therefore reaches register_crypto_context's
+    // missing-file check deterministically, not a stale replay.
+    const hazeReplayConfig replay = {.target = "local", .program_name = "haze_missing_cc_review"};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+    uint64_t scaffold = 0;
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    auto cc_path = fs::path{"haze_missing_cc_review"} / "cryptocontext.dat";
+    REQUIRE(fs::exists(cc_path));
+    REQUIRE(fs::remove(cc_path));
 
     auto a = haze::test::make_residue(kQ0, 3, kRingDim);
     auto devs = haze::test::allocate_and_h2d_residues({a}, {kQ0});
@@ -463,8 +489,7 @@ TEST_CASE("local flush without bridge init fails loudly", "[integration]") {
     haze::test::free_all_residues(devs);
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    std::error_code ec;
-    std::filesystem::remove_all("haze_no_bridge_init_review", ec);
+    fs::remove_all("haze_missing_cc_review");
 }
 
 TEST_CASE("failed materialize clears the epoch: retag fails, next flush is a no-op", "[unit]") {

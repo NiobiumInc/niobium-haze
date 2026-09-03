@@ -46,6 +46,10 @@
 // NOT enforce this cross-mutex order (it does no lock-ordering analysis, and
 // init_mutex_ is CompilerBackend-private while ensure_initialized runs both with
 // and without epoch_mutex_ held), so it rests on this contract and review.
+// OpenFHE's global CryptoContextFactory is itself touched under both locks —
+// under init_mutex_ at replay-bridge init, under epoch_mutex_ by local
+// replay's register_crypto_context at flush — which is race-free only because
+// the single-threaded control-plane contract below serializes every caller.
 //
 // Config carries no lock. The FHE params and replay config are immutable values
 // built by the single explicit hazeConfigureDevice() (from caller-owned structs,
