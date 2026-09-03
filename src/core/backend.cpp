@@ -12,8 +12,9 @@
 // from the Product.
 //
 // Control surface for the niobium::compiler() singleton: recording is local,
-// replay dispatches per target ("local" = in-process simulator, any other string
-// = HTTP nbcc_fhetch_replay; comparisons stay symbolic via kLocalTarget).
+// replay dispatches per target ("local" = replays the on-disk project
+// in-process, any other string = HTTP nbcc_fhetch_replay; comparisons stay
+// symbolic via kLocalTarget).
 
 #include "core/backend.hpp"
 
@@ -176,7 +177,9 @@ void CompilerBackend::reset_compiler() noexcept {
 
 bool CompilerBackend::replay() noexcept {
     // replay() can throw on transport-route resource exhaustion (e.g. fork
-    // failure); catch so the C ABI surfaces BackendReplayFailed cleanly.
+    // failure), and the local branch's OpenFHE/cereal/filesystem calls also
+    // throw on their own faults; catch both here so the C ABI surfaces
+    // BackendReplayFailed cleanly.
     try {
         // Local replays the on-disk project so every target consumes identical
         // artifacts; the in-process captured_inputs path is retired.
