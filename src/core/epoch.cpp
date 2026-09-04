@@ -108,8 +108,13 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     }
 
     const uint64_t ring_dim = fhe_params().ring_dim();
-    const std::string name = "haze_in_" + std::to_string(input_counter_++);
+    const std::string name = "haze_in_" + std::to_string(input_counter_);
 
+    // Tracks whether THIS call promoted addr's shadow into the spill store, so a later
+    // failure knows whether there is anything to undo: cross-epoch reuse (residue already
+    // on disk) touches neither the shadow nor the store and needs no rollback.
+    bool promoted_this_call = false;
+    std::vector<uint64_t> residue;
     if (!input_spill().has(addr)) {
         // Fresh live-in: promote the shadow the same way an eager H2D tag would.
         auto components = allocator().extract_polynomial_components(addr, ring_dim);
@@ -124,23 +129,61 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
             }
             return std::unexpected(components.error());
         }
-        auto residue = *components;
+        residue = *components;
         auto put = input_spill().put(addr, std::move(*components));
         if (!put) {
             // extract_polynomial_components() already evicted the shadow; restore it, since
             // the allocator's contract is that an error path never destroys the caller's bytes.
-            [[maybe_unused]] auto restored = allocator().update_shadow(addr, std::move(residue));
+            auto restored = allocator().update_shadow(addr, std::move(residue));
+            if (!restored) {
+                record_internal_error(
+                    HazeInternalError::SpillIoFailed,
+                    "lookup_or_create_locked: rollback update_shadow failed "
+                    "after put failure; addr left with neither shadow nor record");
+            }
             return std::unexpected(put.error());
         }
+        promoted_this_call = true;
     }
     // Cross-epoch reuse lands here directly: the residue is already on disk from an
     // earlier tag, so this recording only needs a fresh name binding for it.
     auto bound = input_spill().bind_name(name, {addr});
-    if (!bound)
+    if (!bound) {
+        // A fresh promotion's put() already landed; undo it so addr ends up exactly as
+        // before the call rather than leaving an orphaned store entry and evicted shadow.
+        if (promoted_this_call) {
+            [[maybe_unused]] auto erased = input_spill().erase(addr);
+            auto restored = allocator().update_shadow(addr, std::move(residue));
+            if (!restored) {
+                record_internal_error(HazeInternalError::SpillIoFailed,
+                                      "lookup_or_create_locked: rollback update_shadow failed "
+                                      "after bind_name failure; addr left with neither shadow nor "
+                                      "record");
+            }
+        }
         return std::unexpected(bound.error());
-    fhetch::Polynomial poly = fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation);
-    fhetch::tag_input(name, poly);
-    poly_map_.emplace(addr, poly);
+    }
+    fhetch::Polynomial poly;
+    try {
+        poly = fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation);
+        fhetch::tag_input(name, poly);
+        poly_map_.emplace(addr, poly);
+    } catch (...) {
+        if (promoted_this_call) {
+            [[maybe_unused]] auto erased = input_spill().erase(addr);
+            auto restored = allocator().update_shadow(addr, std::move(residue));
+            if (!restored) {
+                record_internal_error(HazeInternalError::SpillIoFailed,
+                                      "lookup_or_create_locked: rollback update_shadow failed "
+                                      "after tag_input threw; addr left with neither shadow nor "
+                                      "record");
+            }
+        }
+        throw;
+    }
+    // Counted only on success, matching tag_h2d_input_locked: a throw during emplace
+    // must not advance input_counter_ past a name that never made it into poly_map_.
+    input_counter_++;
     return poly;
 }
 
@@ -238,13 +281,28 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     if (!put) {
         // extract_polynomial_components() already evicted the shadow; restore it, since
         // the allocator's contract is that an error path never destroys the caller's bytes.
-        [[maybe_unused]] auto restored = allocator().update_shadow(addr, std::move(residue));
+        auto restored = allocator().update_shadow(addr, std::move(residue));
+        if (!restored) {
+            record_internal_error(HazeInternalError::SpillIoFailed,
+                                  "tag_h2d_input_locked: rollback update_shadow failed after put "
+                                  "failure; addr left with neither shadow nor record");
+        }
         return std::unexpected(put.error());
     }
-    const std::string name = "haze_in_" + std::to_string(input_counter_++);
+    const std::string name = "haze_in_" + std::to_string(input_counter_);
     auto bound = input_spill().bind_name(name, {addr});
-    if (!bound)
+    if (!bound) {
+        // put() above already landed; undo it so addr ends up exactly as before the call
+        // rather than an orphaned store entry sitting behind an evicted shadow.
+        [[maybe_unused]] auto erased = input_spill().erase(addr);
+        auto restored = allocator().update_shadow(addr, std::move(residue));
+        if (!restored) {
+            record_internal_error(HazeInternalError::SpillIoFailed,
+                                  "tag_h2d_input_locked: rollback update_shadow failed after "
+                                  "bind_name failure; addr left with neither shadow nor record");
+        }
         return std::unexpected(bound.error());
+    }
     // Same containment as tag_h2d_mrp_input_locked, and for a sharper reason
     // than the terminate: undeclared_uploads_ is recorded LAST, so a throw
     // there leaves an addr that really is a modulus-less upload but is not
@@ -262,11 +320,21 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
         addr_modulus_.erase(addr);
         undeclared_uploads_.insert(addr);
     } catch (...) {
+        // put() and bind_name() both already committed; undo both before the epoch-wide
+        // clear so addr itself is restored, not just left to a fresh epoch's bookkeeping.
+        [[maybe_unused]] auto erased = input_spill().erase(addr);
+        auto restored = allocator().update_shadow(addr, std::move(residue));
+        if (!restored) {
+            record_internal_error(HazeInternalError::SpillIoFailed,
+                                  "tag_h2d_input_locked: rollback update_shadow failed after "
+                                  "tag_input threw; addr left with neither shadow nor record");
+        }
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "tag_h2d_input_locked threw; epoch state cleared");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
+    input_counter_++;
     return {};
 }
 
@@ -279,28 +347,72 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
         return {};
     }
     const uint64_t ring_dim = fhe_params().ring_dim();
-    // Evicting: each residue's shadow moves to the spill store at tag time, matching
-    // tag_h2d_input_locked; a pre-flush D2H of any addrs[i] is served from disk.
+
+    // restore_shadows/erase_puts jointly implement the all-or-nothing contract for every
+    // failure below, including in the extraction loop itself: only a PREFIX of addrs may
+    // have had its shadow evicted or reached the spill store, so callers pass how many to
+    // restore/erase. A restore failure is the one outcome leaving an addr with neither a
+    // shadow nor a spill record, so it gets its own diagnostic beyond the store's own.
+    std::vector<std::vector<uint64_t>> residues;
+    residues.reserve(addrs.size());
+    auto restore_shadows = [&](std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            auto restored = allocator().update_shadow(addrs[i], std::move(residues[i]));
+            if (!restored) {
+                std::ostringstream body;
+                body << "tag_h2d_mrp_input_locked: rollback update_shadow failed for addr 0x"
+                     << std::hex << to_uintptr(addrs[i])
+                     << "; left with neither shadow nor spill record";
+                record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
+            }
+        }
+    };
+    auto erase_puts = [&](std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            if (input_spill().has(addrs[i])) {
+                [[maybe_unused]] auto erased = input_spill().erase(addrs[i]);
+            }
+        }
+    };
+
+    // Collect-then-commit: extract every residue into a local buffer FIRST, before any
+    // is spilled, so a failure partway through never leaves some addrs already spilled
+    // while others are not. extract_polynomial_components() evicts the shadow only on
+    // success, so a failure here only has to restore what THIS loop already evicted.
     for (DevAddr a : addrs) {
         auto components = allocator().extract_polynomial_components(a, ring_dim);
-        if (!components)
+        if (!components) {
+            restore_shadows(residues.size());
             return std::unexpected(components.error());
-        auto residue = *components;
-        auto put = input_spill().put(a, std::move(*components));
+        }
+        residues.push_back(std::move(*components));
+    }
+
+    // Each put() takes a COPY of its residue (not a move) so the local `residues` stays
+    // authoritative for rollback until the whole tag has committed.
+    std::size_t put_count = 0;
+    for (; put_count < addrs.size(); ++put_count) {
+        auto put = input_spill().put(addrs[put_count], std::vector<uint64_t>(residues[put_count]));
         if (!put) {
-            // extract_polynomial_components() already evicted the shadow; restore it, since
-            // the allocator's contract is that an error path never destroys the caller's bytes.
-            [[maybe_unused]] auto restored = allocator().update_shadow(a, std::move(residue));
+            erase_puts(put_count);
+            restore_shadows(addrs.size());
             return std::unexpected(put.error());
         }
     }
+
     // One entry per upload under a fresh name: every upload builds fresh fhetch
     // polynomials, so reusing a name keyed on the leading addr would leave a
-    // re-upload's addresses bound by no .ids file.
+    // re-upload's addresses bound by no .ids file. next_input_group_name() advances
+    // MrpGroupRegistry::in_counter_ as an inseparable part of computing the name, so
+    // unlike input_counter_ this counter cannot be deferred to success without splitting
+    // that method's API; left as-is on a failure below (out of scope for this fix).
     const std::string name = mrp_.next_input_group_name();
     auto bound = input_spill().bind_name(name, std::vector<DevAddr>(addrs.begin(), addrs.end()));
-    if (!bound)
+    if (!bound) {
+        erase_puts(addrs.size());
+        restore_shadows(addrs.size());
         return std::unexpected(bound.error());
+    }
     // from_pairs / tag_input / bind_modulus all allocate and none is declared
     // no-throw, so a bad_alloc would cross this noexcept boundary and terminate
     // under the lock. It would also leave a half-applied binding: the trace's
@@ -308,6 +420,14 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
     // be re-tagged by a later compute and land in the project twice - the
     // duplication this entry shape exists to prevent. The epoch cannot be
     // repaired from here, so clear it and report, as finalize_guarded_locked does.
+    // Scoped claim: shadows and addr-scoped spill records do come back, via
+    // restore_shadows/erase_puts and clear_state_locked's input_spill().clear_names().
+    // The vendor arena's tag_input(name, ...) call above is NOT undone -
+    // CompilerBackend::clear_captured() does not reach fhetch's own input registry, only
+    // reset_for_epoch() does, and that runs only after a SUCCESSFUL flush - so the arena
+    // may retain this attempt's tagged input until the next flush or reset. A later flush
+    // that reaches this stale entry finds no spill record behind its name and reports
+    // that loudly as a missing spill record.
     try {
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
         pairs.reserve(addrs.size());
@@ -325,6 +445,8 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
             undeclared_uploads_.erase(addrs[i]);
         }
     } catch (...) {
+        erase_puts(addrs.size());
+        restore_shadows(addrs.size());
         clear_state_locked();
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "tag_h2d_mrp_input_locked threw; epoch state cleared");

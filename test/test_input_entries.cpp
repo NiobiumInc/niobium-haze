@@ -39,6 +39,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -842,4 +843,191 @@ TEST_CASE("fhetch input registry survives a failed flush; hazeDeviceReset still 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a failed MRP tag restores every shadow and leaves no spill entries", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const auto residues = residues_for(base, 0xF100ULL);
+    const std::filesystem::path spill_root{"haze_input_spill"};
+
+    // Control: the identical upload with no interference, its own program dir. Its
+    // input .bin is the byte-for-byte oracle the recovered upload below must match.
+    const std::string control_name = "haze_spill_mrp_tag_failure_control";
+    const std::filesystem::path control_dir{control_name};
+    std::filesystem::remove_all(control_dir);
+    configure(control_name, base);
+    {
+        const auto control_src = haze::test::allocate_and_h2d_residues(residues, base);
+        const auto control_dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+        REQUIRE(hazeAddMrp(control_dst.data(), haze::test::to_const(control_src).data(),
+                           haze::test::to_const(control_src).data(), base.data(), base.size(),
+                           nullptr) == HAZE_SUCCESS);
+        for (void *out : control_dst)
+            REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+        REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+        haze::test::free_all_residues(control_src);
+        haze::test::free_all_residues(control_dst);
+    }
+
+    const std::string program_name = "haze_spill_mrp_tag_failure";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+
+    // A throwaway SRP upload activates the spill store first: activate() itself
+    // creates haze_input_spill, so the chmod below must land after that, or it would
+    // make activate() (not put()) the failure point.
+    void *scratch = nullptr;
+    REQUIRE(hazeMalloc(&scratch, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(scratch, residues_for({kQ0}, 0xF000ULL).front().data(), kBytes,
+                       HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(std::filesystem::is_directory(spill_root));
+
+    std::vector<void *> ptrs(residues.size(), nullptr);
+    std::vector<const void *> srcs(residues.size(), nullptr);
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < residues.size(); ++i) {
+        bytes = residues[i].size() * sizeof(uint64_t);
+        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+        srcs[i] = residues[i].data();
+    }
+
+    // Block writes under the spill root so put() (not the shadow writes copy_h2d_mrp
+    // already did) is what fails. No REQUIRE runs between the chmod and its restore,
+    // so a failed assertion can never leave the directory unwritable for cleanup.
+    const std::filesystem::perms original = std::filesystem::status(spill_root).permissions();
+    // error_code overloads throughout: a throw here (instead of a returned error) would
+    // skip the restore below and strand the directory at 0500 for later cases.
+    std::error_code restrict_ec;
+    std::filesystem::permissions(
+        spill_root, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
+        std::filesystem::perm_options::replace, restrict_ec);
+    const hazeError_t mrp_result = hazeMemcpyMrp(
+        ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(), base.size());
+    std::error_code restore_ec;
+    std::filesystem::permissions(spill_root, original, std::filesystem::perm_options::replace,
+                                 restore_ec);
+    REQUIRE_FALSE(restrict_ec);
+    REQUIRE_FALSE(restore_ec);
+    REQUIRE(mrp_result != HAZE_SUCCESS);
+    hazeGetLastError();
+
+    // Every addr's shadow is restored: none carries a spill record, and a D2H returns
+    // exactly the bytes just uploaded.
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        REQUIRE_FALSE(haze::input_spill().has(haze::to_dev_addr(ptrs[i])));
+        std::vector<uint64_t> got(residues[i].size(), 0);
+        REQUIRE(hazeMemcpy(got.data(), ptrs[i], bytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(got == residues[i]);
+    }
+
+    // A retry of the identical upload succeeds now the directory is writable again.
+    REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
+
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(ptrs).data(),
+                       haze::test::to_const(ptrs).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries = read_manifest(dir, program_name);
+    const auto control_entries = read_manifest(control_dir, control_name);
+    // 1, not 2: `scratch` was never used by any op, so it is dropped as a never-read
+    // input (see "an input never used in a modulus-bearing op is dropped from
+    // inputs.json"); only the retried group's haze_mrp_in_0 entry survives.
+    REQUIRE(entries.size() == 1);
+    REQUIRE(control_entries.size() == 1);
+    REQUIRE(slurp(dir / entries.front().bin_file) ==
+            slurp(control_dir / control_entries.front().bin_file));
+
+    REQUIRE(hazeFree(scratch) == HAZE_SUCCESS);
+    haze::test::free_all_residues(ptrs);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(control_dir);
+    std::filesystem::remove_all(spill_root);
+}
+
+TEST_CASE("a failed MRP tag mid-way through undoes an already-spilled prefix", "[integration]") {
+    // The chmod-based failure above blocks the whole spill root, so it fails index 0's
+    // put() before anything is on disk. This covers the harder case: index 0 already
+    // committed to disk when index 1 fails, so the rollback must UNDO a real prefix, not
+    // just refrain from writing one. put()'s scratch path is
+    // <spill_root>/addr_<hex>.spill.tmp, and an ofstream can't open an existing directory
+    // for writing (see test_input_spill.cpp's mechanism check), so pre-creating one there
+    // fails exactly index 1's put() and leaves index 0's and index 2's untouched by the
+    // blocker itself.
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const auto residues = residues_for(base, 0xF200ULL);
+    const std::filesystem::path spill_root{"haze_input_spill"};
+
+    const std::string program_name = "haze_spill_mrp_prefix_rollback";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+
+    // A throwaway SRP upload activates the spill store first, so the block below lands on
+    // put(), not on ensure_recording_locked's activate().
+    void *scratch = nullptr;
+    REQUIRE(hazeMalloc(&scratch, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(scratch, residues_for({kQ0}, 0xF300ULL).front().data(), kBytes,
+                       HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(std::filesystem::is_directory(spill_root));
+
+    std::vector<void *> ptrs(residues.size(), nullptr);
+    std::vector<const void *> srcs(residues.size(), nullptr);
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < residues.size(); ++i) {
+        bytes = residues[i].size() * sizeof(uint64_t);
+        REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
+        srcs[i] = residues[i].data();
+    }
+
+    std::ostringstream tmp_name;
+    tmp_name << "addr_" << std::hex << haze::to_uintptr(haze::to_dev_addr(ptrs[1])) << ".spill.tmp";
+    const std::filesystem::path tmp_path = spill_root / tmp_name.str();
+    REQUIRE(std::filesystem::create_directory(tmp_path));
+
+    const hazeError_t mrp_result = hazeMemcpyMrp(
+        ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(), base.size());
+    REQUIRE(mrp_result != HAZE_SUCCESS);
+    hazeGetLastError();
+
+    // Index 0's put() succeeded before index 1 failed; the rollback undoes it along with
+    // the rest. Every addr comes back with no spill record and its shadow restored to
+    // exactly the bytes just uploaded.
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        REQUIRE_FALSE(haze::input_spill().has(haze::to_dev_addr(ptrs[i])));
+        std::vector<uint64_t> got(residues[i].size(), 0);
+        REQUIRE(hazeMemcpy(got.data(), ptrs[i], bytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(got == residues[i]);
+    }
+
+    // A retry of the identical upload succeeds: write_residue_file's own failure cleanup
+    // already removed the blocking directory (verified in test_input_spill.cpp).
+    REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
+
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(ptrs).data(),
+                       haze::test::to_const(ptrs).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    // 1, not 2: `scratch` was never used by any op, so it is dropped as a never-read input.
+    const auto entries = read_manifest(dir, program_name);
+    REQUIRE(entries.size() == 1);
+
+    REQUIRE(hazeFree(scratch) == HAZE_SUCCESS);
+    haze::test::free_all_residues(ptrs);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(spill_root);
 }

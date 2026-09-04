@@ -42,9 +42,11 @@ namespace haze {
 // a compute result, hazeFree, memset, or re-upload reusing that same address. take_named
 // reads and erases only the name-scoped links; the addr-scoped records above are
 // untouched by either call. A bind_name that fails partway -- including a rejected
-// re-registration -- drops the name's named_records_ entry entirely rather than leaving
-// it referencing files the rollback just removed. It is a lock-DAG leaf and must never
-// call into epoch, allocator, or backend.
+// re-registration -- drops the name's named_records_ entry entirely and removes every
+// snapshot file up to whichever is larger, this attempt's progress or the previous
+// registration's length, rather than leaving either referenced by nothing. It is a
+// lock-DAG leaf and must never call into epoch, allocator, or backend. Names passed to
+// bind_name/take_named must be a single path component (no '/').
 class InputSpillStore {
   public:
     // Directory is created here. Idempotent while already active with the SAME root
@@ -78,7 +80,9 @@ class InputSpillStore {
 
     // Reads the name's snapshotted residues IN ORDER and erases them (the name-scoped
     // copies only -- addr-scoped records are untouched). Unknown name is
-    // SpillRecordMissing.
+    // SpillRecordMissing. A read failure leaves the record intact and retriable; once every
+    // read succeeds the record is retired unconditionally, even if deleting a snapshot file
+    // then fails -- a retry sees SpillRecordMissing, never a half-deleted record.
     [[nodiscard]] std::expected<std::vector<std::vector<uint64_t>>, HazeInternalError>
     take_named(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
 

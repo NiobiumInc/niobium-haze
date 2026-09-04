@@ -21,6 +21,7 @@
 #include <fstream>
 #include <ios>
 #include <span>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -352,6 +353,104 @@ TEST_CASE("input spill: clear_names drops manifests only; clear tears everything
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("input spill: take_named terminalizes when snapshot deletion fails", "[unit]") {
+    const fs::path dir{"input_spill_scratch_terminal"};
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    haze::InputSpillStore store;
+    REQUIRE(store.activate(dir).has_value());
+
+    constexpr std::size_t ring_dim = 8;
+    const DevAddr a0 = addr(0);
+    const DevAddr a1 = addr(1);
+    REQUIRE(store.put(a0, pattern(0, ring_dim)).has_value());
+    REQUIRE(store.put(a1, pattern(1, ring_dim)).has_value());
+    REQUIRE(store.bind_name("g", {a0, a1}).has_value());
+
+    // Block deletion, not reading, of the name-scoped snapshots: owner_read | owner_exec
+    // permits open()/read() but not unlink(), which needs write on the containing dir.
+    // No REQUIRE runs between the chmod and its restore, so a failed assertion can never
+    // leave the directory unwritable for this case's own cleanup or a later case.
+    const fs::perms original = fs::status(dir).permissions();
+    // error_code overloads throughout: a throw here (instead of a returned error) would
+    // skip the restore below and strand the directory at 0500 for later cases.
+    std::error_code restrict_ec;
+    fs::permissions(dir, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace,
+                    restrict_ec);
+    auto first_take = store.take_named("g");
+    std::error_code restore_ec;
+    fs::permissions(dir, original, fs::perm_options::replace, restore_ec);
+    REQUIRE_FALSE(restrict_ec);
+    REQUIRE_FALSE(restore_ec);
+    REQUIRE(!first_take.has_value());
+    REQUIRE(first_take.error() == haze::HazeInternalError::SpillIoFailed);
+
+    // The record is retired even though its data could not be withdrawn cleanly: a
+    // retry sees an honest SpillRecordMissing, never a half-deleted record read back
+    // as if it were still intact.
+    auto second_take = store.take_named("g");
+    REQUIRE(!second_take.has_value());
+    REQUIRE(second_take.error() == haze::HazeInternalError::SpillRecordMissing);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("input spill: bind_name and take_named reject a path-separator name", "[unit]") {
+    const fs::path dir{"input_spill_scratch_name_validation"};
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    haze::InputSpillStore store;
+    REQUIRE(store.activate(dir).has_value());
+
+    const DevAddr a = addr(0);
+    REQUIRE(store.put(a, pattern(0, 8)).has_value());
+
+    auto bad_bind = store.bind_name("nested/name", {a});
+    REQUIRE(!bad_bind.has_value());
+    REQUIRE(bad_bind.error() == haze::HazeInternalError::SpillIoFailed);
+    REQUIRE_FALSE(fs::exists(dir / "nested"));
+
+    auto bad_take = store.take_named("nested/name");
+    REQUIRE(!bad_take.has_value());
+    REQUIRE(bad_take.error() == haze::HazeInternalError::SpillIoFailed);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("input spill: bind_name re-registration with fewer addrs drops the trailing snapshot",
+          "[unit]") {
+    const fs::path dir{"input_spill_scratch_shrink"};
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    haze::InputSpillStore store;
+    REQUIRE(store.activate(dir).has_value());
+
+    constexpr std::size_t ring_dim = 8;
+    const DevAddr a0 = addr(0);
+    const DevAddr a1 = addr(1);
+    REQUIRE(store.put(a0, pattern(0, ring_dim)).has_value());
+    REQUIRE(store.put(a1, pattern(1, ring_dim)).has_value());
+
+    REQUIRE(store.bind_name("g", {a0, a1}).has_value());
+    REQUIRE(fs::exists(dir / "name_g_0.spill"));
+    REQUIRE(fs::exists(dir / "name_g_1.spill"));
+
+    // Re-register the same name with one fewer addr: the trailing snapshot must be
+    // removed from disk, not merely dropped from the in-memory record.
+    REQUIRE(store.bind_name("g", {a0}).has_value());
+    REQUIRE(fs::exists(dir / "name_g_0.spill"));
+    REQUIRE_FALSE(fs::exists(dir / "name_g_1.spill"));
+
+    auto taken = store.take_named("g");
+    REQUIRE(taken.has_value());
+    REQUIRE(taken->size() == 1);
+
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("input spill: take_named rejects a corrupted record file", "[unit]") {
     const fs::path dir{"input_spill_scratch_corrupt"};
     std::error_code ec;
@@ -385,6 +484,42 @@ TEST_CASE("input spill: take_named rejects a corrupted record file", "[unit]") {
     auto second_take = store.take_named("corrupt");
     REQUIRE(!second_take.has_value());
     REQUIRE(second_take.error() == haze::HazeInternalError::SpillIoFailed);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("input spill: put fails when its scratch path is blocked by a directory, "
+          "and cleans it up",
+          "[unit]") {
+    // Mechanism check for a deterministic per-address put() failure (used by the MRP
+    // prefix-rollback integration test): put()'s scratch path is dir/addr_<hex>.spill.tmp,
+    // and an ofstream cannot open an existing directory for writing, so pre-creating one
+    // there fails ONLY this address's put(), leaving every other address unaffected.
+    const fs::path dir{"input_spill_scratch_tmp_blocked"};
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    haze::InputSpillStore store;
+    REQUIRE(store.activate(dir).has_value());
+
+    constexpr std::size_t ring_dim = 8;
+    const DevAddr a = addr(0);
+    std::ostringstream tmp_name;
+    tmp_name << "addr_" << std::hex << haze::to_uintptr(a) << ".spill.tmp";
+    const fs::path tmp_path = dir / tmp_name.str();
+    REQUIRE(fs::create_directory(tmp_path));
+
+    auto blocked = store.put(a, pattern(0, ring_dim));
+    REQUIRE(!blocked.has_value());
+    REQUIRE(blocked.error() == haze::HazeInternalError::SpillIoFailed);
+    REQUIRE_FALSE(store.has(a));
+    // write_residue_file's own failure cleanup removes the path it just failed to open
+    // (an empty directory), so the blocker is already gone -- nothing to clear by hand.
+    REQUIRE_FALSE(fs::exists(tmp_path));
+
+    auto retried = store.put(a, pattern(0, ring_dim));
+    REQUIRE(retried.has_value());
+    REQUIRE(store.has(a));
 
     fs::remove_all(dir, ec);
 }

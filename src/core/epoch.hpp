@@ -86,7 +86,11 @@ class EpochState {
         HAZE_REQUIRES(mutex_);
 
     // Resolve `addr` (first reference builds from shadow and tags as input); returns a copy
-    // so in-place compute doesn't invalidate the source.
+    // so in-place compute doesn't invalidate the source. A failed promotion (put/bind/tag)
+    // restores the shadow and leaves no addr-scoped record behind (a re-upload's superseded
+    // record is dropped, which a later D2H reads correctly from the restored shadow). Every
+    // current caller is itself noexcept, so a rethrow here terminates: the rollback exists
+    // for state coherence at the moment of failure, not for a caller to observably recover.
     std::expected<niobium::fhetch::Polynomial, HazeInternalError>
     lookup_or_create_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
@@ -125,14 +129,19 @@ class EpochState {
     // (shadow survives for compute-free D2H); violated H2D post-conditions (ring_dim set,
     // shadow populated) are internal errors. Modulus-less by construction: a plain hazeMemcpy
     // carries no prime, so any stale one is dropped (see tag_h2d_mrp_input_locked for the
-    // declared-modulus path).
+    // declared-modulus path). A failed tag restores the shadow and leaves no addr-scoped
+    // record behind (a re-upload's superseded record is dropped, which a later D2H reads
+    // correctly from the restored shadow).
     std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
         HAZE_REQUIRES(mutex_);
 
     // Tag one MRP input for an H2D upload whose caller declared `moduli` (hazeMemcpyMrp),
     // binding each residue's real modulus instead of erasing it. Emits exactly one entry per
     // upload - the sole input tag a grouped residue ever gets, so nothing downstream has to
-    // decide which of two entries governs an address.
+    // decide which of two entries governs an address. All-or-nothing: residues are collected
+    // locally before any is spilled, so a failed tag restores every shadow and leaves no
+    // addr-scoped record behind (a re-upload's superseded record is dropped, which a later
+    // D2H reads correctly from the restored shadow).
     std::expected<void, HazeInternalError>
     tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
                              std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
