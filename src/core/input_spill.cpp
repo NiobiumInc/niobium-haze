@@ -16,13 +16,13 @@
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <ios>
-#include <ranges>
 #include <span>
 #include <sstream>
 #include <string>
@@ -85,6 +85,12 @@ bool read_residue_file(const std::filesystem::path &path, std::size_t expected_r
     return true;
 }
 
+// A name is stored as a bare filename component under dir_, so a '/' (or any path with
+// more than one component) would escape it rather than merely fail to look up.
+bool is_single_path_component(const std::string &name) {
+    return std::filesystem::path(name).filename() == name;
+}
+
 } // namespace
 
 std::string InputSpillStore::addr_filename(DevAddr addr) {
@@ -117,6 +123,12 @@ void InputSpillStore::remove_name_snapshots_locked(const std::string &name,
     for (std::size_t i = 0; i < count; ++i) {
         std::error_code ec;
         std::filesystem::remove(name_record_path_locked(name, i), ec);
+        if (ec) {
+            // Best-effort cleanup; a failure here is diagnostic only, since the caller
+            // already committed to dropping the name's named_records_ entry.
+            record_internal_error(HazeInternalError::SpillIoFailed,
+                                  "InputSpillStore::remove_name_snapshots_locked: remove failed");
+        }
     }
 }
 
@@ -283,18 +295,32 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
                                   "InputSpillStore::bind_name: store not active");
             return std::unexpected(HazeInternalError::SpillIoFailed);
         }
+        if (!is_single_path_component(name)) {
+            std::ostringstream body;
+            body << "InputSpillStore::bind_name: name is not a single path component: '" << name
+                 << "'";
+            record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::SpillIoFailed);
+        }
+        // A re-registration overwrites indices [0, owned.size()) below; if the previous
+        // registration was longer, its trailing indices are only reachable by this bound,
+        // since named_records_ is about to point at nothing beyond owned.size() either way.
+        std::size_t prev_count = 0;
+        if (auto prev = named_records_.find(name); prev != named_records_.end())
+            prev_count = prev->second.size();
         // Hardlink every addr's CURRENT file into a name-scoped path now: since put()
         // always renames a fresh inode over the addr path, a later put/erase touching
         // that addr leaves this hardlink pointing at the bytes it had at this moment. A
-        // failure partway rolls back the links already made and drops the name's stale
-        // named_records_ entry, so a rejected bind_name never leaves the map referencing
-        // files the rollback just removed.
+        // failure partway rolls back every link this attempt made AND any surviving tail
+        // from the previous registration, then drops the name's stale named_records_
+        // entry, so a rejected bind_name never leaves the map referencing files the
+        // rollback just removed.
         std::vector<Record> snapshot_records;
         snapshot_records.reserve(owned.size());
         for (std::size_t i = 0; i < owned.size(); ++i) {
             auto it = records_.find(owned[i]);
             if (it == records_.end()) {
-                remove_name_snapshots_locked(name, i);
+                remove_name_snapshots_locked(name, std::max(i, prev_count));
                 named_records_.erase(name);
                 std::ostringstream body;
                 body << "InputSpillStore::bind_name('" << name << "'): addr 0x" << std::hex
@@ -310,7 +336,7 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
             std::error_code remove_ec;
             std::filesystem::remove(snapshot_path, remove_ec);
             if (remove_ec) {
-                remove_name_snapshots_locked(name, i);
+                remove_name_snapshots_locked(name, std::max(i, prev_count));
                 named_records_.erase(name);
                 std::ostringstream body;
                 body << "InputSpillStore::bind_name('" << name
@@ -321,7 +347,7 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
             std::error_code link_ec;
             std::filesystem::create_hard_link(record_path_locked(owned[i]), snapshot_path, link_ec);
             if (link_ec) {
-                remove_name_snapshots_locked(name, i);
+                remove_name_snapshots_locked(name, std::max(i, prev_count));
                 named_records_.erase(name);
                 std::ostringstream body;
                 body << "InputSpillStore::bind_name('" << name << "'): hardlink failed for addr 0x"
@@ -334,11 +360,13 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
         // Overwrite: the loop above already refreshed indices [0, owned.size()); a
         // shorter re-registration must also drop the previous registration's TRAILING
         // indices, or they leak as orphaned files nothing references anymore.
-        if (auto prev = named_records_.find(name);
-            prev != named_records_.end() && prev->second.size() > owned.size()) {
-            for (std::size_t i = owned.size(); i < prev->second.size(); ++i) {
-                std::error_code ec;
-                std::filesystem::remove(name_record_path_locked(name, i), ec);
+        for (std::size_t i = owned.size(); i < prev_count; ++i) {
+            std::error_code ec;
+            std::filesystem::remove(name_record_path_locked(name, i), ec);
+            if (ec) {
+                record_internal_error(
+                    HazeInternalError::SpillIoFailed,
+                    "InputSpillStore::bind_name: trailing snapshot remove failed");
             }
         }
         named_records_.insert_or_assign(name, std::move(snapshot_records));
@@ -358,6 +386,13 @@ InputSpillStore::take_named(const std::string &name) noexcept {
                                   "InputSpillStore::take_named: store not active");
             return std::unexpected(HazeInternalError::SpillIoFailed);
         }
+        if (!is_single_path_component(name)) {
+            std::ostringstream body;
+            body << "InputSpillStore::take_named: name is not a single path component: '" << name
+                 << "'";
+            record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::SpillIoFailed);
+        }
         auto it = named_records_.find(name);
         if (it == named_records_.end()) {
             std::ostringstream body;
@@ -366,6 +401,8 @@ InputSpillStore::take_named(const std::string &name) noexcept {
             return std::unexpected(HazeInternalError::SpillRecordMissing);
         }
         const std::vector<Record> recs = it->second;
+        // Read every residue before touching disk state: a read failure leaves the
+        // record untouched and retriable, since nothing about it has been consumed yet.
         std::vector<std::vector<uint64_t>> residues;
         residues.reserve(recs.size());
         for (std::size_t i = 0; i < recs.size(); ++i) {
@@ -379,22 +416,29 @@ InputSpillStore::take_named(const std::string &name) noexcept {
             }
             residues.push_back(std::move(residue));
         }
+        // Every read succeeded: the record is retired unconditionally from here, even if
+        // a delete fails, so a retry can never see a half-deleted record as if it were
+        // still intact -- it gets an honest SpillRecordMissing instead.
+        std::vector<std::size_t> failed_indices;
         for (std::size_t i = 0; i < recs.size(); ++i) {
             std::error_code ec;
             std::filesystem::remove(name_record_path_locked(name, i), ec);
-            if (ec) {
-                // A failed remove is an error, so the caller never receives data whose
-                // on-disk snapshot we could not retire.
-                std::ostringstream body;
-                body << "InputSpillStore::take_named('" << name
-                     << "'): remove failed for "
-                        "residue "
-                     << i;
-                record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
-                return std::unexpected(HazeInternalError::SpillIoFailed);
-            }
+            if (ec)
+                failed_indices.push_back(i);
         }
         named_records_.erase(it);
+        if (!failed_indices.empty()) {
+            std::ostringstream body;
+            body << "InputSpillStore::take_named('" << name << "'): remove failed for residues [";
+            for (std::size_t j = 0; j < failed_indices.size(); ++j) {
+                if (j != 0)
+                    body << ", ";
+                body << failed_indices[j];
+            }
+            body << "]; record retired, data withheld";
+            record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
+            return std::unexpected(HazeInternalError::SpillIoFailed);
+        }
         return residues;
     } catch (...) {
         record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::take_named");
@@ -421,39 +465,22 @@ void InputSpillStore::clear() noexcept {
     HazeLockGuard lock(mutex_);
     // Snapshot and deactivate before touching the filesystem, so a mid-removal throw still
     // leaves the store empty and inactive.
-    auto local_records = std::move(records_);
-    auto local_named_records = std::move(named_records_);
+    records_.clear();
+    named_records_.clear();
     const std::filesystem::path local_dir = dir_;
     active_ = false;
     dir_.clear();
     try {
-        // dir_ is already cleared above, so build paths from the local snapshots rather
-        // than record_path_locked / name_record_path_locked.
-        for (const auto &addr : std::views::keys(local_records)) {
-            std::error_code ec;
-            std::filesystem::remove(local_dir / addr_filename(addr), ec);
-            if (ec) {
-                record_internal_error(HazeInternalError::SpillIoFailed,
-                                      "InputSpillStore::clear: remove record failed");
-            }
-        }
-        for (const auto &[name, recs] : local_named_records) {
-            for (std::size_t i = 0; i < recs.size(); ++i) {
-                std::error_code ec;
-                std::filesystem::remove(local_dir / name_filename(name, i), ec);
-                if (ec) {
-                    record_internal_error(HazeInternalError::SpillIoFailed,
-                                          "InputSpillStore::clear: remove snapshot failed");
-                }
-            }
-        }
-        if (!local_dir.empty()) {
-            std::error_code dir_ec;
-            std::filesystem::remove(local_dir, dir_ec);
-            if (dir_ec) {
-                record_internal_error(HazeInternalError::SpillIoFailed,
-                                      "InputSpillStore::clear: remove dir failed");
-            }
+        if (local_dir.empty())
+            return;
+        // Recursive removal also sweeps any name-scoped snapshot a prior take_named left
+        // behind after its read succeeded but its own delete failed, which the per-file
+        // removal this replaces never reached.
+        std::error_code ec;
+        std::filesystem::remove_all(local_dir, ec);
+        if (ec) {
+            record_internal_error(HazeInternalError::SpillIoFailed,
+                                  "InputSpillStore::clear: remove_all failed");
         }
     } catch (...) {
         record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::clear");
