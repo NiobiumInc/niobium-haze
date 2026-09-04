@@ -70,6 +70,9 @@ void bootstrap_compiler() {
     // resets it to cwd/<name>) and before the first trace write.
     if (rc.has_program_directory())
         niobium::compiler().set_program_directory(rc.program_directory());
+    // Input values live in the spill store and the on-disk project; captured_inputs
+    // carry metadata only.
+    niobium::compiler().enable_input_streaming(true);
 }
 
 } // namespace
@@ -196,6 +199,17 @@ bool CompilerBackend::replay() noexcept {
 void CompilerBackend::reset() noexcept {
     HazeLockGuard lock(init_mutex_);
     initialized_.store(false, std::memory_order_release);
+}
+
+std::expected<std::filesystem::path, HazeInternalError>
+CompilerBackend::program_directory() noexcept {
+    try {
+        return niobium::compiler().get_program_directory();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendInitFailed,
+                              "CompilerBackend::program_directory");
+        return std::unexpected(HazeInternalError::BackendInitFailed);
+    }
 }
 
 } // namespace haze

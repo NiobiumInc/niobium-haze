@@ -429,7 +429,6 @@ const Context *context_for_shape(const HookCtx &hctx,
 // replay path needs; local_cache is per-call.
 void on_post_recording(const HookCtx &hctx) {
     std::map<std::vector<uint64_t>, Context> local_cache;
-    const bool spill_active = haze::input_spill().active();
 
     niobium::detail::for_each_captured_input([&](const niobium::CapturedInputRecord &rec) {
         // Keys aren't shape-tagged yet (Tier 2 / FIDESlib).
@@ -441,41 +440,36 @@ void on_post_recording(const HookCtx &hctx) {
                 log_hook_error("input '" + rec.name + "': no CC available for shape");
                 return;
             }
-            // residue_values defaults to rec.per_residue_values, serving recordings made
-            // before tag-time spilling activates; deleted once the H2D tag paths spill inputs.
-            const std::vector<std::vector<uint64_t>> *residue_values = &rec.per_residue_values;
-            std::vector<std::vector<uint64_t>> spilled_values;
-            if (spill_active) {
-                auto spilled = haze::input_spill().take(rec.name);
-                if (!spilled) {
-                    std::ostringstream body;
-                    body << "input '" << rec.name << "': spill take failed (HazeInternalError="
-                         << static_cast<int>(spilled.error()) << ")";
-                    log_hook_error(body.str());
-                    return;
-                }
-                if (spilled->size() != rec.addr_ids.size()) {
-                    std::ostringstream body;
-                    body << "input '" << rec.name << "': spilled residue count " << spilled->size()
-                         << " != addr_ids count " << rec.addr_ids.size();
-                    log_hook_error(body.str());
-                    return;
-                }
-                if (spilled->front().size() != hctx.ring_dim) {
-                    // fill_native_poly zero-fills on a length mismatch (with only a plain
-                    // log_error), so a wrong-length residue must be caught here instead.
-                    std::ostringstream body;
-                    body << "input '" << rec.name << "': spilled residue length "
-                         << spilled->front().size() << " != ring_dim " << hctx.ring_dim;
-                    log_hook_error(body.str());
-                    return;
-                }
-                spilled_values = std::move(*spilled);
-                residue_values = &spilled_values;
+            // Every non-key input is tagged (and its residues spilled) at H2D or op-time
+            // promotion, so take_named() is unconditional; a miss fails the flush loudly
+            // rather than falling back to some other source.
+            auto spilled = haze::input_spill().take_named(rec.name);
+            if (!spilled) {
+                std::ostringstream body;
+                body << "input '" << rec.name << "': spill take failed (HazeInternalError="
+                     << static_cast<int>(spilled.error()) << ")";
+                log_hook_error(body.str());
+                return;
+            }
+            if (spilled->size() != rec.addr_ids.size()) {
+                std::ostringstream body;
+                body << "input '" << rec.name << "': spilled residue count " << spilled->size()
+                     << " != addr_ids count " << rec.addr_ids.size();
+                log_hook_error(body.str());
+                return;
+            }
+            if (spilled->front().size() != hctx.ring_dim) {
+                // fill_native_poly zero-fills on a length mismatch (with only a plain
+                // log_error), so a wrong-length residue must be caught here instead.
+                std::ostringstream body;
+                body << "input '" << rec.name << "': spilled residue length "
+                     << spilled->front().size() << " != ring_dim " << hctx.ring_dim;
+                log_hook_error(body.str());
+                return;
             }
             // synthesize_for_shape rebases towers to the trace primes, so the
             // .bin carries the exact moduli (see switch_tower_modulus).
-            auto ct = synthesize_for_shape(*ctx, rec.shape, *residue_values);
+            auto ct = synthesize_for_shape(*ctx, rec.shape, *spilled);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
                 log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }
