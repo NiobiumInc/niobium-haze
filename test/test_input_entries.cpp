@@ -35,6 +35,7 @@
 #include <haze/replay_bridge.h>
 #include <ios>
 #include <iterator>
+#include <niobium/fhetch_api.h>
 #include <set>
 #include <sstream>
 #include <string>
@@ -758,5 +759,87 @@ TEST_CASE("an input never used in a modulus-bearing op is dropped from inputs.js
     haze::test::free_all_residues(src);
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("fhetch input registry is released at flush, not held for the next reset",
+          "[integration]") {
+    // get_input_ring_dimension() reads the first registered input's ring dimension
+    // (0 with none registered), so it doubles as an emptiness probe for the vendor
+    // input_registry() that reset_for_epoch() releases.
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_fhetch_registry_release";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
+
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xE000ULL), base);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == kRingDim);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    // A successful flush releases the vendor registry immediately, well before
+    // any later hazeDeviceReset / Compiler::start() would.
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
+
+    // The release left nothing behind that a following recording needs.
+    const auto src2 = haze::test::allocate_and_h2d_residues(residues_for(base, 0xE100ULL), base);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == kRingDim);
+    const auto dst2 = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst2.data(), haze::test::to_const(src2).data(),
+                       haze::test::to_const(src2).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst2)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    haze::test::free_all_residues(src2);
+    haze::test::free_all_residues(dst2);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("fhetch input registry survives a failed flush; hazeDeviceReset still clears it",
+          "[integration]") {
+    // Success-only gate: a failed stop can leave the vendor recorder open, so
+    // releasing here would roll the address counter back under a live trace. The
+    // registries stay populated until the device resets.
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_fhetch_registry_failed_flush";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xE200ULL), base);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+
+    // Consume the group's own name binding (test_input_entries.cpp's "a missing
+    // spill record fails the flush" construction) so the hook's take_named()
+    // finds nothing and fails the flush.
+    REQUIRE(haze::input_spill().take_named("haze_mrp_in_0").has_value());
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == kRingDim);
+    REQUIRE(hazeWriteProgram() != HAZE_SUCCESS);
+
+    // The failed flush did not release the registry.
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == kRingDim);
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(niobium::fhetch::get_input_ring_dimension() == 0);
     std::filesystem::remove_all(dir);
 }
