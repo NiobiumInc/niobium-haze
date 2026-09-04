@@ -422,6 +422,11 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
     // on success or failure.
     auto materialized = materialize_epoch(run_replay);
     clear_state_locked();
+    // Success only: after a failed stop the vendor recorder may still be open, and
+    // releasing here would roll the address counter back under a live trace. The
+    // registries stay until a recording actually restarts or the device resets.
+    if (materialized.has_value())
+        release_fhetch_registries_locked();
     return materialized;
 }
 
@@ -445,6 +450,18 @@ std::expected<void, HazeInternalError> EpochState::finalize_guarded_locked(bool 
         record_internal_error(HazeInternalError::BackendReplayFailed,
                               "finalize threw; epoch state cleared");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+}
+
+// Instance method (not static) so its HAZE_REQUIRES(mutex_) contract binds to this
+// EpochState's own mutex_, even though the body touches no other member.
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+void EpochState::release_fhetch_registries_locked() noexcept {
+    try {
+        fhetch::reset_for_epoch();
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "release_fhetch_registries_locked");
     }
 }
 
@@ -482,6 +499,12 @@ std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noex
 void EpochState::reset() noexcept {
     HazeLockGuard lock(mutex_);
     clear_state_locked();
+    // reset_for_epoch resets fhetch's recording registries and counters, none of
+    // which the imminent compiler teardown needs. This control-plane call always
+    // precedes CompilerBackend::reset_compiler() (DeviceState::reset()), which
+    // discards the vendor recorder outright, so no later op can observe the
+    // rolled-back address counter.
+    release_fhetch_registries_locked();
 }
 
 std::expected<void, HazeInternalError> EpochState::copy_to_host(void *dst, DevAddr src,

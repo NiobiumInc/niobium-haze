@@ -177,6 +177,12 @@ class EpochState {
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
+    // Release the vendor input/probe registries. Callable only when the vendor
+    // recorder is closed, or when the whole vendor compiler is about to be
+    // discarded (hazeDeviceReset): either way, the address-counter roll-back
+    // must alias no live trace.
+    void release_fhetch_registries_locked() noexcept HAZE_REQUIRES(mutex_);
+
     void ensure_output_tag_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Lock order: see the canonical DAG in common/thread_safety.hpp
