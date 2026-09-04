@@ -314,11 +314,13 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
         fhetch::tag_input(name, poly);
         // New H2D bytes overwrite the binding, drop any output tag and stale
         // modulus, and mark the addr as carrying bytes no prime was declared for
-        // (MRP-group claims stay).
+        // (MRP-group claims stay, but the query index's entry does not: this
+        // upload, not the earlier MRP one, now governs these bytes).
         poly_map_.insert_or_assign(addr, std::move(poly));
         pending_outputs_.erase(addr);
         addr_modulus_.erase(addr);
         undeclared_uploads_.insert(addr);
+        mrp_.forget_input_group(addr);
     } catch (...) {
         // put() and bind_name() both already committed; undo both before the epoch-wide
         // clear so addr itself is restored, not just left to a fresh epoch's bookkeeping.
@@ -444,6 +446,10 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
             addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
             undeclared_uploads_.erase(addrs[i]);
         }
+        // Last statement of the commit: every fallible step above has already
+        // succeeded, so a throw here is rolled back by the catch below exactly like
+        // the state it sits beside, and a successful return commits it alongside them.
+        mrp_.record_input_group(addrs, name);
     } catch (...) {
         erase_puts(addrs.size());
         restore_shadows(addrs.size());
@@ -618,6 +624,22 @@ std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noex
     }
 }
 
+std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAddr addr) noexcept {
+    HazeLockGuard lock(mutex_);
+    try {
+        const std::string *name = mrp_.input_group_name(addr);
+        if (name == nullptr) {
+            record_internal_error(HazeInternalError::SourceUnavailable,
+                                  "input_group_name: addr has no live input group binding");
+            return std::unexpected(HazeInternalError::SourceUnavailable);
+        }
+        return *name;
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed, "input_group_name threw");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+}
+
 void EpochState::reset() noexcept {
     HazeLockGuard lock(mutex_);
     clear_state_locked();
@@ -654,6 +676,10 @@ std::expected<void, HazeInternalError> write_program() noexcept {
 
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
     return epoch().tag_output(addr);
+}
+
+std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept {
+    return epoch().input_group_name(addr);
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {

@@ -73,6 +73,12 @@ class EpochState {
     // with nothing recorded (empty poly_map_) returns SourceUnavailable.
     std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
 
+    // Read-only query (backs hazeInputGroupName): the MRP input group name last minted for
+    // `addr`, or SourceUnavailable if none is live this epoch. Never starts or perturbs a
+    // recording.
+    std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept
+        HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -250,6 +256,9 @@ std::expected<void, HazeInternalError> write_program() noexcept;
 
 // Backs hazeTagOutput (EpochState::tag_output).
 std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
+
+// Backs hazeInputGroupName (EpochState::input_group_name).
+std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept;
 
 // Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;
