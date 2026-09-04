@@ -105,6 +105,24 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
+// Read-only query, never starting, finalizing or perturbing an epoch: writes into `out` (NUL-
+// terminated) the MRP input group name minted for the H2D upload that most recently wrote `ptr`'s
+// address — re-uploading the same address, by hazeMemcpyMrp or a plain hazeMemcpy, answers the
+// newer name (a plain hazeMemcpy(H2D) governs the address under its own, unnamed entry, so the
+// prior MRP name stops answering for it). A compute result stored at an uploaded address does
+// NOT drop the name: the address hasn't changed hands, and the entry remains a live input of the
+// program under construction. HAZE_ERROR_SOURCE_UNAVAILABLE if `ptr` names no live upload this
+// epoch: never uploaded, an output-only address, or the binding dropped by
+// hazeFree/hazeFreeMrp/hazeMemset on that address, or by an epoch finalize (hazeFlush /
+// hazeWriteProgram with something pending) or hazeDeviceReset — any error-path epoch clear
+// (a contained throw during tagging or finalize) drops every name the same way. A write_program
+// with nothing pending preserves the epoch, so a name recorded before it still answers after.
+// `out_len` must hold the name plus its NUL terminator (64 bytes always suffices); a buffer too
+// short returns HAZE_ERROR_INVALID_VALUE with `out` left untouched (no truncation). NULL
+// `ptr`/`out` or `out_len == 0` returns HAZE_ERROR_INVALID_VALUE; HAZE_ERROR_INTERNAL on an
+// internal failure (e.g. allocation failure copying the name).
+HAZE_API hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
+
 // hazeMallocMrp reserves `num_residues` device polynomials for one MRP group under a single
 // allocator lock and writes their addresses into `ptrs[0..num_residues)` (all non-null on
 // success); `num_residues` is the group's residue count (the `base_len` passed to the MRP

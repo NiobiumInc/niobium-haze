@@ -28,6 +28,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <haze/haze.h>
@@ -1030,4 +1031,248 @@ TEST_CASE("a failed MRP tag mid-way through undoes an already-spilled prefix", "
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     std::filesystem::remove_all(dir);
     std::filesystem::remove_all(spill_root);
+}
+
+TEST_CASE("hazeInputGroupName answers the minted name for every residue of an MRP upload",
+          "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_input_group_name_basic";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1000ULL), base);
+
+    char buf[64];
+    for (void *p : src) {
+        REQUIRE(hazeInputGroupName(p, buf, sizeof buf) == HAZE_SUCCESS);
+        REQUIRE(std::string(buf) == "haze_mrp_in_0");
+    }
+
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries = read_manifest(dir, program_name);
+    REQUIRE(entries.size() == 1);
+    REQUIRE(entries.front().name == "haze_mrp_in_0");
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("hazeInputGroupName follows a re-upload to the newer group name", "[integration]") {
+    // Mirrors "recorded inputs: re-uploading the same addresses records both uploads":
+    // each upload builds fresh fhetch polynomials, so the query must track the newer
+    // name, not the leading addr's original one.
+    const std::vector<uint64_t> base = {kQ0, kQ1};
+    const std::string program_name = "haze_input_group_name_reupload";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1100ULL), base);
+    char buf[64];
+    for (void *p : src) {
+        REQUIRE(hazeInputGroupName(p, buf, sizeof buf) == HAZE_SUCCESS);
+        REQUIRE(std::string(buf) == "haze_mrp_in_0");
+    }
+    const auto dst1 = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst1.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+
+    const auto second = residues_for(base, 0x1200ULL);
+    std::vector<const void *> hosts(base.size(), nullptr);
+    for (std::size_t i = 0; i < base.size(); ++i)
+        hosts[i] = second[i].data();
+    REQUIRE(hazeMemcpyMrp(src.data(), hosts.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
+                          base.size()) == HAZE_SUCCESS);
+    for (void *p : src) {
+        REQUIRE(hazeInputGroupName(p, buf, sizeof buf) == HAZE_SUCCESS);
+        REQUIRE(std::string(buf) == "haze_mrp_in_1");
+    }
+
+    const auto dst2 = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst2.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst1)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    for (void *out : dst2)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries = read_manifest(dir, program_name);
+    REQUIRE(count_prefixed(entries, "haze_mrp_in_") == 2);
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst1);
+    haze::test::free_all_residues(dst2);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("hazeInputGroupName answers SOURCE_UNAVAILABLE once the address is freed or memset",
+          "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1};
+    configure("haze_input_group_name_freed", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1300ULL), base);
+    char buf[64];
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_SUCCESS);
+
+    REQUIRE(hazeMemset(src[0], 0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+    // The other residue's binding is untouched by src[0]'s memset.
+    REQUIRE(hazeInputGroupName(src[1], buf, sizeof buf) == HAZE_SUCCESS);
+
+    REQUIRE(hazeFree(src[1]) == HAZE_SUCCESS);
+    REQUIRE(hazeInputGroupName(src[1], buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+
+    REQUIRE(hazeFree(src[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeInputGroupName answers SOURCE_UNAVAILABLE after a real finalize", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_input_group_name_finalize";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1400ULL), base);
+    char buf[64];
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_SUCCESS);
+
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+    // A real finalize: something was tagged, so clear_state_locked wipes the epoch.
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("hazeInputGroupName still answers after a true no-op write_program", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1};
+    configure("haze_input_group_name_noop_finalize", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1500ULL), base);
+    char buf[64];
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_SUCCESS);
+    REQUIRE(std::string(buf) == "haze_mrp_in_0");
+
+    // Nothing tagged: finalize_locked's true-no-op path leaves recording and
+    // bindings intact, so the epoch this name belongs to survives.
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_SUCCESS);
+    REQUIRE(std::string(buf) == "haze_mrp_in_0");
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeInputGroupName drops the name once a plain hazeMemcpy(H2D) re-writes "
+          "an MRP-uploaded address",
+          "[integration]") {
+    // The address is now governed by a fresh, unnamed haze_in_<n> entry, not the earlier
+    // MRP group: the query index must stop answering the stale name for it.
+    const std::vector<uint64_t> base = {kQ0, kQ1};
+    configure("haze_input_group_name_plain_h2d_forgets", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1700ULL), base);
+    char buf[64];
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_SUCCESS);
+    REQUIRE(hazeInputGroupName(src[1], buf, sizeof buf) == HAZE_SUCCESS);
+
+    const auto plain = residues_for({kQ0}, 0x1800ULL).front();
+    REQUIRE(hazeMemcpy(src[0], plain.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    REQUIRE(hazeInputGroupName(src[0], buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+    // The untouched sibling residue still answers the original MRP group name.
+    REQUIRE(hazeInputGroupName(src[1], buf, sizeof buf) == HAZE_SUCCESS);
+    REQUIRE(std::string(buf) == "haze_mrp_in_0");
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeInputGroupName never answers for an output-only address", "[integration]") {
+    // A compute result's destination address was never uploaded, so it never entered
+    // the query index in the first place - distinct from forget_input_group, which
+    // only fires for an address that WAS an upload.
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_input_group_name_output_only", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1900ULL));
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst, src[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+
+    char buf[64];
+    REQUIRE(hazeInputGroupName(dst, buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeInputGroupName refuses a buffer too short, leaving it untouched", "[integration]") {
+    // "haze_mrp_in_0" is 13 chars; the exact fit is 14 bytes (name + NUL). A
+    // size()+1 > out_len check alone would let out_len == 13 through and write
+    // one byte past a 13-byte buffer, so this pins the boundary on both sides.
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_input_group_name_short_buffer", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x1600ULL), base);
+
+    char buf[16];
+    std::memset(buf, 0x7E, sizeof buf); // sentinel: must survive a rejected call untouched
+
+    REQUIRE(hazeInputGroupName(src[0], buf, 3) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    for (char c : buf)
+        REQUIRE(c == 0x7E);
+
+    // One byte short of the exact fit: still refused, still untouched.
+    REQUIRE(hazeInputGroupName(src[0], buf, 13) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    for (char c : buf)
+        REQUIRE(c == 0x7E);
+
+    // The exact fit succeeds and writes exactly name.size() + 1 bytes.
+    REQUIRE(hazeInputGroupName(src[0], buf, 14) == HAZE_SUCCESS);
+    REQUIRE(std::string(buf) == "haze_mrp_in_0");
+    REQUIRE(buf[13] == '\0');
+    REQUIRE(buf[14] == 0x7E);
+    REQUIRE(buf[15] == 0x7E);
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeInputGroupName rejects NULL/zero arguments", "[integration]") {
+    char buf[64];
+    void *const ptr = reinterpret_cast<void *>(0x1000);
+
+    REQUIRE(hazeInputGroupName(nullptr, buf, sizeof buf) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeInputGroupName(ptr, nullptr, sizeof buf) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+    REQUIRE(hazeInputGroupName(ptr, buf, 0) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
 }

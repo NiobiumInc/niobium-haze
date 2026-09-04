@@ -20,9 +20,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <expected>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <string>
 #include <unistd.h>
 #include <vector>
 
@@ -172,6 +174,24 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
             haze::copy_device_to_device_mrp(dst, src, count, base, base_len));
 
     return set_error(HAZE_ERROR_INVALID_VALUE);
+}
+
+extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) noexcept {
+    if (ptr == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    if (out == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    if (out_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::input_group_name(haze::to_dev_addr(ptr));
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    // No truncation: a buffer too short to hold the name plus its NUL is rejected outright.
+    if (result->size() + 1 > out_len)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    std::memcpy(out, result->data(), result->size());
+    out[result->size()] = '\0';
+    return HAZE_SUCCESS;
 }
 
 extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {

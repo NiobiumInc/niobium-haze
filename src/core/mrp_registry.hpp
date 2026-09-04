@@ -53,6 +53,19 @@ class MrpGroupRegistry {
     // .ids file binds.
     std::string next_input_group_name();
 
+    // Record `name` as the group last minted for every addr in `addrs` (latest-write-wins per
+    // addr); called once per upload, right after next_input_group_name() and bind_name() both
+    // succeed.
+    void record_input_group(std::span<const DevAddr> addrs, const std::string &name);
+
+    // Group name last recorded for `addr` by record_input_group(), or nullptr if none is live.
+    const std::string *input_group_name(DevAddr addr) const;
+
+    // Drop `addr`'s query-index entry without touching group membership: a later, differently
+    // shaped upload at the same address now governs it and the old input group name must stop
+    // answering for it.
+    void forget_input_group(DevAddr addr);
+
     // Record `addrs`/`moduli` as the current MRP group `name` (latest-write-wins), returning
     // true if it was already a tagged output so the caller re-tags its members.
     std::expected<bool, HazeInternalError> record_mrp_group(std::span<const DevAddr> addrs,
@@ -84,6 +97,10 @@ class MrpGroupRegistry {
     // Reverse index addr -> group names (at most one after any registration).
     std::unordered_map<DevAddr, std::unordered_set<std::string>> addr_to_groups_;
     std::unordered_map<DevAddr, std::string> out_names_;
+    // Query index only (addr -> last minted input group name); never consulted when
+    // tagging, so fresh-name-per-upload is unaffected. A prior naming-key use was removed in
+    // e34c662.
+    std::unordered_map<DevAddr, std::string> in_names_;
     uint64_t in_counter_ = 0;
     uint64_t out_counter_ = 0;
 };

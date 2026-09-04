@@ -57,6 +57,49 @@ TEST_CASE("registry: every input group name is fresh", "[unit]") {
     REQUIRE(reg.next_input_group_name() == "haze_mrp_in_0");
 }
 
+TEST_CASE("registry: record_input_group binds every addr of an upload to its name", "[unit]") {
+    MrpGroupRegistry reg;
+    const auto a = addrs({1, 2, 3});
+    reg.record_input_group(a, "haze_mrp_in_0");
+    for (DevAddr d : a) {
+        const auto *name = reg.input_group_name(d);
+        REQUIRE(name != nullptr);
+        REQUIRE(*name == "haze_mrp_in_0");
+    }
+    REQUIRE(reg.input_group_name(addr(4)) == nullptr);
+}
+
+TEST_CASE("registry: re-recording the same addrs is last-write-wins", "[unit]") {
+    MrpGroupRegistry reg;
+    const auto a = addrs({1, 2, 3});
+    reg.record_input_group(a, "haze_mrp_in_0");
+    reg.record_input_group(a, "haze_mrp_in_1");
+    for (DevAddr d : a) {
+        const auto *name = reg.input_group_name(d);
+        REQUIRE(name != nullptr);
+        REQUIRE(*name == "haze_mrp_in_1");
+    }
+}
+
+TEST_CASE("registry: invalidate drops only the touched addr's input group name", "[unit]") {
+    MrpGroupRegistry reg;
+    const auto a = addrs({1, 2, 3});
+    reg.record_input_group(a, "haze_mrp_in_0");
+    reg.invalidate(addr(2));
+    REQUIRE(reg.input_group_name(addr(2)) == nullptr);
+    REQUIRE(*reg.input_group_name(addr(1)) == "haze_mrp_in_0");
+    REQUIRE(*reg.input_group_name(addr(3)) == "haze_mrp_in_0");
+}
+
+TEST_CASE("registry: clear drops every input group name", "[unit]") {
+    MrpGroupRegistry reg;
+    const auto a = addrs({1, 2, 3});
+    reg.record_input_group(a, "haze_mrp_in_0");
+    reg.clear();
+    for (DevAddr d : a)
+        REQUIRE(reg.input_group_name(d) == nullptr);
+}
+
 TEST_CASE("registry: addr/moduli length mismatch is rejected", "[unit]") {
     MrpGroupRegistry reg;
     const auto a = addrs({1, 2});
