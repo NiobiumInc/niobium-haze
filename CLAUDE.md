@@ -15,8 +15,10 @@ a node into FHETCH IR via `niobium::fhetch::sr_*`. Outputs are explicit: declare
 each result with `hazeTagOutput`, then `hazeFlush` finalizes the trace, dispatches it to a backend
 (in-process simulator or HTTP transport to `nbcc_fhetch_replay`), and writes the
 simulator-computed values into the tagged outputs' shadow buffers. `hazeMemcpy(D2H)`
-is then a pure shadow read; reading an address that was not tagged-and-flushed
-returns `HAZE_ERROR_NOT_FLUSHED`.
+of a materialized or plain-uploaded address is a shadow read; a tagged-but-unflushed
+INPUT is instead served from the input spill store (disk, following the address's own
+lifetime, not the shadow's). `HAZE_ERROR_NOT_FLUSHED` applies to an unflushed compute
+result and to an address that was never written at all.
 
 ## Toolchain
 
@@ -424,7 +426,8 @@ Materialization is triggered by `hazeFlush`, which calls
    the simulator-computed polynomial back, and `update_shadow` writes the
    bytes into the allocator's sparse `shadow_data_` map.
 
-`hazeMemcpy(D2H)` (`haze::copy_to_host`) is then a pure shadow read.
+`hazeMemcpy(D2H)` (`haze::copy_to_host`) reads the shadow for a materialized or
+plain-uploaded address, or the input spill store for a tagged-but-unflushed input.
 `hazeDeviceSynchronize` and `hazeStreamSynchronize` are no-ops — nothing runs
 asynchronously, so there is no device work to wait for; they exist for
 CUDA-shape parity but do not flush and do not model ordering.
@@ -442,9 +445,25 @@ CUDA-shape parity but do not flush and do not model ordering.
   when promoting bytes to a FHETCH input), `hazeFree`, and
   `store_compute_result_locked` (a compute result or D2D copy re-binding
   the address must not leave stale pre-compute bytes readable) evict them.
-  Reads from a missing entry return `OutputNotFlushed` (D2H of an untagged /
-  unflushed addr) or `SourceUnavailable` (compute / D2D extract path — using an
-  addr that was never written is a contract violation).
+  Reads from a missing entry return `OutputNotFlushed` (D2H of an address with
+  no materialized bytes and no spilled input — an unflushed compute result or
+  an address never written at all) or `SourceUnavailable` (compute / D2D
+  extract path — using an addr that was never written is a contract
+  violation).
+
+### Input spill store
+
+`InputSpillStore` (`src/core/input_spill.{hpp,cpp}`) holds each live tagged
+input's residue as an address-keyed file (`addr_<hex>.spill`) under
+`<program dir parent>/haze_input_spill`, written at H2D tag time so a
+pre-flush D2H of that address is served from disk instead of the (evicted)
+shadow. Per-recording name snapshots are hardlinks taken at tag time
+(`bind_name`) and are what feed the replay bridge; `put()` always writes then
+renames, so a re-upload lands on a fresh inode and an existing hardlink keeps
+referencing the bytes it had at snapshot time. Entries are erased on
+overwrite, memset, or free, and the whole store is cleared at device reset —
+the recording arena's `fhetch::Polynomial` for a tagged input holds no
+residue bytes of its own, metadata only.
 
 Every `hazeMalloc` allocation must equal the configured polynomial size
 (`ring_dim * sizeof(uint64_t)`). `hazeConfigureDevice` is required before
@@ -463,7 +482,8 @@ addresses above FHETCH's synthetic address range (< `0x1000000000`).
 ### Lock order
 
 The full DAG is documented canonically in `src/common/thread_safety.hpp`:
-epoch → allocator. Config carries no lock: it is a write-only builder frozen to
+epoch → allocator, and epoch → `InputSpillStore::mutex_` (also a leaf, like the
+allocator). Config carries no lock: it is a write-only builder frozen to
 an immutable value by the explicit `hazeConfigureDevice()`, then read without
 lock or atomics (the config is mutated only by the single-threaded control
 plane, never by compute — see thread_safety.hpp for the contract).

@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/handle.hpp"
 #include "common/thread_safety.hpp"
+#include "core/input_spill.hpp"
 #include "core/mrp_registry.hpp"
 
 #include <cstddef>
@@ -51,6 +52,13 @@ class EpochState {
     // Drop any binding for `addr` so the next read rebuilds from shadow (memset/free route
     // here; H2D and D2D rebind in place via tag_h2d_input_locked / copy_result_locked).
     void invalidate(DevAddr addr) noexcept HAZE_EXCLUDES(mutex_);
+
+    // D2H for `dst`/`count` bytes from `src`: a live spill-store address serves pre-flush
+    // reads of a tagged input straight from disk, otherwise falls through to the allocator's
+    // shadow (a compute result, or an address never tagged as an input).
+    std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src,
+                                                        size_t count) noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Finalize the epoch: tag outputs, write the trace, dispatch replay,
     // populate shadow buffers; a TRUE no-op when not recording or nothing
@@ -218,8 +226,8 @@ class HAZE_SCOPED_CAPABILITY EpochSession {
 // haze:: entry points for the api/ shims (HazeInternalError translates at the C ABI edge);
 // they forward to the EpochState members above (or the allocator), which carry the contract.
 
-// Pure shadow read backing hazeMemcpy D2H; unmaterialized bytes read as
-// OutputNotFlushed.
+// Backs hazeMemcpy D2H (EpochState::copy_to_host): a tagged input still spilled reads from
+// disk, otherwise a shadow read; unmaterialized bytes read as OutputNotFlushed.
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept;
 
 // Backs hazeWriteProgram (EpochState::write_program).

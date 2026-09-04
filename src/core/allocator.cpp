@@ -229,35 +229,6 @@ DeviceAllocator::extract_polynomial_components(DevAddr addr, uint64_t ring_dim) 
     return std::move(node.mapped());
 }
 
-std::expected<std::vector<uint64_t>, HazeInternalError>
-DeviceAllocator::read_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept {
-    // ring_dim is validated non-zero at FheParams::build() (see extract).
-    HazeLockGuard lock(mutex_);
-    if (!alloc_set_.contains(addr)) {
-        record_internal_error(HazeInternalError::UnknownAddress,
-                              "DeviceAllocator::read_polynomial_components");
-        return std::unexpected(HazeInternalError::UnknownAddress);
-    }
-    const size_t expected_bytes = ring_dim * sizeof(uint64_t);
-    if (poly_bytes_ < expected_bytes) {
-        record_internal_error(HazeInternalError::PolySizeMismatch,
-                              "DeviceAllocator::read_polynomial_components");
-        return std::unexpected(HazeInternalError::PolySizeMismatch);
-    }
-    auto data_it = shadow_data_.find(addr);
-    if (data_it == shadow_data_.end()) {
-        record_internal_error(HazeInternalError::NoData,
-                              "DeviceAllocator::read_polynomial_components");
-        return std::unexpected(HazeInternalError::NoData);
-    }
-    if (data_it->second.size() != ring_dim) {
-        record_internal_error(HazeInternalError::ShadowSizeMismatch,
-                              "DeviceAllocator::read_polynomial_components");
-        return std::unexpected(HazeInternalError::ShadowSizeMismatch);
-    }
-    return data_it->second;
-}
-
 std::expected<void, HazeInternalError> DeviceAllocator::copy_h2d(DevAddr dst, const void *src,
                                                                  size_t count) noexcept {
     if (src == nullptr)

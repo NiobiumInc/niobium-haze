@@ -1,8 +1,11 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 //
-// Pointer-equality test for shadow → Polynomial zero-copy input
-// promotion; mirrors lookup_or_create_locked without compute/replay so
-// the asserts depend only on move semantics in extract + from_data.
+// Pointer-equality test for shadow → Polynomial zero-copy move; mirrors the
+// extract + from_data sequence lookup_or_create_locked (and the eager H2D tag)
+// run internally, in isolation from compute/replay/spill. The shadow is
+// written directly via update_shadow rather than hazeMemcpy(H2D): with
+// recording active, H2D eagerly tags and moves the shadow into the spill
+// store, leaving nothing here to promote.
 #include "allocator_test_access.hpp"
 #include "common/handle.hpp"
 #include "core/allocator.hpp"
@@ -27,14 +30,15 @@ TEST_CASE("zero-copy input promotion: shadow buffer flows into Polynomial withou
 
     void *dev = nullptr;
     REQUIRE(hazeMalloc(&dev, bytes) == HAZE_SUCCESS);
+    const haze::DevAddr addr = haze::to_dev_addr(dev);
 
     std::vector<uint64_t> host(ring_dim);
     for (size_t i = 0; i < ring_dim; ++i) {
         host[i] = (i * 17U) + 3U;
     }
-    REQUIRE(hazeMemcpy(dev, host.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    auto written = haze::allocator().update_shadow(addr, std::move(host));
+    REQUIRE(written.has_value());
 
-    const haze::DevAddr addr = haze::to_dev_addr(dev);
     // Snapshot the shadow address under the lock; only used below as a
     // value-comparison landmark, never dereferenced.
     const uint64_t *shadow_before = nullptr;

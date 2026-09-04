@@ -18,6 +18,7 @@
 #include "core/allocator.hpp"
 #include "core/backend.hpp"
 #include "core/config.hpp"
+#include "core/input_spill.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +42,14 @@ void EpochState::ensure_recording_locked() {
     // result directly. A failed bring-up leaves recording_ false; the caller's
     // require_recording_locked() then names the reason at the ABI edge.
     if (!backend().ensure_initialized())
+        return;
+    // The root sits OUTSIDE the program dir (a sibling of it, not a child) so
+    // fhebench's post-flush project rename cannot carry the store away, and an
+    // input's on-disk residue survives a program dir change across epochs.
+    auto dir = CompilerBackend::program_directory();
+    if (!dir)
+        return;
+    if (!input_spill().activate(dir->parent_path() / "haze_input_spill"))
         return;
     // start_epoch() precedes start(); on any failure recording_ stays false so
     // require_recording_locked reports it. If start() fails after start_epoch()
@@ -80,6 +89,16 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
     undeclared_uploads_.erase(addr);
+    // Bytes are address-scoped now: an invalidated addr's on-disk residue, if any,
+    // no longer describes anything live. Safe unconditionally -- bind_name snapshots
+    // a tag's residue onto its own file at tag time, so freeing addr afterward (a
+    // temporary key/ciphertext upload, freed right after the op that consumed it)
+    // cannot perturb a still-pending tag's copy.
+    if (input_spill().has(addr)) {
+        // erase() already recorded the reason on failure; this void, noexcept caller
+        // has no further channel to act on it.
+        [[maybe_unused]] auto erased = input_spill().erase(addr);
+    }
 }
 
 std::expected<niobium::fhetch::Polynomial, HazeInternalError>
@@ -89,20 +108,37 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     }
 
     const uint64_t ring_dim = fhe_params().ring_dim();
-    auto components = allocator().extract_polynomial_components(addr, ring_dim);
-    if (!components) {
-        // An addr with neither shadow nor a poly_map_ binding has no value to read; translate
-        // NoData into the sharper SourceUnavailable and pass other errors through.
-        if (components.error() == HazeInternalError::NoData) {
-            record_internal_error(HazeInternalError::SourceUnavailable,
-                                  "lookup_or_create_locked: no shadow and no poly_map_ binding");
-            return std::unexpected(HazeInternalError::SourceUnavailable);
-        }
-        return std::unexpected(components.error());
-    }
-    fhetch::Polynomial poly =
-        fhetch::Polynomial::from_data(std::move(*components), ring_dim, fhetch::Format::Evaluation);
     const std::string name = "haze_in_" + std::to_string(input_counter_++);
+
+    if (!input_spill().has(addr)) {
+        // Fresh live-in: promote the shadow the same way an eager H2D tag would.
+        auto components = allocator().extract_polynomial_components(addr, ring_dim);
+        if (!components) {
+            // An addr with neither shadow nor a spilled residue has no value to read;
+            // translate NoData into the sharper SourceUnavailable.
+            if (components.error() == HazeInternalError::NoData) {
+                record_internal_error(
+                    HazeInternalError::SourceUnavailable,
+                    "lookup_or_create_locked: no shadow and no poly_map_ binding");
+                return std::unexpected(HazeInternalError::SourceUnavailable);
+            }
+            return std::unexpected(components.error());
+        }
+        auto residue = *components;
+        auto put = input_spill().put(addr, std::move(*components));
+        if (!put) {
+            // extract_polynomial_components() already evicted the shadow; restore it, since
+            // the allocator's contract is that an error path never destroys the caller's bytes.
+            [[maybe_unused]] auto restored = allocator().update_shadow(addr, std::move(residue));
+            return std::unexpected(put.error());
+        }
+    }
+    // Cross-epoch reuse lands here directly: the residue is already on disk from an
+    // earlier tag, so this recording only needs a fresh name binding for it.
+    auto bound = input_spill().bind_name(name, {addr});
+    if (!bound)
+        return std::unexpected(bound.error());
+    fhetch::Polynomial poly = fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation);
     fhetch::tag_input(name, poly);
     poly_map_.emplace(addr, poly);
     return poly;
@@ -122,6 +158,15 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
         addr_modulus_.insert_or_assign(addr, modulus);
     else
         addr_modulus_.erase(addr);
+    // A compute result supersedes any spilled input residue this addr used to hold.
+    // Safe unconditionally -- bind_name already snapshotted that residue onto its own
+    // file for any tag still pending, so an in-place accumulation reusing addr as its
+    // own destination cannot perturb what that tag reads at flush.
+    if (input_spill().has(addr)) {
+        // erase() already recorded the reason on failure; this void, noexcept caller
+        // has no further channel to act on it.
+        [[maybe_unused]] auto erased = input_spill().erase(addr);
+    }
     // Evict stale shadow so a pre-flush D2H reports OutputNotFlushed, not the old bytes.
     allocator().evict_shadow(addr);
 }
@@ -182,11 +227,24 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     }
     // recording_ implies a finalized FheParams (ring_dim set and validated at
     // build), so ring_dim is non-zero here; the read-back guard below covers the
-    // remaining shadow-size invariant.
+    // remaining shadow-size invariant. Evicting: the shadow moves to the spill
+    // store at tag time, so a pre-flush D2H is served from disk (EpochState::copy_to_host).
     const uint64_t ring_dim = fhe_params().ring_dim();
-    auto components = allocator().read_polynomial_components(addr, ring_dim);
+    auto components = allocator().extract_polynomial_components(addr, ring_dim);
     if (!components)
         return std::unexpected(components.error());
+    auto residue = *components;
+    auto put = input_spill().put(addr, std::move(*components));
+    if (!put) {
+        // extract_polynomial_components() already evicted the shadow; restore it, since
+        // the allocator's contract is that an error path never destroys the caller's bytes.
+        [[maybe_unused]] auto restored = allocator().update_shadow(addr, std::move(residue));
+        return std::unexpected(put.error());
+    }
+    const std::string name = "haze_in_" + std::to_string(input_counter_++);
+    auto bound = input_spill().bind_name(name, {addr});
+    if (!bound)
+        return std::unexpected(bound.error());
     // Same containment as tag_h2d_mrp_input_locked, and for a sharper reason
     // than the terminate: undeclared_uploads_ is recorded LAST, so a throw
     // there leaves an addr that really is a modulus-less upload but is not
@@ -194,9 +252,7 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     // a later multi-residue op would record this residue per-tower again -
     // exactly the shape the refusal exists to make loud.
     try {
-        fhetch::Polynomial poly = fhetch::Polynomial::from_data(std::move(*components), ring_dim,
-                                                                fhetch::Format::Evaluation);
-        const std::string name = "haze_in_" + std::to_string(input_counter_++);
+        fhetch::Polynomial poly = fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation);
         fhetch::tag_input(name, poly);
         // New H2D bytes overwrite the binding, drop any output tag and stale
         // modulus, and mark the addr as carrying bytes no prime was declared for
@@ -223,29 +279,42 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
         return {};
     }
     const uint64_t ring_dim = fhe_params().ring_dim();
-    // from_data / from_pairs / tag_input / bind_modulus all allocate and none is
-    // declared no-throw, so a bad_alloc would cross this noexcept boundary and
-    // terminate under the lock. It would also leave a half-applied binding: the
-    // trace's input entry names every residue, so an addr this loop never reached
-    // would be re-tagged by a later compute and land in the project twice - the
+    // Evicting: each residue's shadow moves to the spill store at tag time, matching
+    // tag_h2d_input_locked; a pre-flush D2H of any addrs[i] is served from disk.
+    for (DevAddr a : addrs) {
+        auto components = allocator().extract_polynomial_components(a, ring_dim);
+        if (!components)
+            return std::unexpected(components.error());
+        auto residue = *components;
+        auto put = input_spill().put(a, std::move(*components));
+        if (!put) {
+            // extract_polynomial_components() already evicted the shadow; restore it, since
+            // the allocator's contract is that an error path never destroys the caller's bytes.
+            [[maybe_unused]] auto restored = allocator().update_shadow(a, std::move(residue));
+            return std::unexpected(put.error());
+        }
+    }
+    // One entry per upload under a fresh name: every upload builds fresh fhetch
+    // polynomials, so reusing a name keyed on the leading addr would leave a
+    // re-upload's addresses bound by no .ids file.
+    const std::string name = mrp_.next_input_group_name();
+    auto bound = input_spill().bind_name(name, std::vector<DevAddr>(addrs.begin(), addrs.end()));
+    if (!bound)
+        return std::unexpected(bound.error());
+    // from_pairs / tag_input / bind_modulus all allocate and none is declared
+    // no-throw, so a bad_alloc would cross this noexcept boundary and terminate
+    // under the lock. It would also leave a half-applied binding: the trace's
+    // input entry names every residue, so an addr this loop never reached would
+    // be re-tagged by a later compute and land in the project twice - the
     // duplication this entry shape exists to prevent. The epoch cannot be
     // repaired from here, so clear it and report, as finalize_guarded_locked does.
     try {
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
         pairs.reserve(addrs.size());
-        for (std::size_t i = 0; i < addrs.size(); ++i) {
-            // Non-evicting read: the shadow must survive for a compute-free D2H.
-            auto components = allocator().read_polynomial_components(addrs[i], ring_dim);
-            if (!components)
-                return std::unexpected(components.error());
-            pairs.emplace_back(fhetch::Polynomial::from_data(std::move(*components), ring_dim,
-                                                             fhetch::Format::Evaluation),
+        for (std::size_t i = 0; i < addrs.size(); ++i)
+            pairs.emplace_back(fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation),
                                moduli[i]);
-        }
-        // One entry per upload under a fresh name: every from_data above minted a
-        // new fhetch address, so reusing a name keyed on the leading addr would
-        // leave a re-upload's addresses bound by no .ids file.
-        fhetch::tag_input(mrp_.next_input_group_name(), fhetch::MRP::from_pairs(pairs));
+        fhetch::tag_input(name, fhetch::MRP::from_pairs(pairs));
         for (std::size_t i = 0; i < addrs.size(); ++i) {
             // The caller declared this residue's prime, so bind it rather than
             // erasing as the modulus-less single-H2D path must.
@@ -389,8 +458,11 @@ void EpochState::clear_state_locked() noexcept {
     input_counter_ = 0;
     output_counter_ = 0;
     // Mirror clears to libnbfhetch so a failed materialise can't leak
-    // captures into the next epoch; pairs with EpochSession's setup.
+    // captures into the next epoch; pairs with EpochSession's setup. Only the
+    // per-recording name manifest clears here: spilled bytes are address-scoped,
+    // not epoch-scoped, so a live input's residue survives into the next epoch.
     CompilerBackend::clear_captured();
+    input_spill().clear_names();
 }
 
 std::string EpochState::mrp_group_name_locked(DevAddr leading) {
@@ -412,12 +484,23 @@ void EpochState::reset() noexcept {
     clear_state_locked();
 }
 
+std::expected<void, HazeInternalError> EpochState::copy_to_host(void *dst, DevAddr src,
+                                                                size_t count) noexcept {
+    HazeLockGuard lock(mutex_);
+    // A live input address reads from the spill store instead of the (evicted) shadow.
+    // A read error propagates as-is (never remapped).
+    if (count != 0 && input_spill().has(src)) {
+        return input_spill().read(src, std::span<std::byte>(static_cast<std::byte *>(dst), count));
+    }
+    return allocator().copy_to_host(dst, src, count);
+}
+
 HazeMutex &EpochSession::epoch_mutex() noexcept {
     return epoch().mutex_;
 }
 
 std::expected<void, HazeInternalError> copy_to_host(void *dst, DevAddr src, size_t count) noexcept {
-    return allocator().copy_to_host(dst, src, count);
+    return epoch().copy_to_host(dst, src, count);
 }
 
 std::expected<void, HazeInternalError> write_program() noexcept {

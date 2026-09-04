@@ -18,7 +18,9 @@
 // haze_out_<n> beside its haze_mrp_out_<m>. These assert the invariant that
 // replaced it: every address is carried by exactly one entry on each side.
 
-#include "common/errors.hpp"
+#include "allocator_test_access.hpp"
+#include "common/handle.hpp"
+#include "core/allocator.hpp"
 #include "core/input_spill.hpp"
 #include "integration_helpers.hpp"
 
@@ -34,6 +36,7 @@
 #include <ios>
 #include <iterator>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -158,6 +161,15 @@ std::size_t count_prefixed(const std::vector<InputEntry> &entries, const std::st
             ++n;
     }
     return n;
+}
+
+// Mirrors InputSpillStore's private addr_filename(): the shape is a stable on-disk
+// contract a couple of these tests need to check directly. The root sits at cwd
+// (a sibling of every program dir, shared for the process's lifetime).
+std::filesystem::path spill_file_for(void *ptr) {
+    std::ostringstream name;
+    name << "addr_" << std::hex << haze::to_uintptr(haze::to_dev_addr(ptr)) << ".spill";
+    return std::filesystem::path{"haze_input_spill"} / name.str();
 }
 
 // Record `src + src` over one uploaded MRP group and return the project dir.
@@ -420,53 +432,43 @@ TEST_CASE("recorded inputs: an op-time promotion is not mistaken for an upload",
 TEST_CASE("spilled inputs are consumed by the post-recording hook", "[integration]") {
     const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
 
-    // Control: an ordinary recording with the spill store inactive, so the hook
-    // synthesizes from rec.per_residue_values (seed A) as it does today.
+    // Control: an ordinary recording. The tag path auto-spills the upload (seed A)
+    // and the hook consumes it, so the .bin carries A.
     std::filesystem::remove_all("haze_spill_control");
     const auto control_dir = record_one_group("haze_spill_control", base);
 
-    // Same upload seed as the control (0x5150, record_one_group's), so the uploaded
-    // bytes are identical; before hazeWriteProgram runs the hook, the group's name is
-    // spilled with a different residue seed (B), which is the only thing that can
-    // make the two .bin files differ.
-    std::filesystem::remove_all("haze_spill_consumed");
-    configure("haze_spill_consumed", base);
+    // Variant: same upload seed, but every src addr is freed right after the compute
+    // that consumed it (a temporary upload's ordinary lifetime), well before the flush.
+    // bind_name snapshots a tag's residues onto their own file at tag time, so freeing
+    // the addrs afterward cannot perturb what the hook reads: the resulting .bin must
+    // still match the control's byte for byte.
+    std::filesystem::remove_all("haze_spill_freed_before_flush");
+    configure("haze_spill_freed_before_flush", base);
     const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0x5150ULL), base);
     const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
     REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
                        haze::test::to_const(src).data(), base.data(), base.size(),
                        nullptr) == HAZE_SUCCESS);
-
-    const std::filesystem::path spilled_dir{"haze_spill_consumed"};
-    REQUIRE(haze::input_spill().activate(spilled_dir / "input_spill").has_value());
-    REQUIRE(haze::input_spill().put("haze_mrp_in_0", residues_for(base, 0xB000ULL)).has_value());
+    haze::test::free_all_residues(src);
+    for (void *p : src)
+        REQUIRE_FALSE(haze::input_spill().has(haze::to_dev_addr(p)));
 
     for (void *out : dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
     REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
 
-    // The hook consumed the record: a second take() on the same name fails, and
-    // its file is gone.
-    auto second_take = haze::input_spill().take("haze_mrp_in_0");
-    REQUIRE_FALSE(second_take.has_value());
-    REQUIRE(second_take.error() == haze::HazeInternalError::SpillRecordMissing);
-    REQUIRE_FALSE(std::filesystem::exists(spilled_dir / "input_spill" / "haze_mrp_in_0.spill"));
-
-    // Same shape and moduli in both runs, only the values differ: bytes
-    // differing proves the hook synthesized from the spill, not the trace.
+    const std::filesystem::path freed_dir{"haze_spill_freed_before_flush"};
     const auto control_entries = read_manifest(control_dir, "haze_spill_control");
-    const auto spilled_entries = read_manifest(spilled_dir, "haze_spill_consumed");
+    const auto freed_entries = read_manifest(freed_dir, "haze_spill_freed_before_flush");
     REQUIRE(control_entries.size() == 1);
-    REQUIRE(spilled_entries.size() == 1);
-    REQUIRE(slurp(control_dir / control_entries.front().bin_file) !=
-            slurp(spilled_dir / spilled_entries.front().bin_file));
+    REQUIRE(freed_entries.size() == 1);
+    REQUIRE(slurp(control_dir / control_entries.front().bin_file) ==
+            slurp(freed_dir / freed_entries.front().bin_file));
 
-    haze::input_spill().clear();
-    haze::test::free_all_residues(src);
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     std::filesystem::remove_all(control_dir);
-    std::filesystem::remove_all(spilled_dir);
+    std::filesystem::remove_all(freed_dir);
 }
 
 TEST_CASE("a missing spill record fails the flush", "[integration]") {
@@ -483,9 +485,10 @@ TEST_CASE("a missing spill record fails the flush", "[integration]") {
     for (void *out : dst)
         REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
 
-    REQUIRE(haze::input_spill().activate(dir / "input_spill").has_value());
-    // No put(): the hook's take() must fail the flush rather than fall back to
-    // the trace's own recorded values.
+    // Consume the group's own name binding directly (bytes untouched) so the hook's
+    // take_named() finds nothing and fails the flush rather than falling back to
+    // the trace's own values.
+    REQUIRE(haze::input_spill().take_named("haze_mrp_in_0").has_value());
     REQUIRE(hazeWriteProgram() != HAZE_SUCCESS);
 
     // A second attempt must not crash: finalize_locked already cleared
@@ -494,7 +497,264 @@ TEST_CASE("a missing spill record fails the flush", "[integration]") {
     REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
     REQUIRE_FALSE(std::filesystem::exists(dir / (program_name + ".input_haze_mrp_in_0.bin")));
 
-    haze::input_spill().clear();
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("pre-flush D2H of a tagged input is served from the spill store", "[integration]") {
+    // SRP: a plain modulus-less H2D upload.
+    {
+        const std::vector<uint64_t> base = {kQ0};
+        configure("haze_spill_srp_d2h", base);
+        const auto residues = residues_for(base, 0xD100ULL);
+        const auto src = haze::test::allocate_and_h2d_residues(residues);
+        REQUIRE_FALSE(haze::test::AllocatorTestAccess::with_shadow_data(
+            haze::allocator(), haze::to_dev_addr(src[0]), [](const uint64_t *, std::size_t) {}));
+
+        std::vector<uint64_t> full(kRingDim, 0);
+        REQUIRE(hazeMemcpy(full.data(), src[0], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+        REQUIRE(full == residues[0]);
+
+        std::vector<uint64_t> half(kRingDim / 2, 0);
+        REQUIRE(hazeMemcpy(half.data(), src[0], kBytes / 2, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+        for (std::size_t i = 0; i < kRingDim / 2; ++i)
+            REQUIRE(half[i] == residues[0][i]);
+
+        haze::test::free_all_residues(src);
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    }
+
+    // MRP: a declared-modulus group upload.
+    {
+        const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+        configure("haze_spill_mrp_d2h", base);
+        const auto residues = residues_for(base, 0xD200ULL);
+        const auto src = haze::test::allocate_and_h2d_residues(residues, base);
+        for (void *p : src) {
+            REQUIRE_FALSE(haze::test::AllocatorTestAccess::with_shadow_data(
+                haze::allocator(), haze::to_dev_addr(p), [](const uint64_t *, std::size_t) {}));
+        }
+
+        for (std::size_t i = 0; i < base.size(); ++i) {
+            std::vector<uint64_t> full(kRingDim, 0);
+            REQUIRE(hazeMemcpy(full.data(), src[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                    HAZE_SUCCESS);
+            REQUIRE(full == residues[i]);
+
+            std::vector<uint64_t> half(kRingDim / 2, 0);
+            REQUIRE(hazeMemcpy(half.data(), src[i], kBytes / 2, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                    HAZE_SUCCESS);
+            for (std::size_t k = 0; k < kRingDim / 2; ++k)
+                REQUIRE(half[k] == residues[i][k]);
+        }
+
+        haze::test::free_all_residues(src);
+        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    }
+}
+
+TEST_CASE("post-flush D2H of a pure input still returns its uploaded value", "[integration]") {
+    // Address lifetime, not epoch lifetime: a flush only clears the per-recording name
+    // manifest (clear_names), so a never-freed, never-overwritten input's residue is
+    // still readable after the flush that consumed its name binding.
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_spill_post_flush", base);
+    const auto residues = residues_for(base, 0xD300ULL);
+    const auto src = haze::test::allocate_and_h2d_residues(residues);
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    // src[0] must feed a tagged output, or nothing is pending and hazeWriteProgram
+    // is a true no-op (finalize_locked) that never reaches clear_names either.
+    REQUIRE(hazeAdd(dst, src[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    std::vector<uint64_t> out(kRingDim, 0);
+    REQUIRE(hazeMemcpy(out.data(), src[0], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(out == residues[0]);
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("cross-epoch reuse of a flushed input records correctly", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0};
+    const std::string program_name = "haze_spill_cross_epoch";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xD400ULL));
+
+    void *dst1 = nullptr;
+    REQUIRE(hazeMalloc(&dst1, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst1, src[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst1) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries_1 = read_manifest(dir, program_name);
+    REQUIRE(entries_1.size() == 1);
+    const std::string first_bin = slurp(dir / entries_1.front().bin_file);
+
+    // A new epoch, reusing src[0] without re-uploading: the address's residue is
+    // still on disk from the first tag (address lifetime, not epoch lifetime), so
+    // lookup_or_create_locked's input_spill().has(addr) path binds a fresh name
+    // for this recording without touching the bytes.
+    void *dst2 = nullptr;
+    REQUIRE(hazeMalloc(&dst2, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(dst2, src[0], src[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst2) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries_2 = read_manifest(dir, program_name);
+    REQUIRE(entries_2.size() == 1);
+    // Same program, same input name, same underlying bytes: the second project's
+    // input .bin is byte-identical to the first's.
+    REQUIRE(slurp(dir / entries_2.front().bin_file) == first_bin);
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeFree(dst1) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(dst2) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("partial H2D over a tagged input lands on a fresh zero-tailed shadow", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_spill_partial_h2d", base);
+    void *dev = nullptr;
+    REQUIRE(hazeMalloc(&dev, kBytes) == HAZE_SUCCESS);
+    const auto full_residue = residues_for(base, 0xD500ULL).front();
+    REQUIRE(hazeMemcpy(dev, full_residue.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+
+    // Re-upload only the first half over the same addr: the first tag already
+    // evicted shadow_data_[dev], so copy_h2d's second call recreates a fresh,
+    // zero-filled shadow before writing the half it's given - not the first
+    // upload's stale tail.
+    const auto half_residue = residues_for(base, 0xD600ULL).front();
+    REQUIRE(hazeMemcpy(dev, half_residue.data(), kBytes / 2, HAZE_MEMCPY_HOST_TO_DEVICE) ==
+            HAZE_SUCCESS);
+
+    std::vector<uint64_t> expected(kRingDim, 0);
+    for (std::size_t i = 0; i < kRingDim / 2; ++i)
+        expected[i] = half_residue[i];
+
+    std::vector<uint64_t> got(kRingDim, 0xDEADBEEFULL); // poison: a short read must be visible
+    REQUIRE(hazeMemcpy(got.data(), dev, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+    REQUIRE(got == expected);
+
+    REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("memset over a tagged input drops that residue's spill serving", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    configure("haze_spill_memset_drops_binding", base);
+    const auto residues = residues_for(base, 0xD700ULL);
+    const auto src = haze::test::allocate_and_h2d_residues(residues, base);
+
+    REQUIRE(hazeMemset(src[0], 0x5A, kBytes) == HAZE_SUCCESS);
+
+    // The memset'd residue's binding was dropped by invalidate(), so its D2H
+    // now falls through to the (freshly memset) shadow, not the spill store.
+    std::vector<uint8_t> memset_bytes(kBytes, 0);
+    REQUIRE(hazeMemcpy(memset_bytes.data(), src[0], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+            HAZE_SUCCESS);
+    for (uint8_t b : memset_bytes)
+        REQUIRE(b == 0x5A);
+
+    // The other residues' bindings are untouched: still served from the spill store.
+    for (std::size_t i = 1; i < base.size(); ++i) {
+        std::vector<uint64_t> got(kRingDim, 0);
+        REQUIRE(hazeMemcpy(got.data(), src[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
+        REQUIRE(got == residues[i]);
+    }
+
+    haze::test::free_all_residues(src);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("spill activation failure prevents recording, loudly", "[integration]") {
+    const std::vector<uint64_t> base = {kQ0};
+    const std::string program_name = "haze_spill_activation_failure";
+    const std::filesystem::path dir{program_name};
+    // The spill root is a process-wide sibling of the program dir (cwd/haze_input_spill),
+    // not a child of it; configure()'s hazeDeviceReset() already cleared it.
+    const std::filesystem::path spill_root{"haze_input_spill"};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+
+    // Block the root with a regular file before the first H2D, so
+    // ensure_recording_locked's activate() fails and no recording starts.
+    std::filesystem::remove_all(spill_root);
+    {
+        std::ofstream blocker(spill_root);
+        blocker << "not a directory";
+    }
+
+    void *dev = nullptr;
+    REQUIRE(hazeMalloc(&dev, kBytes) == HAZE_SUCCESS);
+    const auto residue = residues_for(base, 0xD800ULL).front();
+    // The H2D write itself succeeds: it's a plain shadow write, since the tag
+    // path no-ops when recording never started.
+    REQUIRE(hazeMemcpy(dev, residue.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+
+    void *dst = nullptr;
+    REQUIRE(hazeMalloc(&dst, kBytes) == HAZE_SUCCESS);
+    // The compute op retries activation (still blocked) and fails loudly instead
+    // of silently recording nothing.
+    REQUIRE(hazeAdd(dst, dev, dev, 0, nullptr) == HAZE_ERROR_INTERNAL);
+    hazeGetLastError();
+
+    REQUIRE(hazeFree(dev) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    std::filesystem::remove_all(dir);
+    // Restore the shared root so later tests in this binary can activate it.
+    std::filesystem::remove_all(spill_root);
+}
+
+TEST_CASE("an input never used in a modulus-bearing op is dropped from inputs.json "
+          "and its spill file is freed with the address",
+          "[integration]") {
+    const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
+    const std::string program_name = "haze_spill_unused_input";
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    configure(program_name, base);
+
+    // SRP upload with no compute use: a plain modulus-less H2D never touched by
+    // an op, so sync_fhetch_state_to_compiler drops it from inputs.json (no
+    // modulus-map entry). Its spill file is address-scoped, not epoch-scoped, so
+    // the flush leaves it alone; only freeing the address retires it.
+    const auto unused = haze::test::allocate_and_h2d_residues(residues_for({kQ0}, 0xD900ULL));
+    void *unused_ptr = unused[0];
+
+    // One MRP group with a compute, so the flush has something to tag and replay.
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xDA00ULL), base);
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    for (void *out : dst)
+        REQUIRE(hazeTagOutput(out) == HAZE_SUCCESS);
+
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const auto entries = read_manifest(dir, program_name);
+    REQUIRE(entries.size() == 1);
+    REQUIRE(entries.front().name == "haze_mrp_in_0");
+    // Dropped from the manifest, but the flush left its bytes alone.
+    REQUIRE(std::filesystem::exists(spill_file_for(unused_ptr)));
+
+    REQUIRE(hazeFree(unused_ptr) == HAZE_SUCCESS);
+    REQUIRE_FALSE(std::filesystem::exists(spill_file_for(unused_ptr)));
+
     haze::test::free_all_residues(src);
     haze::test::free_all_residues(dst);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);

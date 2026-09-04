@@ -13,6 +13,7 @@
 #pragma once
 
 #include "common/errors.hpp"
+#include "common/handle.hpp"
 #include "common/thread_safety.hpp"
 
 #include <cstddef>
@@ -26,50 +27,92 @@
 
 namespace haze {
 
-// The store owns the on-disk spill of tagged input residues so the recording holds
-// metadata only. It is a lock-DAG leaf and must never call into epoch, allocator, or
-// backend. Each record file is a header (u32 magic 0x485A5350, u32 version 1, u64
-// residue_count, u64 ring_dim) followed by residue_count runs of ring_dim u64 values, all
-// host-endian and meaningful only as process-local scratch inside the program dir -- never
-// transported. Reclaim happens at take() or clear(); any residue surviving an abnormal exit
-// belongs to the program dir's lifecycle, not this store's.
+// The store replaces the RAM shadow for tagged inputs one-for-one on disk: each live
+// input address's residue lives under its own "addr_<hex>.spill" file (header: u32
+// magic 0x485A5350, u32 version 2, u64 ring_dim; then ring_dim u64 values, host-endian,
+// process-local scratch -- never transported) for as long as the address itself is live
+// with that value, mirroring hazeFree/overwrite/memset the same way the allocator's
+// shadow map used to. put() writes a scratch file and renames it over the addr's path, so
+// every put lands on a FRESH inode there.
+//
+// bind_name is a SNAPSHOT, not a copy: it hard-links the addr's CURRENT file into its own
+// name-scoped path at call time, at zero bytes copied. Because put() always renames a
+// fresh inode over the addr path, a name's hardlink keeps referencing the OLD inode after
+// any later put/erase touches that addr, so a still-pending tag can never see bytes from
+// a compute result, hazeFree, memset, or re-upload reusing that same address. take_named
+// reads and erases only the name-scoped links; the addr-scoped records above are
+// untouched by either call. A bind_name that fails partway -- including a rejected
+// re-registration -- drops the name's named_records_ entry entirely rather than leaving
+// it referencing files the rollback just removed. It is a lock-DAG leaf and must never
+// call into epoch, allocator, or backend.
 class InputSpillStore {
   public:
-    // Directory is created here; the caller guarantees the store holds no records.
+    // Directory is created here. Idempotent while already active with the SAME root
+    // (records persist across recordings' activate calls); re-activating with a
+    // DIFFERENT root while active is a hard error.
     [[nodiscard]] std::expected<void, HazeInternalError>
     activate(std::filesystem::path dir) noexcept HAZE_EXCLUDES(mutex_);
 
-    [[nodiscard]] bool active() const noexcept HAZE_EXCLUDES(mutex_);
+    // Membership: the D2H mode discriminator (deterministic, not a fallback probe).
+    [[nodiscard]] bool has(DevAddr addr) const noexcept HAZE_EXCLUDES(mutex_);
 
-    // All residues must be the same non-zero length; the vector must be non-empty.
+    // One polynomial per address; overwrite allowed (a re-upload replaces the file).
     [[nodiscard]] std::expected<void, HazeInternalError>
-    put(const std::string &name, std::vector<std::vector<uint64_t>> &&residues) noexcept
+    put(DevAddr addr, std::vector<uint64_t> &&residue) noexcept HAZE_EXCLUDES(mutex_);
+
+    // Seekable partial read from the start of addr's residue; dst.size() bytes.
+    [[nodiscard]] std::expected<void, HazeInternalError>
+    read(DevAddr addr, std::span<std::byte> dst) const noexcept HAZE_EXCLUDES(mutex_);
+
+    // Removes addr's file and record. Missing addr is a hard error: callers erase only
+    // what they know is present (check has(addr) first for an addr that may be foreign).
+    [[nodiscard]] std::expected<void, HazeInternalError> erase(DevAddr addr) noexcept
         HAZE_EXCLUDES(mutex_);
 
-    // Reads dst.size() bytes from the start of residue `residue_idx` of record `name`.
+    // Per-recording manifest for the post-recording hook: hardlinks each addr's CURRENT
+    // residue file into a name-scoped snapshot (overwrite allowed, zero bytes copied);
+    // every addr must already have a record (SpillIoFailed otherwise -- callers always
+    // put() first).
     [[nodiscard]] std::expected<void, HazeInternalError>
-    read_residue(const std::string &name, std::size_t residue_idx,
-                 std::span<std::byte> dst) const noexcept HAZE_EXCLUDES(mutex_);
+    bind_name(const std::string &name, std::vector<DevAddr> &&addrs) noexcept HAZE_EXCLUDES(mutex_);
 
-    // Returns the whole record and erases it (file removed): the flush-time consumer.
+    // Reads the name's snapshotted residues IN ORDER and erases them (the name-scoped
+    // copies only -- addr-scoped records are untouched). Unknown name is
+    // SpillRecordMissing.
     [[nodiscard]] std::expected<std::vector<std::vector<uint64_t>>, HazeInternalError>
-    take(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
+    take_named(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
 
-    // Removes every record file and the spill directory; deactivates. Error-path hygiene,
-    // so failures are recorded, never propagated.
+    // Drops every name's snapshotted copies, leaving addr records (and their bytes)
+    // untouched.
+    void clear_names() noexcept HAZE_EXCLUDES(mutex_);
+
+    // Removes every record file (addr- and name-scoped), the spill directory, and every
+    // manifest; deactivates. Device teardown only. Error-path hygiene: failures are
+    // recorded, never propagated.
     void clear() noexcept HAZE_EXCLUDES(mutex_);
 
   private:
     struct Record {
-        std::size_t residue_count;
         std::size_t ring_dim;
     };
-    std::filesystem::path record_path_locked(const std::string &name) const HAZE_REQUIRES(mutex_);
+    // Removes name's snapshot files [0, count) -- bind_name's rollback on a partial
+    // failure, and reused by overwrite/clear paths that retire a name's snapshots.
+    void remove_name_snapshots_locked(const std::string &name, std::size_t count) const
+        HAZE_REQUIRES(mutex_);
+    static std::string addr_filename(DevAddr addr);
+    static std::string name_filename(const std::string &name, std::size_t index);
+    std::filesystem::path record_path_locked(DevAddr addr) const HAZE_REQUIRES(mutex_);
+    // Scratch path for put()'s write-then-rename: same dir, addr's filename plus ".tmp".
+    std::filesystem::path temp_record_path_locked(DevAddr addr) const HAZE_REQUIRES(mutex_);
+    std::filesystem::path name_record_path_locked(const std::string &name, std::size_t index) const
+        HAZE_REQUIRES(mutex_);
 
     mutable HazeMutex mutex_;
     bool active_ HAZE_GUARDED_BY(mutex_) = false;
     std::filesystem::path dir_ HAZE_GUARDED_BY(mutex_);
-    std::unordered_map<std::string, Record> records_ HAZE_GUARDED_BY(mutex_);
+    std::unordered_map<DevAddr, Record> records_ HAZE_GUARDED_BY(mutex_);
+    // Name -> its snapshotted residues' Records, in bind_name's addrs order.
+    std::unordered_map<std::string, std::vector<Record>> named_records_ HAZE_GUARDED_BY(mutex_);
 };
 
 // Defined in device_state.cpp.

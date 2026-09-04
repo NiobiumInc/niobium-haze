@@ -47,6 +47,9 @@ class AllocatorTestAccess;
 // H2D/memset/update_shadow create it; compute extract, a compute-result/D2D re-bind
 // (via evict_shadow), and hazeFree evict it. Byte-granular C-ABI access
 // reinterpret_casts the over-aligned vector<uint64_t> storage to uint8_t*.
+// An eager H2D tag (or an op-time promotion) moves the shadow straight into the
+// input spill store instead of leaving it here, so a pre-flush D2H of a tagged
+// input is served from disk (EpochState::copy_to_host), not from this map.
 //
 // Contract: Config::set_ring_dimension before the first allocate (poly size =
 // N × 8 bytes); every allocation must equal that size exactly (else
@@ -110,12 +113,6 @@ class DeviceAllocator {
     // has no shadow, and evicts the entry on success (hence non-const).
     HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
     extract_polynomial_components(DevAddr addr, uint64_t ring_dim) noexcept HAZE_EXCLUDES(mutex_);
-
-    // Non-evicting copy of the shadow components, for the H2D eager-tag path that
-    // must leave shadow_data_ intact for a later compute-free D2H.
-    HAZE_API std::expected<std::vector<uint64_t>, HazeInternalError>
-    read_polynomial_components(DevAddr addr, uint64_t ring_dim) const noexcept
-        HAZE_EXCLUDES(mutex_);
 
     // Read shadow bytes into a host buffer (shadow only; caller handles any
     // compute materialization).

@@ -72,7 +72,9 @@ HAZE_API hazeError_t hazePointerGetAttributes(hazePointerAttributes *attrs,
 // HAZE_ERROR_NOT_FLUSHED. A plain H2D-then-D2H round-trip needs no tag/flush — the uploaded
 // bytes are returned as-is. A compute result or D2D copy landing on an address drops any
 // previously uploaded bytes there, so D2H errors with HAZE_ERROR_NOT_FLUSHED until tag+flush
-// rather than returning stale data.
+// rather than returning stale data. A PARTIAL H2D write to an address whose bytes were
+// already tagged as a recording input lands on a fresh, zero-filled buffer of the full
+// polynomial size, not on the previously uploaded bytes.
 //
 // D2D copies whole polynomials: `count` must equal the polynomial size (partial copies are
 // unexpressible in the IR — HAZE_ERROR_INVALID_VALUE; oversized is HAZE_ERROR_SIZE_MISMATCH).

@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <expected>
+#include <filesystem>
 
 namespace haze {
 
@@ -69,6 +70,12 @@ class CompilerBackend {
     // Drop cached state so the next ensure_initialized() starts fresh; mainly for
     // tests via hazeDeviceReset().
     void reset() noexcept;
+
+    // The vendor compiler's active program directory, for callers (the spill store
+    // activation site) that need it without including compiler.h themselves. Wraps
+    // a vendor call that can throw; a caught throw becomes BackendInitFailed.
+    [[nodiscard]] static std::expected<std::filesystem::path, HazeInternalError>
+    program_directory() noexcept;
 
     CompilerBackend(const CompilerBackend &) = delete;
     CompilerBackend &operator=(const CompilerBackend &) = delete;
