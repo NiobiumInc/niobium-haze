@@ -187,7 +187,8 @@ extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out
     if (!result)
         return set_error(haze::to_public_error(result.error()));
     // No truncation: a buffer too short to hold the name plus its NUL is rejected outright.
-    if (result->size() + 1 > out_len)
+    // >= keeps the same bound as size()+1 > out_len without the wrap at SIZE_MAX.
+    if (result->size() >= out_len)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     std::memcpy(out, result->data(), result->size());
     out[result->size()] = '\0';
