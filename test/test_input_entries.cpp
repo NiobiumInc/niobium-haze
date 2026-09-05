@@ -1276,3 +1276,15 @@ TEST_CASE("hazeInputGroupName rejects NULL/zero arguments", "[integration]") {
     REQUIRE(hazeInputGroupName(ptr, buf, 0) == HAZE_ERROR_INVALID_VALUE);
     hazeGetLastError();
 }
+
+TEST_CASE("hazeInputGroupName answers SOURCE_UNAVAILABLE for an unregistered pointer",
+          "[integration]") {
+    configure("input_group_name_unregistered", {kQ0});
+    // Non-null, well-formed arguments, but the address was never uploaded this epoch: the
+    // query index misses, exactly as for a freed or finalized address.
+    char buf[64];
+    void *const never_uploaded = reinterpret_cast<void *>(0x1000);
+    REQUIRE(hazeInputGroupName(never_uploaded, buf, sizeof buf) == HAZE_ERROR_SOURCE_UNAVAILABLE);
+    hazeGetLastError();
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
