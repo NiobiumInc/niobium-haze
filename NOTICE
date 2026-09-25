@@ -2,9 +2,9 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ============================================================
 
 Project: niobium-haze
-Generated: 2026-09-24
+Generated: 2026-09-25
 Tool: SCANOSS (snippet detection with License dataset)
-Components: 112
+Components: 129
 
 This file lists all third-party software components detected
 in this repository, along with their licenses and copyright
@@ -26,9 +26,9 @@ LICENSE SUMMARY
   AFL-2.1: 1 component(s)
   AFL-3.0 AND GPL-2.0-only AND AFL-2.1 AND GPL-2.0-or-later AND MIT AND GPL-1.0-or-later: 1 component(s)
   AGPL-3.0-only [COPYLEFT]: 1 component(s)
-  Apache-2.0: 26 component(s)
+  Apache-2.0: 29 component(s)
   Apache-2.0 AND Apache-2.0 AND OpenSSL: 1 component(s)
-  Apache-2.0 WITH LLVM-exception: 3 component(s)
+  Apache-2.0 WITH LLVM-exception: 4 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA: 2 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA AND NCSA OR MIT AND NCSA AND MIT: 1 component(s)
   Artistic-1.0-Perl: 1 component(s)
@@ -39,7 +39,7 @@ LICENSE SUMMARY
   BSD-2-Clause AND LGPL-2.1-only: 1 component(s)
   BSD-2-Clause-Darwin: 1 component(s)
   BSD-2-Clause-Patent: 1 component(s)
-  BSD-3-Clause: 39 component(s)
+  BSD-3-Clause: 44 component(s)
   BSD-3-Clause AND GPL-2.0-only AND BSD-3-Clause OR GPL-2.0-or-later AND GPL-1.0-or-later: 1 component(s)
   BSD-3-Clause AND ISC AND ISC AND MIT AND MIT: 1 component(s)
   BSD-3-Clause-LBNL: 1 component(s)
@@ -74,7 +74,7 @@ LICENSE SUMMARY
   CC-BY-SA-2.0-UK: 1 component(s)
   CC-BY-SA-2.1-JP: 1 component(s)
   CC-BY-SA-2.5: 1 component(s)
-  CC-BY-SA-3.0: 1 component(s)
+  CC-BY-SA-3.0: 2 component(s)
   CC-BY-SA-3.0 AND GPL-2.0-or-later AND CC-BY-4.0 AND GPL-2.0-only: 1 component(s)
   CC-BY-SA-3.0-AT: 1 component(s)
   CC-BY-SA-4.0: 1 component(s)
@@ -97,12 +97,12 @@ LICENSE SUMMARY
   GPL-1.0-or-later AND CC-BY-4.0: 1 component(s)
   GPL-1.0-or-later AND GPL-2.0-or-later AND GPL-2.0-only: 1 component(s)
   GPL-1.0-or-later AND GPL-3.0-only AND MIT: 1 component(s)
-  GPL-2.0-only [COPYLEFT]: 5 component(s)
+  GPL-2.0-only [COPYLEFT]: 7 component(s)
   GPL-2.0-only AND GPL-3.0-only AND GPL-1.0-or-later AND GPL-1.0-or-later AND GPL-2.0-only: 1 component(s)
-  GPL-2.0-or-later [COPYLEFT]: 2 component(s)
+  GPL-2.0-or-later [COPYLEFT]: 3 component(s)
   GPL-3.0-linking-exception: 1 component(s)
   GPL-3.0-linking-source-exception: 1 component(s)
-  GPL-3.0-only [COPYLEFT]: 7 component(s)
+  GPL-3.0-only [COPYLEFT]: 9 component(s)
   GPL-3.0-only AND BSD-3-Clause AND GPL-1.0-or-later AND GPL-2.0-only: 1 component(s)
   GPL-3.0-only AND GPL-1.0-or-later AND BSD-3-Clause: 1 component(s)
   GPL-3.0-or-later AND FSFAP: 1 component(s)
@@ -139,7 +139,7 @@ LICENSE SUMMARY
   LPPL-1.3c: 1 component(s)
   Libpng: 1 component(s)
   Linux-syscall-note: 1 component(s)
-  MIT: 37 component(s)
+  MIT: 43 component(s)
   MIT AND Apache-2.0: 1 component(s)
   MIT AND GPL-2.0-only AND GPL-1.0-or-later AND MIT AND GPL-1.0-or-later AND MIT AND Boehm-GC AND GPL-1.0-or-later: 1 component(s)
   MIT AND GPL-3.0-only: 1 component(s)
@@ -154,9 +154,9 @@ LICENSE SUMMARY
   MIT-open-group AND X11: 1 component(s)
   MPL-1.0: 1 component(s)
   MPL-1.1 [COPYLEFT]: 1 component(s)
-  MPL-2.0 [COPYLEFT]: 3 component(s)
+  MPL-2.0 [COPYLEFT]: 5 component(s)
   MPL-2.0 AND Apache-2.0: 1 component(s)
-  NCSA: 4 component(s)
+  NCSA: 5 component(s)
   OFL-1.1 [COPYLEFT]: 1 component(s)
   OFL-1.1 AND Apache-2.0: 1 component(s)
   OLDAP-2.8: 1 component(s)
@@ -179,7 +179,7 @@ LICENSE SUMMARY
   ZPL-1.1: 1 component(s)
   ZPL-2.0: 1 component(s)
   ZPL-2.1: 1 component(s)
-  Zlib: 3 component(s)
+  Zlib: 4 component(s)
   bzip2-1.0.6: 1 component(s)
   curl: 2 component(s)
   libtiff: 1 component(s)
@@ -256,6 +256,10 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/ac-frg/benchmark
   PURL: pkg:github/ac-frg/benchmark
   Copyright:
+    Copyright 2015 Google Inc. All rights reserved
+    Copyright 2015 Google Inc.
+    Copyright 2018 Google Inc.
+    Copyright 2018 Google Inc. All rights reserved.
     Copyright copyright owner or entity authorized by
   License: Apache-2.0
 
@@ -263,6 +267,14 @@ COMPONENT ATTRIBUTIONS
   Version: v1.8.4-gbenchmark
   Source: https://github.com/stolyarchuk/benchmark
   PURL: pkg:github/stolyarchuk/benchmark
+  License: Apache-2.0
+
+  benchmark-dev
+  Version: 1.8.0-r0
+  Source: https://dl-cdn.alpinelinux.org/v3.18/community/x86_64/benchmark-dev-1.8.0-r0.apk
+  PURL: pkg:apk/benchmark-dev
+  Copyright:
+    Copyright copyright owner or entity authorized by
   License: Apache-2.0
 
   bombic
@@ -294,6 +306,7 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright 2005; Google Inc.
     Copyright 2015; Google Inc.
+    Copyright 2018; Google Inc.
   License: GPL-3.0-only
 
   cereal
@@ -373,6 +386,10 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/codspeedhq/codspeed-cpp
   Copyright:
     Copyright 2025 CodSpeed Technology SAS and contributors
+    Copyright 2015 Google Inc.
+    Copyright 2015 Google Inc. All rights reserved.
+    Copyright 2016 Ismael Jimenez Martinez
+    Copyright 2016 Ismael Jimenez Martinez. All rights reserved.
     Copyright 2020 Google Inc.
     Copyright 2020 Google Inc. All rights reserved.
   License: MIT
@@ -383,6 +400,7 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/odant/conan-googletest
   Copyright:
     Copyright 2008; Google Inc.
+    Copyright 2009; Google Inc.
   License: MIT
 
   controlr
@@ -446,6 +464,14 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2016-2021 Viktor Kirilov
   License: MIT
 
+  dxfeed-graal-cxx-api
+  Version: v4.2.0
+  Source: https://github.com/dxFeed/dxfeed-graal-cxx-api
+  PURL: pkg:github/dxfeed/dxfeed-graal-cxx-api
+  Copyright:
+    Copyright (c) 2016-2023 Viktor Kirilov
+  License: MPL-2.0
+
   dxfeed-graal-cxx-api-samples
   Version: v0.0.0-alpha
   Source: https://github.com/dxFeed/dxfeed-graal-cxx-api-samples
@@ -465,6 +491,14 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2017; Juan Pedro Bolivar Puente
     Copyright (c) 2017; Randolph Voorhies; Shane Grant
   License: BSD-3-Clause, MIT, Unlicense, Zlib
+
+  emacs
+  Version: emacs-24.3.92
+  Source: https://codeberg.org/MonadicSheep/emacs/archive/emacs-24.3.92.zip
+  PURL: pkg:codeberg/monadicsheep/emacs
+  Copyright:
+    Copyright (C) 2002-2014 Free Software Foundation; Inc.
+  License: GPL-3.0-only
 
   etaacademy-zk-meme
   Version: 53f15ff
@@ -495,6 +529,7 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/faodel/faodel
   PURL: pkg:github/faodel/faodel
   Copyright:
+    Copyright 2018 National Technology   Engineering Solutions of Sandia
     Copyright 2021 National Technology   Engineering Solutions of Sandia
     Copyright (c) 2005; Google Inc.
     Copyright (c) 2013; Google Inc.
@@ -522,7 +557,16 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/mozilla-firefox/firefox
   Copyright:
     Copyright 2006; Google Inc.
+    Copyright 2008; Google Inc.
   License: BSD-3-Clause
+
+  fluent-bit
+  Version: v5.1.1
+  Source: https://github.com/fluent/fluent-bit
+  PURL: pkg:github/fluent/fluent-bit
+  Copyright:
+    Copyright (C) 2020-2024 Free Software Foundation; Inc.
+  License: Apache-2.0
 
   FreeCAD-LibPack
   Version: 3.1.1
@@ -562,6 +606,7 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2009 Florian Loitsch.
     Copyright 2009 Florian Loitsch <https:  florian.loitsch.com >
     Copyright 2013-2023 Niels Lohmann <https:  nlohmann.me>
+    Copyright 2018 The Abseil Authors
     CopyrightText: 2009 Florian Loitsch <https:  florian.loitsch.com >
     CopyrightText: 2013-2023 Niels Lohmann <https:  nlohmann.me>
   License: MIT
@@ -607,6 +652,14 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright 2024 Google Inc
   License: Apache-2.0, BSD-3-Clause, MIT
+
+  github.com/emscripten-core/emscripten-fastcomp
+  Version: v0.0.0-20170725214447-6aae5ce677d7
+  Source: https://proxy.golang.org/github.com/emscripten-core/emscripten-fastcomp/@v/v0.0.0-20170725214447-6aae5ce677d7.zip
+  PURL: pkg:golang/github.com/emscripten-core/emscripten-fastcomp
+  Copyright:
+    Copyright 2003-2017 University of Illinois at Urbana-Champaign
+  License: BSD-3-Clause, MIT
 
   github.com/google/googletest
   Version: v1.14.1-0.20250210182227-4a00a24fff3c
@@ -660,12 +713,14 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright 2012-2016 Free Software Foundation Inc
     Copyright 2012-2018 Free Software Foundation Inc
-    Copyright (C) 2012-2024 Free Software Foundation; Inc.
+    Copyright 2012-2024 Free Software Foundation Inc
+    Copyright (C) 2015-2024 Free Software Foundation; Inc.
     Copyright (C) 2017-2024 Free Software Foundation; Inc.
     Copyright (C) 2018-2024 Free Software Foundation; Inc.
     Copyright (C) 2020-2024 Free Software Foundation; Inc.
     Copyright (C) 2022-2024 Free Software Foundation; Inc.
     Copyright (c) 2012-2024 Free Software Foundation; Inc. Adapted
+    Copyright (c) 2015-2024 Free Software Foundation; Inc. Adapted
   License: BSD-3-Clause
 
   github.com/jsoftware/jsource
@@ -686,6 +741,14 @@ COMPONENT ATTRIBUTIONS
     Copyright 2008; Google Inc.
   License: BSD-3-Clause, MIT
 
+  github.com/mgerhardy/vengi
+  Version: v0.0.37
+  Source: https://proxy.golang.org/github.com/mgerhardy/vengi/@v/v0.0.37.zip
+  PURL: pkg:golang/github.com/mgerhardy/vengi
+  Copyright:
+    Copyright 2023 Martin Gerhardy
+  License: BSD-3-Clause, CC-BY-SA-3.0, MIT
+
   github.com/milvus-io/cgosymbolizer
   Version: v0.0.0-20260807032543-e7a4f9c60056
   Source: https://proxy.golang.org/github.com/milvus-io/cgosymbolizer/@v/v0.0.0-20260807032543-e7a4f9c60056.zip
@@ -700,7 +763,19 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:golang/github.com/openfheorg/openfhe-development
   Copyright:
     Copyright (c) 2014-2022; NJIT; Duality Technologies Inc. and other contributors
+    Copyright 2012; Samuel Neves <sneves@dei.uc.pt>
+    Copyright 2012; Samuel Neves <sneves@dei.uc.pt>.  You may use this under the
   License: BSD-2-Clause
+
+  github.com/pmp-library/pmp-library
+  Version: v0.0.0-20240126222846-7de1523f14de
+  Source: https://proxy.golang.org/github.com/pmp-library/pmp-library/@v/v0.0.0-20240126222846-7de1523f14de.zip
+  PURL: pkg:golang/github.com/pmp-library/pmp-library
+  Copyright:
+    Copyright 2009 Google Inc. All rights reserved
+    Copyright 2006; Google Inc.
+    Copyright 2009 Google Inc.
+  License: BSD-3-Clause, GPL-2.0-only, MIT, MPL-2.0, Zlib
 
   github.com/USCiLab/cereal
   Version: v1.3.3-0.20220327215417-ddd467244713
@@ -836,12 +911,16 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/imperialchepi/healthgps
   Copyright:
     Copyright 2005 Google Inc. All Rights Reserved
+    Copyright 2013-2022 Niels Lohmann  http:  nlohmann.me
     Copyright 2017 Google Inc
     Copyright 2005 Google Inc.
     Copyright 2006; Google Inc.
     Copyright 2007; Google Inc.
+    Copyright 2008; Google Inc.
+    Copyright 2013-2023 Niels Lohmann <https:  nlohmann.me>
     Copyright 2018; Google Inc.
     Copyright 2025; Google Inc.
+    CopyrightText: 2013-2023 Niels Lohmann <https:  nlohmann.me>
   License: BSD-3-Clause
 
   HELICS
@@ -900,6 +979,8 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:github/shihyu/jason_note
   Copyright:
     Copyright 2024 Jason Shih
+    Copyright 2015 Google Inc.
+    Copyright 2015 Google Inc. All rights reserved.
   License: MIT
 
   json
@@ -1123,6 +1204,14 @@ COMPONENT ATTRIBUTIONS
     Copyright 2011-2016 by the contributors listed in CREDITS.TXT
   License: Apache-2.0, CC0-1.0, MIT, NCSA
 
+  llvmclang
+  Version: v5.0.0
+  Source: https://github.com/opencor/llvmclang
+  PURL: pkg:github/opencor/llvmclang
+  Copyright:
+    Copyright 2003-2017 University of Illinois at Urbana-Champaign
+  License: NCSA
+
   log
   Version: 16a57b3
   Source: https://gitee.com/for_ten_years/log
@@ -1151,11 +1240,21 @@ COMPONENT ATTRIBUTIONS
     Copyright 2022 evanwashere
   License: MIT
 
+  ml-llvm-project
+  Version: llvmorg-3.9.1-rc2
+  Source: https://github.com/iith-compilers/ml-llvm-project
+  PURL: pkg:github/iith-compilers/ml-llvm-project
+  Copyright:
+    (C); std::thread(C);
+  License: Apache-2.0 WITH LLVM-exception
+
   mvme
   Version: v1.20.99
   Source: https://github.com/flueke/mvme
   PURL: pkg:github/flueke/mvme
   Copyright:
+    Copyright 2015 Google Inc.
+    Copyright 2015 Google Inc. All rights reserved.
     Copyright 2020 Google Inc.
     Copyright 2020 Google Inc. All rights reserved.
   License: GPL-3.0-only
@@ -1167,6 +1266,14 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright 2006; Google Inc.
   License: BSD-3-Clause
+
+  network-manager
+  Version: debian/1.10.2-1
+  Source: https://git.launchpad.net/network-manager/tag/?h=debian/1.10.2-1
+  PURL: pkg:deb/network-manager
+  Copyright:
+    Copyright (C) 2011-2017 Free Software Foundation; Inc.
+  License: GPL-2.0-only
 
   nurikit
   Version: 0.1.0a14.post0
@@ -1226,6 +1333,23 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2014-2023; NJIT; Duality Technologies Inc. and other contributors
   License: BSD-2-Clause
 
+  OpenXLSX
+  Version: v0.3.2
+  Source: https://codeberg.org/lars_uffmann/OpenXLSX/archive/v0.3.2.zip
+  PURL: pkg:codeberg/lars_uffmann/openxlsx
+  Copyright:
+    Copyright 2020 Kenneth Troldal Balslev
+  License: BSD-3-Clause
+
+  otus-cpp
+  Version: 19
+  Source: https://github.com/MykhailovKyrylo/otus-cpp
+  PURL: pkg:github/mykhailovkyrylo/otus-cpp
+  Copyright:
+    (C) 2007 Free Software Foundation; Inc. <https:  fsf.org >
+    Copyright 2015; Google Inc.
+  License: GPL-3.0-only
+
   otus-cpp-template
   Version: v0.0.7
   Source: https://github.com/mnartov/otus-cpp-template
@@ -1235,6 +1359,14 @@ COMPONENT ATTRIBUTIONS
     Copyright 2005; Google Inc.
     Copyright 2007; Google Inc.
     Copyright 2015; Google Inc.
+  License: BSD-3-Clause
+
+  otus_ip_filter
+  Version: 4
+  Source: https://github.com/igordedkovskiy/otus_ip_filter
+  PURL: pkg:github/igordedkovskiy/otus_ip_filter
+  Copyright:
+    Copyright 2006; Google Inc.
   License: BSD-3-Clause
 
   Otus_IP_filter
@@ -1298,7 +1430,9 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:googlesource/android/platform/external/google-benchmark
   Copyright:
     Copyright 2015 Google Inc. All rights reserved
+    Copyright 2016 Ismael Jimenez Martinez. All rights reserved
     Copyright 2015 Google Inc.
+    Copyright 2016 Ismael Jimenez Martinez
     Copyright copyright owner or entity authorized by
   License: Apache-2.0, Jam
 
@@ -1308,7 +1442,7 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:googlesource/android/platform/external/googletest
   Copyright:
     Copyright 2008 Google Inc
-    Copyright 2009 Google Inc. All rights reserved
+    Copyright 2009 Google Inc. All Rights Reserved
     Copyright 2010 Google Inc. All Rights Reserved
     Copyright 2015 Google Inc. All rights reserved
     Copyright 2017 Google Inc
@@ -1362,14 +1496,25 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/896660689/rt-n56u
   PURL: pkg:github/896660689/rt-n56u
   Copyright:
+    Copyright 1996-2014 Free Software Foundation Inc
     Copyright (C) 1994 X Consortium
-  License: MIT
+  License: GPL-2.0-or-later, MIT
 
   slowfuzz
   Version: e124345
   Source: https://github.com/nettrino/slowfuzz
   PURL: pkg:github/nettrino/slowfuzz
   License: Apache-2.0, NCSA
+
+  sme_deps
+  Version: 2026.04.17
+  Source: https://github.com/spatial-model-editor/sme_deps
+  PURL: pkg:github/spatial-model-editor/sme_deps
+  Copyright:
+    Copyright 2009-2013 Luke Maurits  luke@maurits.id.au
+    Copyright 2015 Google Inc. All rights reserved
+    Copyright 2015 Google Inc.
+  License: MIT
 
   Snake
   Version: v1.0.0
@@ -1379,6 +1524,14 @@ COMPONENT ATTRIBUTIONS
     Copyright COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM; DAMAGES OR OTHER LIABILITY; WHETHER IN AN ACTION OF CONTRACT; TORT OR OTHERWISE; ARI
     Copyright (C) 2007-2018 Laurent Gomila - laurent@sfml-dev.org
   License: UNKNOWN
+
+  spirv-to-dxil-sys
+  Version: 0.4.0
+  Source: https://static.crates.io/crates/spirv-to-dxil-sys/spirv-to-dxil-sys-0.4.0.crate
+  PURL: pkg:cargo/spirv-to-dxil-sys
+  Copyright:
+    Copyright 2007; Google Inc.
+  License: MIT
 
   startle
   Version: v1.1.0
@@ -1391,6 +1544,14 @@ COMPONENT ATTRIBUTIONS
     Copyright (c) 2018 Pranav Srinivas Kumar <pranav.srinivas.kumar@gmail.com>
     Copyright 2008; Google Inc.
   License: MIT
+
+  swift-llvm
+  Version: swift-3.1-DEVELOPMENT-SNAPSHOT-2017-02-17-a
+  Source: https://github.com/apple/swift-llvm
+  PURL: pkg:github/apple/swift-llvm
+  Copyright:
+    Copyright 2003-2016 University of Illinois at Urbana-Champaign
+  License: Apache-2.0
 
   Task_2
   Version: 3
@@ -1405,10 +1566,11 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/user-xxi/timp_labs
   PURL: pkg:github/user-xxi/timp_labs
   Copyright:
+    Copyright 2008 Google Inc
+    Copyright 2017 Google Inc
     Copyright 2005; Google Inc.
     Copyright 2006; Google Inc.
     Copyright 2007; Google Inc.
-    Copyright 2008; Google Inc.
     Copyright 2009; Google Inc.
     Copyright 2018; Google Inc.
   License: MIT
@@ -1508,11 +1670,18 @@ COMPONENT ATTRIBUTIONS
     Copyright 2019; Google LLC.
   License: Apache-2.0
 
+  xenity-engine
+  Version: v1.2.1
+  Source: https://github.com/Fewnity/Xenity-Engine
+  PURL: pkg:github/fewnity/xenity-engine
+  License: MIT
+
   yugabyte-db-thirdparty
   Version: v20190714084201.6ac8cb9784
   Source: https://github.com/yugabyte/yugabyte-db-thirdparty
   PURL: pkg:github/yugabyte/yugabyte-db-thirdparty
   Copyright:
+    Copyright 2014 Kiyoshi Masui  kiyo@physics.ubc.ca)
     Copyright copyright text to reflect Google s relinquished ownership
   License: MIT
 
