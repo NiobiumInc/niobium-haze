@@ -20,14 +20,21 @@ Concise house style for libhaze: a Rust programmer's path to Rust-grade safety i
 - On a recoverable failure, call `record_internal_error(variant, context)`, restore any state you touched, then `return std::unexpected(variant)`.
 - Surface every error upward to a frame that can act on it.
 - Reserve exceptions for unrecoverable conditions: throw by value from a `std::exception`-derived type, throw early at the first detected contract breach, catch by `const&` at a boundary.
-- Catch programmer bugs and broken invariants with asserts plus `record_internal_error` diagnostics (stderr under `HAZE_DEBUG=1`), kept distinct from the `expected` runtime path.
+- Catch programmer bugs and broken invariants with asserts plus `record_internal_error` diagnostics (`hazeGetLastErrorMessage`, also stderr under `HAZE_DEBUG=1`), kept distinct from the `expected` runtime path.
 
 ## C-ABI boundary
 
 - Declare public entry points in the header as `HAZE_API hazeError_t hazeX(...) HAZE_NOEXCEPT`; define them as `extern "C"` shims and keep every exception inside that frame.
 - Keep each shim thin: validate null / zero-length args first and `return set_error(HAZE_ERROR_INVALID_VALUE)`; translate `void*` ↔ `DevAddr` via `to_dev_addr` / `to_void_ptr`; delegate to a `haze::` core function; convert its `std::expected` to `hazeError_t` via `set_internal_result(...)`.
 - Map errors through the exhaustive `to_public_error` switch (user-actionable variants → specific codes, internal variants → `HAZE_ERROR_INTERNAL`).
-- Record the last failure in thread-local `g_last_error`; `hazeGetLastError()` reads-and-clears it.
+- Record the last failure in thread-local `g_last_error`; `hazeGetLastError()` reads-and-clears it,
+  and `hazeDeviceReset()` clears it too. `record_internal_error` / `haze::log_error` append the
+  failure's detail text to a pending slot, independent of `HAZE_DEBUG`; `set_error` (the sole
+  choke point that commits a `hazeError_t`) pairs it into `g_last_error_message` at that same
+  moment, so the two are never mismatched. `hazeGetLastErrorMessage()` reads-and-clears the paired
+  message the same way `hazeGetLastError()` does the code. A diagnostic whose caller does not
+  itself fail uses `record_internal_warning` / `haze::log_warning` instead, so it never enters the
+  pending slot and cannot leak into an unrelated later failure.
 - Mark every fallible return `[[nodiscard]]` (`set_error`, `set_internal_result`, `ensure_initialized`); `-Werror` turns a dropped error into a build stop. Add `[[nodiscard("reason")]]` where the why is non-obvious.
 
 ## RAII & ownership
