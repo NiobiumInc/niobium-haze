@@ -13,12 +13,15 @@
 #include "core/device_state.hpp"
 
 #include "common/errors.hpp"
+#include "common/log.hpp"
 #include "core/config.hpp"
 
 #include <atomic>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <haze/haze_types.h>
+#include <system_error>
 #include <utility>
 // Plain C-ABI header (only haze_types.h + stdint.h) — pulls no C++/OpenFHE, so
 // depending on it here does not leak the bridge's OpenFHE surface into core/.
@@ -37,7 +40,15 @@ void DeviceState::reset() noexcept {
     epoch.reset();
     // Spill records are recording state, torn down with the epoch.
     input_spill.clear();
-    backend.reset();
+    // Read before replay_config is cleared below.
+    const bool remove_program_dir = replay_config.remove_program_directory();
+    // backend.reset() always runs (it also drops initialized_, unconditionally
+    // of the flag); its return is the absolute, normalized directory THIS
+    // session's ensure_initialized() recorded at bring-up, or empty if that
+    // never completed successfully -- the latter also covers "configured with
+    // the flag set, but reset before ever bringing the backend up", which
+    // must remove nothing rather than fall back to a live re-query.
+    const std::filesystem::path program_dir = backend.reset();
     allocator.reset();
     fhe_params = {}; // back to unconfigured; hazeConfigureDevice must run again
     replay_config = {};
@@ -49,6 +60,18 @@ void DeviceState::reset() noexcept {
     // compiler teardown that follows.
     hazeReplayBridgeReset();
     CompilerBackend::reset_compiler();
+
+    // Runs last, after every other teardown step, per hazeReplayConfig's
+    // documented contract. Best-effort: reset() cannot fail (hazeDeviceReset
+    // always returns HAZE_SUCCESS), so a removal problem is a warning.
+    if (remove_program_dir && !program_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::remove_all(program_dir, ec);
+        if (ec) {
+            log_warning("DeviceState::reset",
+                        "remove_all(" + program_dir.string() + ") failed: " + ec.message());
+        }
+    }
 }
 
 // Single definition point for the subsystem accessors declared in each header.

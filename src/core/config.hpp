@@ -80,8 +80,13 @@ class ReplayConfig {
   public:
     // Copy the caller's struct into an immutable config; a NULL field keeps its
     // default and a NULL struct yields all defaults. Every field is either a
-    // string or an independent flag except opt_level, whose range (0-kMaxOptLevel)
-    // this validates — the config's only fallible field.
+    // string or an independent flag except opt_level (range 0-kMaxOptLevel) and
+    // remove_program_directory, whose validation is two-part: the flag itself
+    // is 0 or 1 only, and setting it to 1 additionally requires an explicit
+    // program_directory that already exists as a directory (canonical()
+    // resolves it fully physically and rejects a missing path, a dangling
+    // symlink, or a non-directory) and does not resolve to a filesystem
+    // root, the current directory, or one of its ancestors.
     static std::expected<ReplayConfig, HazeInternalError>
     create(const hazeReplayConfig *raw) noexcept;
 
@@ -98,6 +103,12 @@ class ReplayConfig {
     // 0 leaves the level to the replay driver's default for the target; 1-3
     // request that level explicitly. Range-checked by create().
     int opt_level() const noexcept { return opt_level_; }
+    // False (0, default) keeps the program directory across hazeDeviceReset;
+    // true (1) makes reset delete the whole tree. Range-checked by create()
+    // (only 0 or 1 is accepted), which also requires an explicit
+    // program_directory that already exists as a directory and is outside a
+    // filesystem root, the current directory, or one of its ancestors.
+    bool remove_program_directory() const noexcept { return remove_program_directory_; }
 
   private:
     std::string target_ = std::string(kLocalTarget);
@@ -108,6 +119,7 @@ class ReplayConfig {
     bool program_dir_set_ = false;
     bool reduced_noise_ = false;
     int opt_level_ = 0;
+    bool remove_program_directory_ = false;
 };
 
 // One-shot configuration entry point (impl in config.cpp): validate + deep-copy
