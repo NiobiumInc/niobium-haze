@@ -18,3 +18,16 @@ HAZE_1.0 {
   local:
     *;
 };
+
+# The rule: a symbol that is new, or whose signature/ABI changes under a name
+# already in an earlier node, is listed BY EXACT NAME in the node of the
+# release that introduces it — never left to an earlier node's `haze*`
+# wildcard. That listing is what wins: an explicit name in a later node binds
+# the symbol to that node instead of an earlier node's wildcard match.
+# HAZE_1.0's wildcard keeps every symbol the golden file lists at HAZE_1.0;
+# the rule applies from HAZE_1.1 on.
+# Enforced automatically, for every exported symbol (not just the ones any
+# one change touches): scripts/check_symbol_leak.sh diffs the full
+# name@@VERSION set against the golden scripts/haze_symbol_versions.txt, so a
+# symbol landing in the wrong node, or a new node that forgets to update the
+# golden file, fails that check.
