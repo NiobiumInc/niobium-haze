@@ -34,9 +34,15 @@ HAZE_1.0 {
 # here (never shipped in 1.0). hazeReplayBridgeInitCryptoContext keeps its
 # name but drops its third (picked_modulus) parameter — an ABI break carried
 # under the same name, so it must not also satisfy an old binary's
-# @HAZE_1.0 request.
+# @HAZE_1.0 request. hazeConfigureDevice keeps both its name and its
+# signature, but the struct it reads by pointer (hazeReplayConfig) changes
+# layout starting here: offset 44, tail padding under every HAZE_1.0 caller,
+# becomes a live field (opt_level). A pointed-to struct's layout is part of a
+# function's ABI just as much as its own parameter list, so this is the same
+# "ABI changes under an existing name" case and moves here too.
 HAZE_1.1 {
   global:
+    hazeConfigureDevice;
     hazeGetLastErrorMessage;
     hazeReplayBridgeInitCryptoContext;
 } HAZE_1.0;

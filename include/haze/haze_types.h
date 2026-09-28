@@ -135,10 +135,17 @@ typedef struct {
 
 // Replay configuration. Every field is optional: a NULL string takes its
 // default (target "local"; program "haze" / "0.1" / "HAZE runtime"; program
-// directory <cwd>/<program_name>) and the int flags default off. Pass a NULL
-// hazeReplayConfig* to hazeConfigureDevice to accept all defaults. Recorded
-// traces are always ordinary-form: hardware data formats are the replay
-// target's business, so nothing here selects them.
+// directory <cwd>/<program_name>) and the int fields default to 0. Pass a
+// NULL hazeReplayConfig* to hazeConfigureDevice to accept all defaults.
+// Recorded traces are always ordinary-form: hardware data formats are the
+// replay target's business, so nothing here selects them.
+//
+// opt_level selects the compiler-side replay's optimization level and applies
+// only to a non-"local" target (the in-process simulator has no optimization
+// levels). 0 leaves the level to the replay driver's own default for the
+// target; 1-3 request -O1..-O3 explicitly.
+// Anything else makes hazeConfigureDevice return HAZE_ERROR_INVALID_VALUE and
+// install nothing.
 typedef struct {
     const char *target;
     const char *program_name;
@@ -146,6 +153,7 @@ typedef struct {
     const char *program_description;
     const char *program_directory;
     int reduced_noise;
+    int opt_level;
 } hazeReplayConfig;
 
 // CRT basis-conversion parameter structs: each describes a multi-residue polynomial (MRP)

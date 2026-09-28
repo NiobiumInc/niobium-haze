@@ -31,6 +31,10 @@ namespace haze {
 // forwarded verbatim to nbcc_fhetch_replay.
 constexpr std::string_view kLocalTarget = "local";
 
+// Upper bound for hazeReplayConfig::opt_level (see ReplayConfig::create); 0 is
+// always valid (the replay driver's own default for the target).
+constexpr int kMaxOptLevel = 3;
+
 // Immutable FHE-scheme parameters: a thin owning wrapper over the caller's
 // hazeFheParams, deep-copied and validated by create() (the sole non-empty
 // construction path — no separate builder). Read lock-free during compute: it
@@ -75,10 +79,11 @@ class FheParams {
 class ReplayConfig {
   public:
     // Copy the caller's struct into an immutable config; a NULL field keeps its
-    // default and a NULL struct yields all defaults. Infallible — every field is
-    // either a string or an independent flag, so there is no cross-field invariant
-    // to reject.
-    static ReplayConfig create(const hazeReplayConfig *raw) noexcept;
+    // default and a NULL struct yields all defaults. Every field is either a
+    // string or an independent flag except opt_level, whose range (0-kMaxOptLevel)
+    // this validates — the config's only fallible field.
+    static std::expected<ReplayConfig, HazeInternalError>
+    create(const hazeReplayConfig *raw) noexcept;
 
     ReplayConfig() = default; // defaults (target "local", program "haze"/"0.1"/...)
 
@@ -90,6 +95,9 @@ class ReplayConfig {
     bool has_program_directory() const noexcept { return program_dir_set_; }
     const std::string &program_directory() const noexcept { return program_dir_; }
     bool reduced_noise() const noexcept { return reduced_noise_; }
+    // 0 leaves the level to the replay driver's default for the target; 1-3
+    // request that level explicitly. Range-checked by create().
+    int opt_level() const noexcept { return opt_level_; }
 
   private:
     std::string target_ = std::string(kLocalTarget);
@@ -99,6 +107,7 @@ class ReplayConfig {
     std::string program_dir_;
     bool program_dir_set_ = false;
     bool reduced_noise_ = false;
+    int opt_level_ = 0;
 };
 
 // One-shot configuration entry point (impl in config.cpp): validate + deep-copy
