@@ -93,11 +93,13 @@ std::expected<void, HazeInternalError> configure_device(const hazeFheParams &fhe
 
     // Validate + deep-copy the caller's structs into the immutable configs; the
     // config types own all validation (no builder). Nothing is installed unless
-    // FheParams::create succeeds (ReplayConfig::create is infallible).
+    // both succeed.
     auto built_fhe = FheParams::create(fhe);
     if (!built_fhe)
         return std::unexpected(built_fhe.error());
-    ReplayConfig built_replay = ReplayConfig::create(replay);
+    auto built_replay = ReplayConfig::create(replay);
+    if (!built_replay)
+        return std::unexpected(built_replay.error());
 
     // Apply the allocator's polynomial size only now the whole config is valid;
     // changing the ring dimension under live allocations would leave their
@@ -112,7 +114,7 @@ std::expected<void, HazeInternalError> configure_device(const hazeFheParams &fhe
 
     // Commit the frozen configs — the only stored config state.
     device_state().fhe_params = std::move(*built_fhe);
-    device_state().replay_config = std::move(built_replay);
+    device_state().replay_config = std::move(*built_replay);
     device_state().configured = true;
     return {};
 }

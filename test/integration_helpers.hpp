@@ -34,6 +34,17 @@ inline bool transport_target_active() {
     return t != nullptr && std::string_view{t} != "local";
 }
 
+// True when replay goes over HTTP transport (test_haze_integration.sh
+// --mode=http), i.e. Compiler::replay_project's posix_spawnp("nbcc_fhetch_replay")
+// resolves to the client-side forwarder rather than spawning the compiler
+// binary directly. The forwarder's project lands in a server-side mkdtemp
+// directory the client never sees, so any check that reads files next to the
+// replay (e.g. optimization_stats.json) must skip under this mode.
+inline bool http_transport_active() {
+    const char *v = std::getenv("NBCC_FHETCH_SERVER");
+    return v != nullptr && v[0] != '\0';
+}
+
 // True when the replay target applies a hardware data format, set by `make
 // test-transport-hw`. Read from an env var rather than sniffed from the target
 // string so the compiler's devices/<id>/spec.yaml list stays out of haze.

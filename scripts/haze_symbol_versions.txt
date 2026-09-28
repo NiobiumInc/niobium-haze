@@ -10,7 +10,7 @@ hazeBroadcastAddMrp@@HAZE_1.0
 hazeBroadcastMulMrp@@HAZE_1.0
 hazeBroadcastRsubMrp@@HAZE_1.0
 hazeBroadcastSubMrp@@HAZE_1.0
-hazeConfigureDevice@@HAZE_1.0
+hazeConfigureDevice@@HAZE_1.1
 hazeDeviceCanAccessPeer@@HAZE_1.0
 hazeDeviceEnablePeerAccess@@HAZE_1.0
 hazeDeviceReset@@HAZE_1.0
