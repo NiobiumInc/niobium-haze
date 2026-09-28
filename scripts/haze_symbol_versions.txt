@@ -53,6 +53,7 @@ hazeMemset@@HAZE_1.0
 hazeMemsetAsync@@HAZE_1.0
 hazeModDown@@HAZE_1.0
 hazeModUp@@HAZE_1.0
+hazeModUpExact@@HAZE_1.1
 hazeMul@@HAZE_1.0
 hazeMulMrp@@HAZE_1.0
 hazeMulScalar@@HAZE_1.0
