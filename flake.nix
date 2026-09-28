@@ -609,8 +609,10 @@
 
           # Isolation guard: assert the shipped libhaze exports ONLY the haze* C
           # ABI (no leaked OpenFHE symbols), the property that lets it coexist
-          # with another OpenFHE in one process. A leak wouldn't fail the build,
-          # so this check is what catches an isolation regression in CI.
+          # with another OpenFHE in one process, each symbol at the version node
+          # scripts/haze_symbol_versions.txt names (hence the whole scripts/ dir,
+          # not the script alone). A leak wouldn't fail the build, so this check
+          # is what catches an isolation regression in CI.
           # Darwin needs llvm-nm (GNU binutils nm misreads Mach-O private-extern
           # symbols as global); ELF is fine with GNU nm.
           isolation =
@@ -620,7 +622,7 @@
               }
               ''
                 set -euo pipefail
-                bash ${./scripts/check_symbol_leak.sh} ${p.haze}/lib
+                bash ${./scripts}/check_symbol_leak.sh ${p.haze}/lib
                 touch "$out"
               '';
 

@@ -50,7 +50,7 @@ if ! syms=$("$nm" "${nmflags[@]}" "$lib"); then
 fi
 
 # Classify each exported symbol by NAME, not type letter, so an unexpected type
-# still counts. Skip undefined (U) and absolute (A/a, e.g. the HAZE_1.0 version
+# still counts. Skip undefined (U) and absolute (A/a, e.g. a HAZE_1.x version
 # node), and strip any @@HAZE_1.0 version suffix before comparing. `leaks` holds
 # non-prefix names; `kept` counts prefix matches (to assert the ABI is present).
 classify() {
@@ -75,4 +75,41 @@ if [ "$kept" -eq 0 ]; then
     echo "libhaze exports no ${prefix}* symbols -- not a valid haze library: $lib" >&2
     exit 1
 fi
+
+# Exhaustive golden name@@VERSION check (ELF/GNU-ld only -- Mach-O has no
+# symbol-versioning concept at all: linker/haze_exports.sym, the macOS
+# analogue of linker/haze_exports.map, is a plain _haze* allowlist with no
+# version nodes, so `nm -gU` never emits an `@@VERSION` suffix to check).
+#
+# Diffs the full set of exported name@@VERSION pairs against
+# scripts/haze_symbol_versions.txt, both sorted in byte order (LC_ALL=C, so
+# the result depends on neither the caller's locale nor the golden file's
+# line order), so every exported symbol must sit in the version node the
+# golden file names: a symbol in the wrong node, or one missing from or extra
+# to the golden file, fails the check. Regenerate the golden file after a
+# deliberate ABI change with:
+#   nm --dynamic --defined-only <libhaze.so> \
+#     | awk '/^[0-9a-fA-F]+[ \t]+[A-Za-z][ \t]+/ { if ($2!="A" && $2!="a" && $2!="U" && $3 ~ /^haze/) print $3 }' \
+#     | LC_ALL=C sort > scripts/haze_symbol_versions.txt
+if [ "$(uname -s)" != Darwin ]; then
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    golden_file="$script_dir/haze_symbol_versions.txt"
+    if [ ! -f "$golden_file" ]; then
+        echo "golden symbol-version file not found: $golden_file" >&2
+        exit 1
+    fi
+    actual=$(awk -v re="^$prefix" '
+        /^[0-9a-fA-F]+[ \t]+[A-Za-z][ \t]+/ {
+            type = $2; name = $3
+            if (type == "A" || type == "a" || type == "U") next
+            if (name ~ re) print name
+        }' <<<"$syms" | LC_ALL=C sort)
+    diff_output=$(diff -u <(LC_ALL=C sort "$golden_file") <(echo "$actual") || true)
+    if [ -n "$diff_output" ]; then
+        echo "libhaze symbol-version set does not match $golden_file:" >&2
+        echo "$diff_output" >&2
+        exit 1
+    fi
+fi
+
 echo "symbol-leak check OK: $lib exports only ${prefix}* ($kept symbol(s))"
