@@ -67,6 +67,8 @@ class EpochState {
 
     // Finalize and write the program directory WITHOUT replay/population
     // (backs hazeWriteProgram); same true-no-op rule as replay_and_populate.
+    // Rejects with InvalidArgument, unconditionally, when
+    // ReplayConfig::remove_program_directory is set (see config.hpp).
     std::expected<void, HazeInternalError> write_program() noexcept HAZE_EXCLUDES(mutex_);
 
     // Declare `addr` an output (backs hazeTagOutput); does NOT start a recording — tagging

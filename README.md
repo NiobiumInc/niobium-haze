@@ -68,7 +68,12 @@ simulator internals, see the companion repository:
    to lock in the FHE parameter set. The optional `hazeReplayConfig` picks a
    non-default replay target (`.target = "FUNC_SIM"`, or set `HAZE_TARGET` in the
    environment), a compiler-side optimization level for that target
-   (`.opt_level = 1..3`; 0 leaves it at the replay driver's own default), and
+   (`.opt_level = 1..3`; 0 leaves it at the replay driver's own default), whether
+   `hazeDeviceReset` deletes the program directory this session actually used
+   (`.remove_program_directory = 1`; 0 keeps it — requires an explicit
+   `program_directory` that already exists as a directory, outside the
+   current directory and its ancestors, and is mutually exclusive with
+   `hazeWriteProgram`, whose contract is to publish that same directory), and
    other hardware/replay options; pass `NULL` for all defaults.
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable

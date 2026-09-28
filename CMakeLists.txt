@@ -502,6 +502,7 @@ add_executable(haze_tests
   test/test_mrp_group_reuse.cpp
   test/test_replay_bridge_program_dir.cpp
   test/test_written_program_survives.cpp
+  test/test_program_directory_cleanup.cpp
   test/test_trace_modulus.cpp
   test/test_invariant_regressions.cpp
   test/test_error_detail.cpp
