@@ -13,8 +13,8 @@
 //
 // Exact CRT base conversion (core/exact_basis.hpp): the raw-lift gadget is
 // recorded white-box through haze_objs and checked against direct integer
-// arithmetic; hazeModUpExact is checked against an OpenFHE BigInteger CRT
-// reference.
+// arithmetic; hazeModUpExact and hazeModDownExact are checked against an
+// OpenFHE BigInteger CRT reference.
 
 #include "common/handle.hpp"
 #include "common/mod_arith.hpp"
@@ -213,6 +213,41 @@ std::vector<std::vector<uint64_t>> exact_extension(const std::vector<std::vector
     return out;
 }
 
+// Sets slots first_slot onward, on every prime of `base`, to the residues of
+// `integers`.
+void set_integers(std::vector<std::vector<uint64_t>> &residues, const std::vector<uint64_t> &base,
+                  std::size_t first_slot, const std::vector<BigInteger> &integers) {
+    for (std::size_t s = 0; s < integers.size(); ++s) {
+        for (std::size_t i = 0; i < base.size(); ++i)
+            residues[i][first_slot + s] = mod_u64(integers[s], base[i]);
+    }
+}
+
+// Reference exact mod-down: floor(X / P) mod q for each q of `kept`, by prime
+// then slot, where X has the inputs' residues on `base` and P = prod rescale.
+// It divides only the exact multiple X - (X mod P): OpenFHE's dynamic
+// BigInteger division returns 1 whenever both operands share their MSB and top
+// limb (bigintdyn/ubintdyn.cpp DividedBy), which is wrong for P-1 over P but
+// right for an exact multiple.
+std::vector<std::vector<uint64_t>> exact_floor(const std::vector<std::vector<uint64_t>> &inputs,
+                                               const std::vector<uint64_t> &base,
+                                               const std::vector<uint64_t> &rescale,
+                                               const std::vector<uint64_t> &kept) {
+    const Crt crt(base);
+    const BigInteger product = Crt(rescale).product();
+    std::vector<std::vector<uint64_t>> out(kept.size(), std::vector<uint64_t>(kRingDim));
+    std::vector<uint64_t> residues(base.size());
+    for (std::size_t k = 0; k < kRingDim; ++k) {
+        for (std::size_t i = 0; i < base.size(); ++i)
+            residues[i] = inputs[i][k];
+        const BigInteger x = crt.integer(residues);
+        const BigInteger quotient = (x - x.Mod(product)) / product;
+        for (std::size_t j = 0; j < kept.size(); ++j)
+            out[j][k] = mod_u64(quotient, kept[j]);
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("raw_lift reproduces the integer at every destination prime", "[integration]") {
@@ -355,5 +390,91 @@ TEST_CASE("hazeModUpExact matches the exact CRT extension on a 41-prime shape", 
         }
         haze::test::free_all_residues(src);
         haze::test::free_all_residues(dst);
+    }
+}
+
+TEST_CASE("hazeModDownExact rejects null params", "[unit]") {
+    configure(ntt_primes_below(kChainPrimeBits, 2), 1);
+    REQUIRE(hazeModDownExact(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeModDownExact applies hazeModDown's validation", "[unit]") {
+    const auto primes = ntt_primes_below(kChainPrimeBits, 3);
+    configure(primes, 1);
+    const uint64_t src_base[] = {primes[0], primes[1]};
+    const void *src[] = {nullptr, nullptr};
+    std::array<void *, 2> dst{};
+
+    SECTION("a rescale prime outside src_base") {
+        const uint64_t rescale_base[] = {primes[2]};
+        const hazeModDownParams p = {.src_base = src_base,
+                                     .src_base_len = 2,
+                                     .rescale_base = rescale_base,
+                                     .rescale_base_len = 1};
+        REQUIRE(hazeModDown(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeModDownExact(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    }
+    SECTION("a rescale_base that is not a proper subset") {
+        const hazeModDownParams p = {.src_base = src_base,
+                                     .src_base_len = 2,
+                                     .rescale_base = src_base,
+                                     .rescale_base_len = 2};
+        REQUIRE(hazeModDown(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeModDownExact(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    }
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeModDownExact matches floor(X / P) on a 41-prime shape", "[integration]") {
+    const auto chain = ntt_primes_below(kChainPrimeBits, kChainCount);
+    const auto special = ntt_primes_below(kSpecialPrimeBits, kSpecialCount);
+    std::vector<uint64_t> src_base = chain;
+    src_base.insert(src_base.end(), special.begin(), special.end());
+    // The key-switching mod-down drops the special primes. The second drops
+    // primes from the middle, listed out of src_base order, so the output is
+    // seen to keep src_base order.
+    const std::vector<std::vector<uint64_t>> rescale_bases = {special,
+                                                              {special[2], chain[5], chain[0]}};
+    // Slots 0-6 are digit_boundary_inputs' boundaries over the whole base; the
+    // next five straddle the floor's first and last steps.
+    constexpr std::size_t kFloorStepSlot = 7;
+    const BigInteger one(1);
+    const BigInteger src_product = Crt(src_base).product();
+
+    for (const auto &rescale : rescale_bases) {
+        std::vector<uint64_t> kept;
+        for (const uint64_t q : src_base) {
+            if (std::ranges::find(rescale, q) == rescale.end())
+                kept.push_back(q);
+        }
+        const BigInteger p = Crt(rescale).product();
+        const hazeModDownParams params = {.src_base = src_base.data(),
+                                          .src_base_len = src_base.size(),
+                                          .rescale_base = rescale.data(),
+                                          .rescale_base_len = rescale.size()};
+
+        // The floor division must not depend on the FBC variant the config selects.
+        for (const int reduced_noise : {0, 1}) {
+            INFO("rescale_base_len " << rescale.size() << ", reduced_noise " << reduced_noise);
+            configure(src_base, reduced_noise);
+            std::mt19937_64 rng(kSeed);
+            auto inputs = digit_boundary_inputs(src_base, {src_base}, rng);
+            set_integers(inputs, src_base, kFloorStepSlot,
+                         {p - one, p, p + one, src_product - p - one, src_product - p});
+            const auto src = haze::test::allocate_and_h2d_residues(inputs, src_base);
+            const auto dst = haze::test::allocate_dst_residues(kept.size(), kBytes);
+            REQUIRE(hazeModDownExact(dst.data(), haze::test::to_const(src).data(), &params,
+                                     nullptr) == HAZE_SUCCESS);
+            for (void *d : dst)
+                REQUIRE(hazeTagOutput(d) == HAZE_SUCCESS);
+            REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+            const auto want = exact_floor(inputs, src_base, rescale, kept);
+            for (std::size_t j = 0; j < kept.size(); ++j)
+                require_residues(dst[j], want[j], kept[j]);
+            haze::test::free_all_residues(src);
+            haze::test::free_all_residues(dst);
+        }
     }
 }

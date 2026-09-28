@@ -36,6 +36,9 @@ basis_convert_centered(void *const *dst, const void *const *src,
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
                                                 const hazeModDownParams &params) noexcept;
 
+std::expected<void, HazeInternalError> mod_down_exact(void *const *dst, const void *const *src,
+                                                      const hazeModDownParams &params) noexcept;
+
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
                                               const hazeModUpParams &params) noexcept;
 
