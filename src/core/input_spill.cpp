@@ -126,8 +126,8 @@ void InputSpillStore::remove_name_snapshots_locked(const std::string &name,
         if (ec) {
             // Best-effort cleanup; a failure here is diagnostic only, since the caller
             // already committed to dropping the name's named_records_ entry.
-            record_internal_error(HazeInternalError::SpillIoFailed,
-                                  "InputSpillStore::remove_name_snapshots_locked: remove failed");
+            record_internal_warning(HazeInternalError::SpillIoFailed,
+                                    "InputSpillStore::remove_name_snapshots_locked: remove failed");
         }
     }
 }
@@ -359,12 +359,13 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
         }
         // Overwrite: the loop above already refreshed indices [0, owned.size()); a
         // shorter re-registration must also drop the previous registration's TRAILING
-        // indices, or they leak as orphaned files nothing references anymore.
+        // indices, or they leak as orphaned files nothing references anymore. This
+        // runs only on the success path, so a removal failure is a warning.
         for (std::size_t i = owned.size(); i < prev_count; ++i) {
             std::error_code ec;
             std::filesystem::remove(name_record_path_locked(name, i), ec);
             if (ec) {
-                record_internal_error(
+                record_internal_warning(
                     HazeInternalError::SpillIoFailed,
                     "InputSpillStore::bind_name: trailing snapshot remove failed");
             }
@@ -446,6 +447,8 @@ InputSpillStore::take_named(const std::string &name) noexcept {
     }
 }
 
+// clear_names() and clear() cannot fail, so their diagnoses are warnings.
+
 void InputSpillStore::clear_names() noexcept {
     HazeLockGuard lock(mutex_);
     for (const auto &[name, recs] : named_records_) {
@@ -453,8 +456,8 @@ void InputSpillStore::clear_names() noexcept {
             std::error_code ec;
             std::filesystem::remove(name_record_path_locked(name, i), ec);
             if (ec) {
-                record_internal_error(HazeInternalError::SpillIoFailed,
-                                      "InputSpillStore::clear_names: remove snapshot failed");
+                record_internal_warning(HazeInternalError::SpillIoFailed,
+                                        "InputSpillStore::clear_names: remove snapshot failed");
             }
         }
     }
@@ -479,11 +482,11 @@ void InputSpillStore::clear() noexcept {
         std::error_code ec;
         std::filesystem::remove_all(local_dir, ec);
         if (ec) {
-            record_internal_error(HazeInternalError::SpillIoFailed,
-                                  "InputSpillStore::clear: remove_all failed");
+            record_internal_warning(HazeInternalError::SpillIoFailed,
+                                    "InputSpillStore::clear: remove_all failed");
         }
     } catch (...) {
-        record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::clear");
+        record_internal_warning(HazeInternalError::SpillIoFailed, "InputSpillStore::clear");
     }
 }
 

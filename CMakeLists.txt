@@ -503,6 +503,7 @@ add_executable(haze_tests
   test/test_written_program_survives.cpp
   test/test_trace_modulus.cpp
   test/test_invariant_regressions.cpp
+  test/test_error_detail.cpp
   test/test_input_entries.cpp
   test/test_input_spill.cpp
   test/test_mrp_registry.cpp

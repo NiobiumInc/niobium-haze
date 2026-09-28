@@ -40,26 +40,50 @@ void EpochState::ensure_recording_locked() {
         return;
     // First compute brings the backend up here, under the lock, consuming the
     // result directly. A failed bring-up leaves recording_ false; the caller's
-    // require_recording_locked() then names the reason at the ABI edge.
-    if (!backend().ensure_initialized())
+    // require_recording_locked() then names the reason at the ABI edge. Each
+    // failure branch latches this attempt's detail rather than leaving it
+    // pending: a plain H2D write ignores this result and retries bring-up on
+    // every call, which would otherwise re-append the same detail each time.
+    const std::size_t bringup_mark = g_error_detail.size();
+    if (!backend().ensure_initialized()) {
+        latch_bringup_failure_locked(bringup_mark);
         return;
+    }
     // The root sits OUTSIDE the program dir (a sibling of it, not a child) so
     // fhebench's post-flush project rename cannot carry the store away, and an
     // input's on-disk residue survives a program dir change across epochs.
     auto dir = CompilerBackend::program_directory();
-    if (!dir)
+    if (!dir) {
+        latch_bringup_failure_locked(bringup_mark);
         return;
-    if (!input_spill().activate(dir->parent_path() / "haze_input_spill"))
+    }
+    if (!input_spill().activate(dir->parent_path() / "haze_input_spill")) {
+        latch_bringup_failure_locked(bringup_mark);
         return;
+    }
     // start_epoch() precedes start(); on any failure recording_ stays false so
     // require_recording_locked reports it. If start() fails after start_epoch()
     // opened the epoch, drop the partial captured state so a retry starts from a
     // clean registry instead of double-starting the epoch.
     if (CompilerBackend::start_epoch()) {
-        if (CompilerBackend::start_recording())
+        if (CompilerBackend::start_recording()) {
             recording_ = true;
-        else
+            bringup_failure_.clear();
+        } else {
             CompilerBackend::clear_captured();
+            latch_bringup_failure_locked(bringup_mark);
+        }
+    } else {
+        latch_bringup_failure_locked(bringup_mark);
+    }
+}
+
+void EpochState::latch_bringup_failure_locked(std::size_t mark) noexcept {
+    if (g_error_detail.size() > mark) {
+        bringup_failure_.assign(g_error_detail, mark);
+        g_error_detail.resize(mark);
+    } else {
+        bringup_failure_.clear();
     }
 }
 
@@ -73,6 +97,9 @@ std::expected<void, HazeInternalError> EpochState::require_recording_locked() co
                               "require_recording_locked: hazeConfigureDevice() not called");
         return std::unexpected(HazeInternalError::NotConfigured);
     }
+    // The latched bring-up failure is the innermost cause, so it goes first.
+    if (!bringup_failure_.empty())
+        append_error_detail(bringup_failure_);
     record_internal_error(HazeInternalError::BackendInitFailed,
                           "require_recording_locked: backend init failed; compute cannot record");
     return std::unexpected(HazeInternalError::BackendInitFailed);
@@ -96,7 +123,8 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     // cannot perturb a still-pending tag's copy.
     if (input_spill().has(addr)) {
         // erase() already recorded the reason on failure; this void, noexcept caller
-        // has no further channel to act on it.
+        // has no further channel to act on it, so its detail is discarded.
+        DiscardErrorDetail discard;
         [[maybe_unused]] auto erased = input_spill().erase(addr);
     }
 }
@@ -207,7 +235,8 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
     // own destination cannot perturb what that tag reads at flush.
     if (input_spill().has(addr)) {
         // erase() already recorded the reason on failure; this void, noexcept caller
-        // has no further channel to act on it.
+        // has no further channel to act on it, so its detail is discarded.
+        DiscardErrorDetail discard;
         [[maybe_unused]] auto erased = input_spill().erase(addr);
     }
     // Evict stale shadow so a pre-flush D2H reports OutputNotFlushed, not the old bytes.
@@ -549,12 +578,18 @@ std::expected<void, HazeInternalError> EpochState::finalize_locked(bool run_repl
     // State always resets after materialization so the next epoch starts clean
     // on success or failure.
     auto materialized = materialize_epoch(run_replay);
-    clear_state_locked();
-    // Success only: after a failed stop the vendor recorder may still be open, and
-    // releasing here would roll the address counter back under a live trace. The
-    // registries stay until a recording actually restarts or the device resets.
-    if (materialized.has_value())
+    if (materialized.has_value()) {
+        // Success only: after a failed stop the vendor recorder may still be open, and
+        // releasing here would roll the address counter back under a live trace. The
+        // registries stay until a recording actually restarts or the device resets.
+        // Both teardown calls are best-effort; nothing on this success path
+        // commits a detail they record, so it is discarded.
+        DiscardErrorDetail discard;
+        clear_state_locked();
         release_fhetch_registries_locked();
+    } else {
+        clear_state_locked();
+    }
     return materialized;
 }
 
@@ -602,6 +637,7 @@ void EpochState::clear_state_locked() noexcept {
     recording_ = false;
     input_counter_ = 0;
     output_counter_ = 0;
+    bringup_failure_.clear();
     // Mirror clears to libnbfhetch so a failed materialise can't leak
     // captures into the next epoch; pairs with EpochSession's setup. Only the
     // per-recording name manifest clears here: spilled bytes are address-scoped,
