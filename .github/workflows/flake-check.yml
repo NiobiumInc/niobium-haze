@@ -204,7 +204,8 @@ jobs:
           nix build -L --keep-going \
             .#checks.x86_64-linux.fmt \
             .#checks.x86_64-linux.haze-build \
-            .#checks.x86_64-linux.devshell-builds
+            .#checks.x86_64-linux.devshell-builds \
+            .#checks.x86_64-linux.test-package
 
       - name: Collect nix build logs on failure
         if: failure()

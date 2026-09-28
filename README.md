@@ -392,7 +392,7 @@ make build MODE=release                   # Release into build/
 optimization level that ships. The same `MODE=` selector applies to every target
 that produces or consumes build artefacts (`config`, `build`, `test`,
 `test-unit`, `test-sim`, `test-e2e`, `test-readme`, `test-isolation`,
-`test-transport`, `test-all`, `clean`).
+`test-package`, `test-transport`, `test-all`, `clean`).
 
 The top-level `Makefile` builds OpenFHE (vendored at
 `vendor/niobium-fhetch/vendor/openfhe`), installs it under
@@ -502,9 +502,11 @@ Building (from the niobium-client root):
 
 ```sh
 make build-release          # full client build; produces
-                            # build/vendor/niobium-haze/{haze_tests,libhaze.*,
-                            # libhaze_replay_bridge.*} via the parent CMake
-                            # graph. NIOBIUM_CLIENT_WITH_HAZE=ON is the default.
+                            # build/vendor/niobium-haze/{haze_tests,libhaze.*}
+                            # via the parent CMake graph (the replay bridge is
+                            # an OBJECT library absorbed into libhaze.so, so it
+                            # has no artifact of its own). NIOBIUM_CLIENT_WITH_HAZE=ON
+                            # is the default.
 make build-haze-release     # rebuild only the haze targets without touching
                             # the rest of the client (handy while iterating).
 ```
@@ -586,6 +588,16 @@ pointer moves; haze edits only invalidate the haze derivation. After
 
 The `nix flake check` `unit-tests` and `sim-tests` derivations run `haze_tests`
 hermetically — no live worktree required, suitable for CI.
+
+`result` is also a real CMake package: `result/lib/cmake/haze/hazeConfig.cmake`
+resolves via `find_package(haze CONFIG REQUIRED)`, and linking `haze::haze`
+carries the installed `include/` (both `haze.h` and `replay_bridge.h`) and
+`libhaze.*` with no further `-D` flags. A consumer with `cmake` in its
+`nativeBuildInputs` and the haze package in `buildInputs` gets this
+automatically — cmake's setup hook unconditionally puts every `buildInputs`
+package's store path on `NIXPKGS_CMAKE_PREFIX_PATH`, which nixpkgs's cmake
+build reads the same way it reads `CMAKE_PREFIX_PATH` when resolving
+`find_package`.
 
 #### Notes
 

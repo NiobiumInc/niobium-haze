@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+# libhaze.so statically absorbs libnbfhetch + OpenFHE (see CMakeLists.txt)
+# and exports only the haze* C ABI, so haze::haze carries no transitive
+# find_dependency() of its own.
+include("${CMAKE_CURRENT_LIST_DIR}/hazeTargets.cmake")
+
+check_required_components(haze)
