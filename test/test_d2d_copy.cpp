@@ -79,13 +79,13 @@ TEST_CASE("hazeMemcpy(D2D) copies a residue into an MRP-registered addr", "[inte
     const uint64_t moduli[] = {kQ0, kQ1, kQ2};
     const hazeFheParams fhe = {.ring_dim = kRingDimMrp, .moduli = moduli, .moduli_count = 3};
     REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-    // Bridge pre-init after finalize; the set modulus (kQ0) is trace-authoritative.
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDimMrp, kQ0, &picked) == HAZE_SUCCESS);
+    // Bridge pre-init after finalize; the set modulus (kQ0) is trace-authoritative,
+    // not the bridge's own scaffold prime.
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDimMrp, kQ0) == HAZE_SUCCESS);
 
     const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
     std::vector<std::vector<uint64_t>> src_residues = {
-        haze::test::make_residue(picked, /*seed=*/1, kRingDimMrp),
+        haze::test::make_residue(kQ0, /*seed=*/1, kRingDimMrp),
         haze::test::make_residue(kQ1, /*seed=*/2, kRingDimMrp),
         haze::test::make_residue(kQ2, /*seed=*/3, kRingDimMrp),
     };
@@ -126,7 +126,7 @@ TEST_CASE("hazeMemcpy(D2D) copies a residue into an MRP-registered addr", "[inte
             HAZE_SUCCESS);
 
     for (std::size_t i = 0; i < kRingDimMrp; ++i) {
-        const uint64_t expected_single = (src_residues[0][i] + 13U) % picked;
+        const uint64_t expected_single = (src_residues[0][i] + 13U) % kQ0;
         REQUIRE(out_copy[i] == expected_single);
         REQUIRE(out_src[i] == expected_single);
         REQUIRE(out_mrp1[i] == (src_residues[1][i] + src_residues[1][i]) % kQ1);

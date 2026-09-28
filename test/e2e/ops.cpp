@@ -438,10 +438,7 @@ OpCtx make_ctx(const CtxParams &params) {
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
 
     // Bridge pre-init after the explicit finalize, so it reads the frozen config.
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ctx.ring_dim, ctx.q_base.front(), &picked) ==
-            HAZE_SUCCESS);
-    REQUIRE(picked != 0);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ctx.ring_dim, ctx.q_base.front()) == HAZE_SUCCESS);
 
     if (ctx.with_relin_key) {
         REQUIRE(extract_evalmult_key_limbs(ctx.cc, ctx.keys.secretKey, ctx.relin_key) ==

@@ -36,11 +36,12 @@ static constexpr uint64_t kQ2 = 576460752303702017ULL;
 // The bridge init is required to satisfy the simulator's "ring dimension
 // must be set" precondition (capture_crypto_context populates it) and to
 // register the post-recording hook that writes per-input bins / per-output
-// templates for downstream replay. The picked modulus is intentionally NOT
-// fed back into haze's table — the simulator pulls primes from the FHETCH
-// trace's modulus_table (built from src_base / dst_base / etc. directly),
-// and the multi-residue tests need to keep their explicit kQ0 / kQ1 / kQ2
-// values rather than be clobbered by the bridge's single picked prime.
+// templates for downstream replay. The bridge's internally-picked scaffold
+// prime is not consulted for results — the simulator pulls primes from the
+// FHETCH trace's modulus_table (built from src_base / dst_base / etc.
+// directly), and the multi-residue tests need to keep their explicit kQ0 /
+// kQ1 / kQ2 values rather than be clobbered by the bridge's single scaffold
+// prime.
 static void configure_three_moduli() {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
@@ -48,8 +49,7 @@ static void configure_three_moduli() {
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
     const hazeReplayConfig replay = {.reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
 }
 
 // Parameter validation.
@@ -544,7 +544,7 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 //
 // Same bridge-init rationale as configure_three_moduli: needed for the
 // simulator's ring-dim precondition + post-recording hook registration.
-// The picked modulus is intentionally not realigned; the trace's
+// The bridge's scaffold prime is not consulted here either; the trace's
 // modulus_table carries the real kBigBase[i] values from the recorded
 // sr_* ops.
 void configure_sixteen_moduli(int reduced_noise) {
@@ -553,8 +553,7 @@ void configure_sixteen_moduli(int reduced_noise) {
         .ring_dim = kRingDim, .moduli = kBigBase, .moduli_count = kSrcLimbs + kPLimbs};
     const hazeReplayConfig replay = {.reduced_noise = reduced_noise};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0]) == HAZE_SUCCESS);
 }
 
 // Deterministic non-trivial residues. Avoids zeros (which trigger

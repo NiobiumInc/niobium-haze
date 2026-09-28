@@ -60,7 +60,7 @@ hazeMulScalarMrp@@HAZE_1.0
 hazeNTT@@HAZE_1.0
 hazeNTTMrp@@HAZE_1.0
 hazePointerGetAttributes@@HAZE_1.0
-hazeReplayBridgeInitCryptoContext@@HAZE_1.0
+hazeReplayBridgeInitCryptoContext@@HAZE_1.1
 hazeReplayBridgeReset@@HAZE_1.0
 hazeReplayBridgeTakeHookHadError@@HAZE_1.0
 hazeRotAutomorphCoeffMrp@@HAZE_1.0

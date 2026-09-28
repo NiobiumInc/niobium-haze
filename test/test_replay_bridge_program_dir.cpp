@@ -62,9 +62,7 @@ TEST_CASE("replay bridge honors a caller-pinned program directory", "[replay_bri
     const hazeFheParams fhe = {.ring_dim = kN};
     const hazeReplayConfig replay = {.program_directory = pinned.c_str()};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ, &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ) == HAZE_SUCCESS);
 
     // The bridge's set_program_info("haze") must NOT relocate the project away
     // from the pinned directory. Before the fix this returned cwd/haze, orphaning
