@@ -12,8 +12,9 @@
 // from the Product.
 //
 // Exact CRT base conversion (core/exact_basis.hpp): the raw-lift gadget is
-// recorded white-box through haze_objs, and every result is checked against
-// direct integer arithmetic.
+// recorded white-box through haze_objs and checked against direct integer
+// arithmetic; hazeModUpExact is checked against an OpenFHE BigInteger CRT
+// reference.
 
 #include "common/handle.hpp"
 #include "common/mod_arith.hpp"
@@ -21,6 +22,8 @@
 #include "core/exact_basis.hpp"
 #include "integration_helpers.hpp"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -28,7 +31,9 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <math/math-hal.h>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -99,6 +104,115 @@ void record_raw_lift(void *src, uint64_t q, const std::vector<uint64_t> &dst_bas
     }
 }
 
+using lbcrypto::BigInteger;
+
+// The 41-prime key-switching shape: 37 ciphertext-chain primes and 4 special
+// primes, the chain split into one single-prime digit and runs of four.
+constexpr std::size_t kChainCount = 37;
+constexpr std::size_t kSpecialCount = 4;
+constexpr std::size_t kDigitLen = 4;
+
+uint64_t mod_u64(const BigInteger &x, uint64_t q) {
+    return x.Mod(BigInteger(q)).ConvertToInt<uint64_t>();
+}
+
+std::size_t index_of(const std::vector<uint64_t> &base, uint64_t q) {
+    const auto it = std::ranges::find(base, q);
+    REQUIRE(it != base.end());
+    return static_cast<std::size_t>(it - base.begin());
+}
+
+// CRT over one base in OpenFHE BigInteger arithmetic, independent of the
+// recorded gadgets.
+class Crt {
+  public:
+    explicit Crt(std::vector<uint64_t> base) : base_(std::move(base)) {
+        for (const uint64_t q : base_)
+            product_ = product_ * BigInteger(q);
+        for (const uint64_t q : base_) {
+            const BigInteger cofactor = product_ / BigInteger(q);
+            weights_.push_back(cofactor * cofactor.Mod(BigInteger(q)).ModInverse(BigInteger(q)));
+        }
+    }
+
+    const BigInteger &product() const { return product_; }
+
+    // The integer in [0, product()) whose residue mod base[i] is residues[i].
+    BigInteger integer(const std::vector<uint64_t> &residues) const {
+        BigInteger x(0);
+        for (std::size_t i = 0; i < base_.size(); ++i)
+            x = x + (BigInteger(residues[i]) * weights_[i]);
+        return x.Mod(product_);
+    }
+
+  private:
+    std::vector<uint64_t> base_;
+    BigInteger product_{1};
+    std::vector<BigInteger> weights_;
+};
+
+// One single-prime digit, then runs of kDigitLen; the last run is listed in
+// reverse, so the output layout is seen to follow src_base, not digit order.
+std::vector<std::vector<uint64_t>> key_switching_digits(const std::vector<uint64_t> &chain) {
+    REQUIRE((chain.size() - 1) % kDigitLen == 0);
+    std::vector<std::vector<uint64_t>> digits = {{chain.front()}};
+    for (std::size_t i = 1; i < chain.size(); i += kDigitLen) {
+        const auto first = chain.begin() + static_cast<std::ptrdiff_t>(i);
+        digits.emplace_back(first, first + static_cast<std::ptrdiff_t>(kDigitLen));
+    }
+    std::ranges::reverse(digits.back());
+    return digits;
+}
+
+// Residues over `base`, by prime then slot. On every digit, with P its
+// product, slots 0-4 hold the integers 0, 1, (P-1)/2, (P+1)/2 and P-1; slots
+// 5 and 6 hold (q-1)/2 and (q+1)/2 at every prime q; the rest are uniform.
+std::vector<std::vector<uint64_t>>
+digit_boundary_inputs(const std::vector<uint64_t> &base,
+                      const std::vector<std::vector<uint64_t>> &digits, std::mt19937_64 &rng) {
+    constexpr std::size_t kHalfBelowSlot = 5;
+    constexpr std::size_t kHalfAboveSlot = 6;
+    std::vector<std::vector<uint64_t>> residues(base.size(), std::vector<uint64_t>(kRingDim));
+    for (std::size_t i = 0; i < base.size(); ++i) {
+        std::uniform_int_distribution<uint64_t> uniform(0, base[i] - 1);
+        for (auto &r : residues[i])
+            r = uniform(rng);
+        residues[i][kHalfBelowSlot] = (base[i] - 1) / 2;
+        residues[i][kHalfAboveSlot] = (base[i] + 1) / 2;
+    }
+    const BigInteger one(1);
+    const BigInteger two(2);
+    for (const auto &digit : digits) {
+        const BigInteger product = Crt(digit).product();
+        const std::array<BigInteger, 5> integers = {BigInteger(0), one, (product - one) / two,
+                                                    (product + one) / two, product - one};
+        for (std::size_t slot = 0; slot < integers.size(); ++slot) {
+            for (const uint64_t q : digit)
+                residues[index_of(base, q)][slot] = mod_u64(integers[slot], q);
+        }
+    }
+    return residues;
+}
+
+// Reference exact extension of one digit: the integer with the inputs'
+// residues on `digit`, reduced mod every prime of `target`, by prime then slot.
+std::vector<std::vector<uint64_t>> exact_extension(const std::vector<std::vector<uint64_t>> &inputs,
+                                                   const std::vector<uint64_t> &base,
+                                                   const std::vector<uint64_t> &digit,
+                                                   const std::vector<uint64_t> &target) {
+    const Crt crt(digit);
+    std::vector<std::vector<uint64_t>> out(target.size(), std::vector<uint64_t>(kRingDim));
+    std::vector<uint64_t> residues(digit.size());
+    for (std::size_t k = 0; k < kRingDim; ++k) {
+        for (std::size_t i = 0; i < digit.size(); ++i)
+            residues[i] = inputs[index_of(base, digit[i])][k];
+        const BigInteger x = crt.integer(residues);
+        for (std::size_t j = 0; j < target.size(); ++j)
+            out[j][k] = mod_u64(x, target[j]);
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("raw_lift reproduces the integer at every destination prime", "[integration]") {
@@ -149,5 +263,97 @@ TEST_CASE("raw_lift reproduces the integer at every destination prime", "[integr
             haze::test::free_all_residues(outputs[l]);
         }
         haze::test::free_all_residues(sources);
+    }
+}
+
+TEST_CASE("hazeModUpExact rejects null params", "[unit]") {
+    configure(ntt_primes_below(kChainPrimeBits, 2), 1);
+    REQUIRE(hazeModUpExact(nullptr, nullptr, nullptr, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeModUpExact applies hazeModUp's validation", "[unit]") {
+    const auto primes = ntt_primes_below(kChainPrimeBits, 3);
+    configure(primes, 1);
+    const uint64_t src_base[] = {primes[0], primes[1]};
+    const std::size_t digit_base_lens[] = {1};
+    const void *src[] = {nullptr, nullptr};
+    std::array<void *, 3> dst{};
+
+    SECTION("a digit prime outside src_base") {
+        const uint64_t digit_bases[] = {primes[2]};
+        const uint64_t p_base[] = {primes[2]};
+        const hazeModUpParams p = {.src_base = src_base,
+                                   .src_base_len = 2,
+                                   .digit_bases = digit_bases,
+                                   .digit_bases_total_len = 1,
+                                   .digit_base_lens = digit_base_lens,
+                                   .digit_count = 1,
+                                   .p_base = p_base,
+                                   .p_base_len = 1};
+        REQUIRE(hazeModUp(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeModUpExact(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    }
+    SECTION("a p_base prime shared with src_base") {
+        const uint64_t digit_bases[] = {primes[0]};
+        const uint64_t p_base[] = {primes[1]};
+        const hazeModUpParams p = {.src_base = src_base,
+                                   .src_base_len = 2,
+                                   .digit_bases = digit_bases,
+                                   .digit_bases_total_len = 1,
+                                   .digit_base_lens = digit_base_lens,
+                                   .digit_count = 1,
+                                   .p_base = p_base,
+                                   .p_base_len = 1};
+        REQUIRE(hazeModUp(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeModUpExact(dst.data(), src, &p, nullptr) == HAZE_ERROR_INVALID_VALUE);
+    }
+    hazeGetLastError();
+}
+
+TEST_CASE("hazeModUpExact matches the exact CRT extension on a 41-prime shape", "[integration]") {
+    const auto chain = ntt_primes_below(kChainPrimeBits, kChainCount);
+    const auto special = ntt_primes_below(kSpecialPrimeBits, kSpecialCount);
+    const auto digits = key_switching_digits(chain);
+    // src_base ∪ p_base: every digit's output base, in output order.
+    std::vector<uint64_t> target = chain;
+    target.insert(target.end(), special.begin(), special.end());
+    std::vector<uint64_t> digit_bases;
+    std::vector<std::size_t> digit_base_lens;
+    for (const auto &digit : digits) {
+        digit_bases.insert(digit_bases.end(), digit.begin(), digit.end());
+        digit_base_lens.push_back(digit.size());
+    }
+    const hazeModUpParams params = {.src_base = chain.data(),
+                                    .src_base_len = chain.size(),
+                                    .digit_bases = digit_bases.data(),
+                                    .digit_bases_total_len = digit_bases.size(),
+                                    .digit_base_lens = digit_base_lens.data(),
+                                    .digit_count = digits.size(),
+                                    .p_base = special.data(),
+                                    .p_base_len = special.size()};
+
+    // The extension must not depend on the FBC variant the config selects.
+    for (const int reduced_noise : {0, 1}) {
+        INFO("reduced_noise " << reduced_noise);
+        configure(target, reduced_noise);
+        std::mt19937_64 rng(kSeed);
+        const auto inputs = digit_boundary_inputs(chain, digits, rng);
+        const auto src = haze::test::allocate_and_h2d_residues(inputs, chain);
+        const auto dst = haze::test::allocate_dst_residues(digits.size() * target.size(), kBytes);
+        REQUIRE(hazeModUpExact(dst.data(), haze::test::to_const(src).data(), &params, nullptr) ==
+                HAZE_SUCCESS);
+        for (void *p : dst)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+        REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+        for (std::size_t d = 0; d < digits.size(); ++d) {
+            INFO("digit " << d);
+            const auto want = exact_extension(inputs, chain, digits[d], target);
+            for (std::size_t j = 0; j < target.size(); ++j)
+                require_residues(dst[(d * target.size()) + j], want[j], target[j]);
+        }
+        haze::test::free_all_residues(src);
+        haze::test::free_all_residues(dst);
     }
 }

@@ -39,4 +39,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
                                               const hazeModUpParams &params) noexcept;
 
+std::expected<void, HazeInternalError> mod_up_exact(void *const *dst, const void *const *src,
+                                                    const hazeModUpParams &params) noexcept;
+
 } // namespace haze

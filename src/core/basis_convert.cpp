@@ -18,6 +18,7 @@
 #include "core/config.hpp"
 #include "core/device.hpp"
 #include "core/epoch.hpp"
+#include "core/exact_basis.hpp"
 #include "core/mrp_polymap.hpp"
 
 #include <cstddef>
@@ -62,14 +63,6 @@ uint64_t prod_mod_except(const fhetch::ModuliBase &base, std::size_t skip, uint6
     return r;
 }
 
-// Pass-through residue: the copy-sentinel ADDI, bound to its real modulus as fhetch's
-// copy_residue does so transport replay can probe-serialize it.
-fhetch::Polynomial copy_residue(const fhetch::Polynomial &src, uint64_t p) {
-    auto z = fhetch::sr_addps(src, fhetch::Scalar::from_int(0), kCopyModulus);
-    fhetch::bind_modulus(z, p);
-    return z;
-}
-
 // Centered (reduced-noise) FBC with the centering hoisted out of the per-term work:
 // y_p = sum_i ((s_i + h_i) mod q_i) * c_ip + K_p (mod p), K_p = -sum_i h_i * c_ip mod p, the
 // same residue as fhetch's per-term form with one shift per source and one ADDI per target.
@@ -90,7 +83,7 @@ fhetch::MRP fast_base_convert_centered(const fhetch::MRP &x,
     pairs.reserve(target_base.size());
     for (const uint64_t p : target_base) {
         if (source_set.contains(p)) {
-            pairs.emplace_back(copy_residue(x[p], p), p);
+            pairs.emplace_back(emit_copy(x[p], p), p);
             continue;
         }
         uint64_t h_c_sum = 0;
@@ -248,6 +241,50 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
     return {};
 }
 
+// hazeModUp's recording, with each digit's conversion supplied by the caller.
+template <auto ConvertFn>
+std::expected<void, HazeInternalError> record_mod_up(void *const *dst, const void *const *src,
+                                                     const hazeModUpParams &p) noexcept {
+    if (auto v = validate(p); !v) {
+        return v;
+    }
+
+    EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
+
+    auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
+    if (!src_mrp) {
+        return std::unexpected(src_mrp.error());
+    }
+
+    std::vector<fhetch::ModuliBase> digit_bases;
+    digit_bases.reserve(p.digit_count);
+    size_t offset = 0;
+    for (size_t i = 0; i < p.digit_count; ++i) {
+        const size_t dlen = p.digit_base_lens[i];
+        digit_bases.emplace_back(p.digit_bases + offset, p.digit_bases + offset + dlen);
+        offset += dlen;
+    }
+
+    const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
+
+    // Open-code fhetch::dig_decomp, which hardcodes the per-term centered FBC, so each digit
+    // takes ConvertFn. The per-digit target is src_base + p_base (Q||P), as in dig_decomp.
+    const fhetch::MRP &x = *src_mrp;
+    fhetch::ModuliBase target_base = x.base();
+    target_base.insert(target_base.end(), p_base.begin(), p_base.end());
+    for (size_t d = 0; d < p.digit_count; ++d) {
+        const fhetch::MRP digit = ConvertFn(fhetch::mr_subset(x, digit_bases[d]), target_base);
+        const auto &d_base = digit.base();
+        auto stored =
+            store_mrp_locked(dst + (d * d_base.size()), digit, d_base.data(), d_base.size());
+        if (!stored)
+            return stored;
+    }
+    return {};
+}
+
 // hazeBasisConvert's recording, with the conversion itself supplied by the caller.
 template <auto ConvertFn>
 std::expected<void, HazeInternalError> convert_basis(void *const *dst, const void *const *src,
@@ -310,45 +347,12 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
 
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,
                                               const hazeModUpParams &p) noexcept {
-    if (auto v = validate(p); !v) {
-        return v;
-    }
+    return record_mod_up<lift>(dst, src, p);
+}
 
-    EpochSession session;
-    if (auto rec = epoch().require_recording_locked(); !rec)
-        return rec;
-
-    auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
-    if (!src_mrp) {
-        return std::unexpected(src_mrp.error());
-    }
-
-    std::vector<fhetch::ModuliBase> digit_bases;
-    digit_bases.reserve(p.digit_count);
-    size_t offset = 0;
-    for (size_t i = 0; i < p.digit_count; ++i) {
-        const size_t dlen = p.digit_base_lens[i];
-        digit_bases.emplace_back(p.digit_bases + offset, p.digit_bases + offset + dlen);
-        offset += dlen;
-    }
-
-    const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
-
-    // Open-code fhetch::dig_decomp, which hardcodes the per-term centered FBC, so each digit
-    // takes the configured lift. The per-digit target is src_base + p_base (Q||P), as in
-    // dig_decomp.
-    const fhetch::MRP &x = *src_mrp;
-    fhetch::ModuliBase target_base = x.base();
-    target_base.insert(target_base.end(), p_base.begin(), p_base.end());
-    for (size_t d = 0; d < p.digit_count; ++d) {
-        const fhetch::MRP digit = lift(fhetch::mr_subset(x, digit_bases[d]), target_base);
-        const auto &d_base = digit.base();
-        auto stored =
-            store_mrp_locked(dst + (d * d_base.size()), digit, d_base.data(), d_base.size());
-        if (!stored)
-            return stored;
-    }
-    return {};
+std::expected<void, HazeInternalError> mod_up_exact(void *const *dst, const void *const *src,
+                                                    const hazeModUpParams &p) noexcept {
+    return record_mod_up<exact_base_convert>(dst, src, p);
 }
 
 } // namespace haze
