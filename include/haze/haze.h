@@ -171,8 +171,9 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * hazeReplayBridgeInitCryptoContext. Validates the whole config (ring dimension
  * in the device envelope; ciphertext moduli non-zero, contiguous, and unique)
  * and returns HAZE_ERROR_CONFIGERR on a bad config or HAZE_ERROR_INVALID_VALUE
- * on a malformed struct (NULL fhe, or a NULL array with a non-zero count);
- * nothing is installed on failure, so a corrected struct may be retried.
+ * on a malformed struct (NULL fhe, a NULL array with a non-zero count, or a
+ * hazeReplayConfig::opt_level outside 0-3); nothing is installed on failure,
+ * so a corrected struct may be retried.
  * Re-calling reinstalls the configuration; changing the ring dimension while
  * allocations are live returns HAZE_ERROR_CONFIGERR (free them or reset first).
  * Every ciphertext modulus must be a prime (deterministically checked;
@@ -193,7 +194,9 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * ordinary-form: a hardware target applies its own data format (Montgomery
  * residues, bit-reversed coefficient order) at replay and decodes results back
  * before they are read, so the same trace runs on every target. reduced_noise
- * selects centered FBC matching OpenFHE WITH_REDUCED_NOISE. */
+ * selects centered FBC matching OpenFHE WITH_REDUCED_NOISE. opt_level requests
+ * a compiler-side optimization level (0 = the replay driver's own default,
+ * 1-3 = -O1..-O3); see hazeReplayConfig. */
 HAZE_API hazeError_t hazeConfigureDevice(const hazeFheParams *fhe,
                                          const hazeReplayConfig *replay) HAZE_NOEXCEPT;
 

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <haze/haze.h>       // IWYU pragma: keep
 #include <haze/haze_types.h> // IWYU pragma: keep
+#include <string>
 #include <vector>
 
 // HAZE takes the whole configuration in one hazeConfigureDevice call
@@ -116,4 +117,21 @@ TEST_CASE("hazeDeviceReset re-permits configuration", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     // After reset a fresh configure still succeeds.
     REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeConfigureDevice rejects an out-of-range opt_level", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = 4096};
+    for (const int bad : {-1, 4, 100}) {
+        const hazeReplayConfig replay = {.opt_level = bad};
+        REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+        const std::string message = hazeGetLastErrorMessage();
+        REQUIRE_FALSE(message.empty());
+        REQUIRE(message.find("opt_level") != std::string::npos);
+    }
+    // Nothing is installed on failure: a corrected config still configures
+    // cleanly afterward.
+    const hazeReplayConfig ok = {.opt_level = 3};
+    REQUIRE(hazeConfigureDevice(&fhe, &ok) == HAZE_SUCCESS);
 }

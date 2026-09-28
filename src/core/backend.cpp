@@ -25,6 +25,7 @@
 #include <atomic>
 #include <expected>
 #include <filesystem>
+#include <iterator>
 #include <niobium/compiler.h>
 #include <niobium/openfhe/probes.h>
 #include <string>
@@ -52,18 +53,21 @@ void bootstrap_compiler() {
 
     // Synthesize a minimal argv — compiler().init() exposes no setters; it
     // copies argv during the call, so function-local storage is safe.
+    // Hardware ring-dim/prime compatibility is the compiler's job at dispatch;
+    // the record/replay bridge always skips those checks.
     std::string prog_storage = program_name;
     std::string target_arg_storage = "--target=" + rc.target();
     std::string no_ring_check_storage = "--no-ring-dim-check";
     std::string no_prime_check_storage = "--no-prime-check";
-    // prog + --target + the two always-on skip flags (--no-ring-dim-check,
-    // --no-prime-check) + NULL terminator = 5 slots.
-    char *argv[5] = {prog_storage.data(), target_arg_storage.data(), nullptr, nullptr, nullptr};
-    int argc = 2;
-    // Hardware ring-dim/prime compatibility is the compiler's job at
-    // dispatch; the record/replay bridge always skips those checks.
-    argv[argc++] = no_ring_check_storage.data();
-    argv[argc++] = no_prime_check_storage.data();
+    // Always explicit, including "O0": the vendor Compiler singleton never
+    // resets impl_->opt_level between init() calls, so omitting the flag would
+    // leak a prior configure's level into this one instead of reverting to a
+    // real default; "O0" itself is a downstream no-op either way.
+    std::string opt_level_arg_storage = "--opt-level=O" + std::to_string(rc.opt_level());
+    char *argv[] = {prog_storage.data(),          target_arg_storage.data(),
+                    no_ring_check_storage.data(), no_prime_check_storage.data(),
+                    opt_level_arg_storage.data(), nullptr};
+    int argc = static_cast<int>(std::size(argv)) - 1;
     niobium::compiler().init(argc, argv);
     niobium::compiler().set_program_info(program_name, program_version, program_description);
     // A pinned output dir must be re-applied after set_program_info (which

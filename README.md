@@ -67,7 +67,9 @@ simulator internals, see the companion repository:
    moduli array) and pass it to `hazeConfigureDevice(&fhe, &replay)` in one call
    to lock in the FHE parameter set. The optional `hazeReplayConfig` picks a
    non-default replay target (`.target = "FUNC_SIM"`, or set `HAZE_TARGET` in the
-   environment) and other hardware/replay options; pass `NULL` for all defaults.
+   environment), a compiler-side optimization level for that target
+   (`.opt_level = 1..3`; 0 leaves it at the replay driver's own default), and
+   other hardware/replay options; pass `NULL` for all defaults.
 
 3. **Allocate & Record** — `hazeMalloc` returns one FHETCH-addressable
    polynomial. Compute calls (`hazeAdd`, `hazeMul`, `hazeNTT`, `hazeAutomorph`,

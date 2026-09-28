@@ -116,10 +116,16 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
     return p;
 }
 
-ReplayConfig ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
+std::expected<ReplayConfig, HazeInternalError>
+ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
     ReplayConfig rc; // defaults; a NULL struct or NULL field keeps them
     if (raw == nullptr)
         return rc;
+    if (raw->opt_level < 0 || raw->opt_level > kMaxOptLevel) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "ReplayConfig::create: opt_level out of range");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     if (raw->target != nullptr)
         rc.target_ = raw->target;
     if (raw->program_name != nullptr)
@@ -133,6 +139,7 @@ ReplayConfig ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
         rc.program_dir_set_ = true;
     }
     rc.reduced_noise_ = raw->reduced_noise != 0;
+    rc.opt_level_ = raw->opt_level;
     return rc;
 }
 

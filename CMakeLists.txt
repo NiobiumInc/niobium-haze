@@ -487,6 +487,7 @@ add_executable(haze_tests
   test/test_build.cpp
   test/test_memory.cpp
   test/test_config.cpp
+  test/test_opt_level.cpp
   test/test_compute.cpp
   test/test_is_half_modulus.cpp
   test/test_broadcast.cpp
