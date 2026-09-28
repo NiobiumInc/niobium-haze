@@ -146,6 +146,24 @@ typedef struct {
 // target; 1-3 request -O1..-O3 explicitly.
 // Anything else makes hazeConfigureDevice return HAZE_ERROR_INVALID_VALUE and
 // install nothing.
+//
+// remove_program_directory requests that hazeDeviceReset recursively delete
+// the program directory THIS SESSION actually recorded into, as the last
+// step of teardown; 0 (default) keeps it, 1 removes it. Setting it to 1
+// requires an explicit program_directory (the <cwd>/<program_name> default
+// is too generic to delete) that MUST ALREADY EXIST AS A DIRECTORY at
+// hazeConfigureDevice time -- a missing path, a dangling symlink, or a path
+// naming something other than a directory are all rejected. It is resolved
+// to its canonical, symlink-free, absolute form exactly once, here, and
+// THAT resolved directory -- not the caller's original string -- is what
+// gets pinned and later deleted, so a caller that changes its working
+// directory between configure and reset does not redirect (or lose) the
+// deletion. The resolved directory must not be a filesystem root, the
+// current directory, or one of its ancestors. Any of these makes
+// hazeConfigureDevice return HAZE_ERROR_INVALID_VALUE and install nothing.
+// hazeWriteProgram's contract is to publish a complete project for replay
+// elsewhere, so it refuses to run (HAZE_ERROR_INVALID_VALUE) while this
+// flag is set.
 typedef struct {
     const char *target;
     const char *program_name;
@@ -154,6 +172,7 @@ typedef struct {
     const char *program_directory;
     int reduced_noise;
     int opt_level;
+    int remove_program_directory;
 } hazeReplayConfig;
 
 // CRT basis-conversion parameter structs: each describes a multi-residue polynomial (MRP)

@@ -29,6 +29,7 @@
 #include <niobium/compiler.h>
 #include <niobium/openfhe/probes.h>
 #include <string>
+#include <utility>
 
 // Defined in vendor/niobium-fhetch/src/local_replay.cpp, linked in via
 // libnbfhetch.a; forward-declared because its header is private to the vendor tree.
@@ -110,6 +111,18 @@ std::expected<void, HazeInternalError> CompilerBackend::ensure_initialized() noe
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
         bootstrap_compiler();
+        // Copies the exact path config.cpp already pinned into the vendor
+        // compiler at configure time. When hazeReplayConfig::remove_program_directory
+        // was set, ReplayConfig::create resolved program_directory with
+        // std::filesystem::canonical(), which requires the directory to
+        // already exist and fully resolves every symlink in every
+        // component (no lexical fallback, unlike weakly_canonical) -- and
+        // that resolved path -- not the caller's original string -- is what
+        // bootstrap_compiler() (just above) handed to set_program_directory.
+        // There is no further resolution to do here: no working directory
+        // is left to get wrong, because the path was never relative or
+        // symlink-bearing to begin with by the time it reaches this point.
+        recorded_program_directory_ = niobium::compiler().get_program_directory();
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.
@@ -200,9 +213,10 @@ bool CompilerBackend::replay() noexcept {
     }
 }
 
-void CompilerBackend::reset() noexcept {
+std::filesystem::path CompilerBackend::reset() noexcept {
     HazeLockGuard lock(init_mutex_);
     initialized_.store(false, std::memory_order_release);
+    return std::exchange(recorded_program_directory_, {});
 }
 
 std::expected<std::filesystem::path, HazeInternalError>

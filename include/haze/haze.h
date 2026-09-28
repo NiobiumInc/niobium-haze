@@ -28,7 +28,12 @@ extern "C" {
 //
 // hazeDeviceReset mirrors cudaDeviceReset: it clears all process-global HAZE state (allocator
 // pool, epoch, compiler backend, configuration, streams, events, active device) and the calling
-// thread's last-error code and message (hazeGetLastError / hazeGetLastErrorMessage).
+// thread's last-error code and message (hazeGetLastError / hazeGetLastErrorMessage). When the
+// configuration just cleared had hazeReplayConfig::remove_program_directory set, it also
+// recursively deletes the program directory this session actually recorded into (captured at
+// bring-up, not re-derived from the compiler or the working directory at reset time — a caller
+// that has since changed its working directory does not redirect the deletion), as the last
+// step, best-effort: reset() cannot fail, so a filesystem error there is logged, not surfaced.
 
 HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
@@ -171,9 +176,14 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * hazeReplayBridgeInitCryptoContext. Validates the whole config (ring dimension
  * in the device envelope; ciphertext moduli non-zero, contiguous, and unique)
  * and returns HAZE_ERROR_CONFIGERR on a bad config or HAZE_ERROR_INVALID_VALUE
- * on a malformed struct (NULL fhe, a NULL array with a non-zero count, or a
- * hazeReplayConfig::opt_level outside 0-3); nothing is installed on failure,
- * so a corrected struct may be retried.
+ * on a malformed struct (NULL fhe, a NULL array with a non-zero count, a
+ * hazeReplayConfig::opt_level outside 0-3, a remove_program_directory outside
+ * 0-1, remove_program_directory set with no explicit program_directory, with
+ * a program_directory that does not already exist as a directory (a missing
+ * path, a dangling symlink, or a path naming a non-directory), or with one
+ * that resolves to a filesystem root, the current directory, or one of its
+ * ancestors); nothing is installed on failure, so a corrected struct may be
+ * retried.
  * Re-calling reinstalls the configuration; changing the ring dimension while
  * allocations are live returns HAZE_ERROR_CONFIGERR (free them or reset first).
  * Every ciphertext modulus must be a prime (deterministically checked;
@@ -196,7 +206,9 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * before they are read, so the same trace runs on every target. reduced_noise
  * selects centered FBC matching OpenFHE WITH_REDUCED_NOISE. opt_level requests
  * a compiler-side optimization level (0 = the replay driver's own default,
- * 1-3 = -O1..-O3); see hazeReplayConfig. */
+ * 1-3 = -O1..-O3); remove_program_directory (0 or 1) requests that
+ * hazeDeviceReset delete program_directory, which must already exist as a
+ * directory when the flag is set; see hazeReplayConfig and hazeWriteProgram. */
 HAZE_API hazeError_t hazeConfigureDevice(const hazeFheParams *fhe,
                                          const hazeReplayConfig *replay) HAZE_NOEXCEPT;
 
@@ -205,7 +217,12 @@ HAZE_API hazeError_t hazeConfigureDevice(const hazeFheParams *fhe,
  * emitted, so tag them first. Use it to record where replay isn't available locally and replay
  * elsewhere (e.g. `nbcc_fhetch_replay --project=<dir> --target=<device>` on a remote host).
  * No-op when not recording; nothing is materialized in-process, so a later in-process D2H of
- * an output returns HAZE_ERROR_NOT_FLUSHED. */
+ * an output returns HAZE_ERROR_NOT_FLUSHED.
+ * Returns HAZE_ERROR_INVALID_VALUE, recording nothing, whenever
+ * hazeReplayConfig::remove_program_directory is set (whether or not a recording is in
+ * progress): this call's contract is to publish a complete project on disk, and that flag
+ * promises the opposite — hazeDeviceReset deleting the same directory — so the two are
+ * mutually exclusive. */
 HAZE_API hazeError_t hazeWriteProgram(void) HAZE_NOEXCEPT;
 
 // Streams: nothing executes until hazeFlush() dispatches the recording, so stream-relative

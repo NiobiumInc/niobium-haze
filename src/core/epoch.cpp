@@ -599,6 +599,19 @@ std::expected<void, HazeInternalError> EpochState::replay_and_populate() noexcep
 }
 
 std::expected<void, HazeInternalError> EpochState::write_program() noexcept {
+    // hazeWriteProgram's contract is to publish a COMPLETE project directory for
+    // replay elsewhere (see haze.h); remove_program_directory promises the
+    // opposite (hazeDeviceReset deletes that same directory), so the two are
+    // mutually exclusive. Checked here rather than at configure time: the
+    // conflict is with THIS call, not with the config by itself, and
+    // replay_config() is a lock-free read (see thread_safety.hpp), so no lock
+    // is needed before failing.
+    if (replay_config().remove_program_directory()) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "hazeWriteProgram: remove_program_directory is set; the published "
+                              "project would be deleted by the next hazeDeviceReset");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
     HazeLockGuard lock(mutex_);
     return finalize_guarded_locked(/*run_replay=*/false);
 }
