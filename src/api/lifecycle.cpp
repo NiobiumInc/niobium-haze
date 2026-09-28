@@ -24,9 +24,11 @@
 
 extern "C" hazeError_t hazeDeviceReset(void) noexcept {
     haze::device_state().reset();
-    // Match cudaDeviceReset: also clear the thread-local last-error so
-    // callers can use this as a clean test-isolation point.
+    // Match cudaDeviceReset: also clear the thread-local last-error and its
+    // detail so callers can use this as a clean test-isolation point.
     g_last_error = HAZE_SUCCESS;
+    g_last_error_message.clear();
+    g_error_detail.clear();
     return HAZE_SUCCESS;
 }
 

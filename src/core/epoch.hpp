@@ -192,6 +192,11 @@ class EpochState {
 
     void clear_state_locked() noexcept HAZE_REQUIRES(mutex_);
 
+    // Replaces bringup_failure_ with what g_error_detail gained past `mark`
+    // (the failed bring-up attempt's own detail) and truncates the slot back
+    // to `mark`, so repeated failed bring-ups cannot grow it.
+    void latch_bringup_failure_locked(std::size_t mark) noexcept HAZE_REQUIRES(mutex_);
+
     // Release the vendor input/probe registries. Callable only when the vendor
     // recorder is closed, or when the whole vendor compiler is about to be
     // discarded (hazeDeviceReset): either way, the address-counter roll-back
@@ -217,6 +222,9 @@ class EpochState {
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     uint64_t output_counter_ HAZE_GUARDED_BY(mutex_) = 0;
     bool recording_ HAZE_GUARDED_BY(mutex_) = false;
+    // The latest failed bring-up attempt's detail, which require_recording_locked
+    // appends. Cleared by a successful bring-up, a flush or a reset.
+    std::string bringup_failure_ HAZE_GUARDED_BY(mutex_);
 
     // Friend so EpochSession's ACQUIRE/RELEASE attributes can name mutex_.
     friend class EpochSession;

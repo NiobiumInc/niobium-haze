@@ -14,8 +14,11 @@
 
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <string>
 
 thread_local hazeError_t g_last_error = HAZE_SUCCESS;
+thread_local std::string g_last_error_message;
+thread_local std::string g_error_detail;
 
 extern "C" hazeError_t hazeGetLastError() noexcept {
     const hazeError_t err = g_last_error;

@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <haze/haze_types.h>
 #include <print>
+#include <string>
 
 namespace haze {
 
@@ -120,17 +121,26 @@ bool debug_logging_enabled() noexcept {
     return enabled;
 }
 
+// "<variant> (<context>)", shared by the pending detail and the HAZE_DEBUG=1
+// line so the two agree.
+std::string format_internal_error(HazeInternalError err, const char *context) {
+    if (context != nullptr)
+        return std::string(internal_error_name(err)) + " (" + context + ")";
+    return internal_error_name(err);
+}
+
 } // namespace
 
 void record_internal_error(HazeInternalError err, const char *context) noexcept {
-    if (debug_logging_enabled()) {
-        if (context != nullptr) {
-            std::println(stderr, "[haze] internal error: {} ({})", internal_error_name(err),
-                         context);
-        } else {
-            std::println(stderr, "[haze] internal error: {}", internal_error_name(err));
-        }
-    }
+    const std::string detail = format_internal_error(err, context);
+    append_error_detail(detail);
+    if (debug_logging_enabled())
+        std::println(stderr, "[haze] internal error: {}", detail);
+}
+
+void record_internal_warning(HazeInternalError err, const char *context) noexcept {
+    if (debug_logging_enabled())
+        std::println(stderr, "[haze] internal warning: {}", format_internal_error(err, context));
 }
 
 } // namespace haze

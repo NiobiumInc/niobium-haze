@@ -5,6 +5,7 @@
 // destinations, no-op flush semantics, CRT base validation, sticky
 // last-error, and the configuration freeze rules.
 
+#include "common/errors.hpp"
 #include "core/stream.hpp" // haze_stream_s/haze_event_s ids for the reset pin
 #include "integration_helpers.hpp"
 
@@ -16,6 +17,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -60,6 +62,54 @@ TEST_CASE("last error is sticky: successful calls do not clear it", "[unit]") {
     REQUIRE(hazeFree(p) == HAZE_SUCCESS);
     REQUIRE(hazeGetLastError() == HAZE_ERROR_NOT_SUPPORTED);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
+}
+
+// A plain H2D write ignores ensure_recording_locked's result (it does not
+// require active recording) and retries bring-up on every call, so a bring-up
+// that keeps failing must not grow the pending slot without bound, or leak
+// into a later, unrelated plain failure. A program directory under /proc
+// makes InputSpillStore::activate's create_directories fail deterministically
+// (a read-only pseudo-filesystem), with no compiler build and no FPGA needed.
+TEST_CASE("a failed bring-up does not leak into a later plain failure, "
+          "does not grow without bound, and reaches a compute failure exactly once",
+          "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const hazeFheParams fhe = {.ring_dim = kRingDim};
+    const hazeReplayConfig replay = {.program_directory = "/proc/haze_test_bringup_failure"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+
+    void *a = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> data(kRingDim, 3);
+
+    // Many H2D calls: each retries bring-up and fails again (deterministically),
+    // but a plain upload never requires active recording, so every one still
+    // succeeds overall. The pending detail must not grow across the retries.
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    }
+
+    // A later, unrelated plain failure (no record_internal_error in its own
+    // path) carries no detail at all - not the 20 retries' accumulated text.
+    REQUIRE(hazeMalloc(nullptr, kBytes) == HAZE_ERROR_INVALID_VALUE);
+    REQUIRE(g_last_error_message.empty());
+
+    // A compute op DOES require active recording, so it fails at
+    // require_recording_locked and carries the latched bring-up cause -
+    // exactly once, not duplicated by the 20 retries above.
+    void *b = nullptr;
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(b, a, a, 0, nullptr) == HAZE_ERROR_INTERNAL);
+    const std::string message = g_last_error_message;
+    REQUIRE_FALSE(message.empty());
+    const std::string needle = "InputSpillStore::activate";
+    const auto first = message.find(needle);
+    REQUIRE(first != std::string::npos);
+    REQUIRE(message.find(needle, first + needle.size()) == std::string::npos);
+
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
 // ---------------------------------------------------------------------------

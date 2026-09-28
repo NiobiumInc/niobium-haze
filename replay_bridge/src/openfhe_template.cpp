@@ -183,15 +183,17 @@ lbcrypto::Ciphertext<DCRTPoly> empty_ct_shell(const Context &ctx, size_t k_count
     return ct;
 }
 
-// Fill NativePoly `np` with `values`; logs and no-ops on ring-dim mismatch.
+// Fill NativePoly `np` with `values`; throws on a ring-dim mismatch. Callers sit
+// inside on_post_recording's per-record try/catch, which reports it through
+// log_hook_error; its own length guard checks only the first residue, so this
+// throw is what covers towers 1..N-1 of an MRP input.
 void fill_native_poly(lbcrypto::NativePoly &np, const std::vector<uint64_t> &values,
                       const std::string &diag) {
     size_t n = np.GetParams()->GetRingDimension();
     if (values.size() != n) {
         std::ostringstream body;
         body << diag << ": values.size()=" << values.size() << " != ring_dim=" << n;
-        haze::log_error("replay_bridge", body.str());
-        return;
+        throw std::runtime_error(body.str());
     }
     lbcrypto::NativeVector nv(n, lbcrypto::NativeInteger(np.GetModulus()));
     for (size_t i = 0; i < n; ++i)
@@ -459,8 +461,8 @@ void on_post_recording(const HookCtx &hctx) {
                 return;
             }
             if (spilled->front().size() != hctx.ring_dim) {
-                // fill_native_poly zero-fills on a length mismatch (with only a plain
-                // log_error), so a wrong-length residue must be caught here instead.
+                // Reports a tower-0 mismatch before any CC work; fill_native_poly
+                // throws for the other towers.
                 std::ostringstream body;
                 body << "input '" << rec.name << "': spilled residue length "
                      << spilled->front().size() << " != ring_dim " << hctx.ring_dim;
@@ -521,6 +523,8 @@ namespace {
 // about to begin, not when one ends: stale template/probe names pollute the NEXT epoch's MRP
 // lookups, so the moment that matters is before fresh ones are written. Clearing at teardown
 // instead would dismantle a project hazeWriteProgram() had just published.
+//
+// Best-effort: its caller proceeds regardless, so its diagnostics are warnings.
 void clear_stale_replay_artifacts() noexcept {
     fs::path program_dir;
     try {
@@ -539,14 +543,14 @@ void clear_stale_replay_artifacts() noexcept {
                 std::ostringstream body;
                 body << "clear_stale_replay_artifacts: remove_all('" << (program_dir / sub).string()
                      << "') failed: " << ec.message();
-                haze::log_error("replay_bridge", body.str());
+                haze::log_warning("replay_bridge", body.str());
             }
         }
     } catch (const std::exception &e) {
-        haze::log_error("replay_bridge",
-                        std::string{"clear_stale_replay_artifacts threw: "} + e.what());
+        haze::log_warning("replay_bridge",
+                          std::string{"clear_stale_replay_artifacts threw: "} + e.what());
     } catch (...) {
-        haze::log_error("replay_bridge", "clear_stale_replay_artifacts threw (unknown)");
+        haze::log_warning("replay_bridge", "clear_stale_replay_artifacts threw (unknown)");
     }
 }
 
