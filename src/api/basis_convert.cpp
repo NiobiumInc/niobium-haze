@@ -50,6 +50,11 @@ extern "C" hazeError_t hazeModDown(void *const *dst, const void *const *src, con
     return dispatch<hazeModDownParams, haze::mod_down>(dst, src, params);
 }
 
+extern "C" hazeError_t hazeModDownExact(void *const *dst, const void *const *src,
+                                        const void *params, hazeStream_t /*stream*/) noexcept {
+    return dispatch<hazeModDownParams, haze::mod_down_exact>(dst, src, params);
+}
+
 extern "C" hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                  hazeStream_t /*stream*/) noexcept {
     return dispatch<hazeModUpParams, haze::mod_up>(dst, src, params);

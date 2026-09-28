@@ -425,6 +425,14 @@ HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const v
 HAZE_API hazeError_t hazeModUpExact(void *const *dst, const void *const *src, const void *params,
                                     hazeStream_t stream) HAZE_NOEXCEPT;
 
+// hazeModDownExact: hazeModDown's params (hazeModDownParams), shapes and validation, with the
+// exact CRT floor division in place of fast base conversion, which can be off by a small integer. X
+// is the integer in [0, prod src_base) whose residues on src_base are src's; the output at each q
+// of src_base \ rescale_base is floor(X / P) mod q, where P = prod rescale_base. Coefficient form
+// in and out. hazeReplayConfig's reduced_noise does not affect it.
+HAZE_API hazeError_t hazeModDownExact(void *const *dst, const void *const *src, const void *params,
+                                      hazeStream_t stream) HAZE_NOEXCEPT;
+
 // Graph recording and execution mirror CUDA's graph API; every entry currently returns
 // HAZE_ERROR_NOT_SUPPORTED.
 

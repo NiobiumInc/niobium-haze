@@ -241,6 +241,31 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
     return {};
 }
 
+// hazeModDown's recording, with the rescale supplied by the caller.
+template <auto RescaleFn>
+std::expected<void, HazeInternalError> record_mod_down(void *const *dst, const void *const *src,
+                                                       const hazeModDownParams &p) noexcept {
+    if (auto v = validate(p); !v) {
+        return v;
+    }
+
+    EpochSession session;
+    if (auto rec = epoch().require_recording_locked(); !rec)
+        return rec;
+
+    auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
+    if (!src_mrp) {
+        return std::unexpected(src_mrp.error());
+    }
+
+    const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
+    fhetch::MRP result = RescaleFn(*src_mrp, rescale_base);
+    // result.base() == src_base \ rescale_base in original order; use it directly
+    // so HAZE-side and backend-side agree on the dst layout.
+    const auto &dst_base = result.base();
+    return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+}
+
 // hazeModUp's recording, with each digit's conversion supplied by the caller.
 template <auto ConvertFn>
 std::expected<void, HazeInternalError> record_mod_up(void *const *dst, const void *const *src,
@@ -324,25 +349,12 @@ basis_convert_centered(void *const *dst, const void *const *src,
 
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
                                                 const hazeModDownParams &p) noexcept {
-    if (auto v = validate(p); !v) {
-        return v;
-    }
+    return record_mod_down<rescale>(dst, src, p);
+}
 
-    EpochSession session;
-    if (auto rec = epoch().require_recording_locked(); !rec)
-        return rec;
-
-    auto src_mrp = build_mrp_locked(src, p.src_base, p.src_base_len);
-    if (!src_mrp) {
-        return std::unexpected(src_mrp.error());
-    }
-
-    const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result = rescale(*src_mrp, rescale_base);
-    // result.base() == src_base \ rescale_base in original order; use it directly
-    // so HAZE-side and backend-side agree on the dst layout.
-    const auto &dst_base = result.base();
-    return store_mrp_locked(dst, result, dst_base.data(), dst_base.size());
+std::expected<void, HazeInternalError> mod_down_exact(void *const *dst, const void *const *src,
+                                                      const hazeModDownParams &p) noexcept {
+    return record_mod_down<exact_rescale>(dst, src, p);
 }
 
 std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *const *src,

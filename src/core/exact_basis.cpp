@@ -17,6 +17,7 @@
 #include "core/centered_switch.hpp"
 #include "core/epoch.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <niobium/fhetch_api.h>
@@ -111,6 +112,33 @@ fhetch::MRP exact_base_convert(const fhetch::MRP &x,
         else
             pairs.emplace_back(open[next++].sum, r);
     }
+    return fhetch::MRP::from_pairs(pairs);
+}
+
+fhetch::MRP exact_rescale(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) noexcept {
+    std::vector<uint64_t> primes = x.base();
+    std::vector<fhetch::Polynomial> residues;
+    residues.reserve(primes.size());
+    for (const uint64_t q : primes)
+        residues.push_back(x[q]);
+
+    for (const uint64_t r : rescale_base) {
+        const auto at = std::ranges::find(primes, r) - primes.begin();
+        const fhetch::Polynomial top = residues[static_cast<size_t>(at)];
+        primes.erase(primes.begin() + at);
+        residues.erase(residues.begin() + at);
+        const auto lifted = raw_lift(top, r, primes);
+        for (size_t i = 0; i < primes.size(); ++i) {
+            const uint64_t q = primes[i];
+            const auto diff = fhetch::sr_subp(residues[i], lifted[i], q);
+            residues[i] = fhetch::sr_mulps(diff, fhetch::Scalar::from_int(modinv_prime(r, q)), q);
+        }
+    }
+
+    std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+    pairs.reserve(primes.size());
+    for (size_t i = 0; i < primes.size(); ++i)
+        pairs.emplace_back(residues[i], primes[i]);
     return fhetch::MRP::from_pairs(pairs);
 }
 
