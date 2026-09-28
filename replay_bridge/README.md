@@ -112,7 +112,9 @@ Init must be called after every `hazeDeviceReset` (which fires
 [`test/integration_helpers.hpp`](../test/integration_helpers.hpp)'s
 `setup_integration_compute_config` is the canonical caller. A new Init replaces
 a prior one; the lambda holding its state lives until the next install or the
-next device reset.
+next device reset. `hazeReplayBridgeReset` releases the CryptoContexts haze's own
+OpenFHE has registered and leaves that lambda in place, so recording can
+continue after it.
 
 ## Source layout
 

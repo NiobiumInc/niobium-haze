@@ -49,21 +49,25 @@
 // epoch_mutex_ held), so it rests on this contract and review.
 // OpenFHE's global CryptoContextFactory is itself touched under both locks —
 // under init_mutex_ at replay-bridge init, under epoch_mutex_ by local
-// replay's register_crypto_context at flush — which is race-free only because
-// the single-threaded control-plane contract below serializes every caller.
+// replay's register_crypto_context at flush — and under neither by
+// hazeReplayBridgeReset, which releases every registration and OpenFHE's static
+// key maps and NTT tables. That is race-free only because the single-threaded
+// control-plane contract below serializes every caller.
 //
 // Config carries no lock. The FHE params and replay config are immutable values
 // built by the single explicit hazeConfigureDevice() (from caller-owned structs,
 // via transient local builders) and installed into DeviceState; only the control
 // plane (hazeConfigureDevice, hazeDeviceReset) writes them. The contract, like
-// CUDA's device setup, is that the control plane runs single-threaded and is not
-// concurrent with compute: configure happens before the first compute, and
-// hazeDeviceReset is not called while compute is in flight. Under that contract
-// the compute path only ever READS the frozen config — never finalizes, never
-// mutates — so it needs no lock or atomics (CompilerBackend::init_mutex_'s
-// acquire/release at bring-up orders the freeze before every compute read). The
-// allocator is a leaf: allocator code must not call into any other component
-// while holding its lock; TSAN is the runtime backstop.
+// CUDA's device setup, is that the control plane (those two calls plus
+// hazeReplayBridgeInitCryptoContext and hazeReplayBridgeReset) runs
+// single-threaded and is never concurrent with compute or a flush: configure
+// happens before the first compute, and none of the other three is called while
+// compute or a flush is in flight. Under that contract the compute path only
+// ever READS the frozen config — never finalizes, never mutates — so it needs no
+// lock or atomics (CompilerBackend::init_mutex_'s acquire/release at bring-up
+// orders the freeze before every compute read). The allocator is a leaf:
+// allocator code must not call into any other component while holding its lock;
+// TSAN is the runtime backstop.
 
 // Clang's thread-safety attributes are GNU-style __attribute__((...)), not C++11
 // [[clang::...]]; the macro names mirror the clang TSA documentation spellings.
