@@ -35,7 +35,14 @@ HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
                                                        uint64_t desired_modulus) HAZE_NOEXCEPT;
 
 /// Drop the bridge's cached CryptoContexts so they don't outlive a
-/// hazeDeviceReset; idempotent and safe to call before init.
+/// hazeDeviceReset, which calls this: releases every CryptoContext registered in
+/// haze's own OpenFHE (which also clears that copy's static key maps and NTT
+/// tables, rebuilt on demand) and clears the hook's error flag. The installed
+/// post-recording hook stays, so a later flush still synthesizes its inputs.
+/// Idempotent and safe to call before init. Control plane, like hazeDeviceReset:
+/// it takes no lock, so it must not run concurrently with compute or a flush.
+/// libhaze.so absorbs its OpenFHE with every symbol hidden, so a caller's own
+/// OpenFHE contexts are untouched.
 HAZE_API void hazeReplayBridgeReset(void) HAZE_NOEXCEPT;
 
 /// Return 1 iff the post-recording hook reported any failure since the

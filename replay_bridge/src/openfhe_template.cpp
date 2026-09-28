@@ -594,6 +594,19 @@ extern "C" void hazeReplayBridgeReset() noexcept {
     // provide now happens at hazeReplayBridgeInitCryptoContext, i.e. before a recording writes
     // fresh artifacts, which is the moment the staleness actually matters.
     hook_had_error_flag().store(false, std::memory_order_relaxed);
+    // Every context this library's OpenFHE builds is registered in CryptoContextFactory for the
+    // life of the process: the init's scaffold and one per input shape the hook synthesizes.
+    // Releasing the registrations frees the per-shape contexts and the tables OpenFHE caches beside
+    // them. The scaffold stays alive while the installed hook and libnbfhetch's captured context
+    // hold it, so the hook keeps working; the next init replaces both. This void call has no
+    // failure channel, so a throw is only a warning.
+    try {
+        lbcrypto::CryptoContextFactory<DCRTPoly>::ReleaseAllContexts();
+    } catch (const std::exception &e) {
+        haze::log_warning("replay_bridge", std::string{"reset threw: "} + e.what());
+    } catch (...) {
+        haze::log_warning("replay_bridge", "reset threw (unknown)");
+    }
 }
 
 extern "C" int hazeReplayBridgeTakeHookHadError() noexcept {
