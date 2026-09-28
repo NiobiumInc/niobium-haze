@@ -12,16 +12,66 @@
 // from the Product.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
+#include <string>
+#include <string_view>
+#include <utility>
 
 // Thread-local last error with CUDA sticky semantics: failures overwrite,
 // successes leave it untouched, hazeGetLastError reads-and-clears.
 extern thread_local hazeError_t g_last_error;
 
+// The detail behind g_last_error, paired 1:1 with it by set_error; "" when
+// that failure recorded none. hazeDeviceReset clears it.
+extern thread_local std::string g_last_error_message;
+
+// Detail recorded for the failure in progress, not yet committed by
+// set_error. record_internal_error and haze::log_error append to it,
+// independent of HAZE_DEBUG; the _warning sinks never do. Anything left here
+// surfaces in the next failure, so a caller that ignores a failure discards
+// its detail (DiscardErrorDetail). hazeDeviceReset clears it.
+extern thread_local std::string g_error_detail;
+
+// Appends `detail` to g_error_detail, joined by "; " (innermost cause first).
+// No-op for an empty detail.
+inline void append_error_detail(std::string_view detail) noexcept {
+    if (detail.empty())
+        return;
+    if (!g_error_detail.empty())
+        g_error_detail += "; ";
+    g_error_detail += detail;
+}
+
+// Discards whatever g_error_detail gains during its lifetime. Wrap a call whose
+// failure the caller ignores: shared helpers (InputSpillStore::erase,
+// CompilerBackend::clear_captured, ...) record their failures for fatal
+// callers, so only the ignoring call site knows to drop the detail.
+class DiscardErrorDetail {
+  public:
+    DiscardErrorDetail() noexcept : mark_(g_error_detail.size()) {}
+    ~DiscardErrorDetail() noexcept {
+        // An inner set_error may have drained the slot below mark_, and
+        // resize() would then pad it with NULs.
+        if (g_error_detail.size() > mark_)
+            g_error_detail.resize(mark_);
+    }
+
+    DiscardErrorDetail(const DiscardErrorDetail &) = delete;
+    DiscardErrorDetail &operator=(const DiscardErrorDetail &) = delete;
+
+  private:
+    std::size_t mark_;
+};
+
+// Commits a new hazeError_t; every failing hazeXxx() call returns through here,
+// directly or via set_internal_result. Moves the pending detail into
+// g_last_error_message, so each code carries only its own failure's detail.
 [[nodiscard]] inline hazeError_t set_error(hazeError_t err) noexcept {
     g_last_error = err;
+    g_last_error_message = std::exchange(g_error_detail, std::string{});
     return err;
 }
 
@@ -59,9 +109,14 @@ enum class HazeInternalError : std::uint8_t {
 // extending this table.
 hazeError_t to_public_error(HazeInternalError err) noexcept;
 
-// Record a failure reason for HAZE_DEBUG=1 stderr logging; the context string is
-// unowned and short-lived.
+// Record a failure reason: appends it to g_error_detail and prints it to stderr
+// under HAZE_DEBUG=1. The context string is unowned and short-lived. Use
+// record_internal_warning when the caller does not go on to fail.
 void record_internal_error(HazeInternalError err, const char *context = nullptr) noexcept;
+
+// Same as record_internal_error but never appends to g_error_detail, for a
+// diagnosis whose caller does not fail (e.g. best-effort cleanup).
+void record_internal_warning(HazeInternalError err, const char *context = nullptr) noexcept;
 
 } // namespace haze
 

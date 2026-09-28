@@ -12,12 +12,22 @@
 // from the Product.
 #include "common/log.hpp"
 
+#include "common/errors.hpp"
+
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace haze {
 
 void log_error(std::string_view tag, std::string_view body) noexcept {
+    std::string detail(tag);
+    detail.append(": ").append(body);
+    append_error_detail(detail);
+    std::cerr << "[haze] " << tag << ": " << body << '\n';
+}
+
+void log_warning(std::string_view tag, std::string_view body) noexcept {
     std::cerr << "[haze] " << tag << ": " << body << '\n';
 }
 

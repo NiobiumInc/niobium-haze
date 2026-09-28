@@ -18,7 +18,14 @@ namespace haze {
 
 // Tagged sink for [haze]-prefixed runtime diagnostics from replay_bridge (libhaze
 // internal failures route through record_internal_error instead); prints
-// "[haze] <tag>: <body>\n" with both arguments verbatim.
+// "[haze] <tag>: <body>\n" with both arguments verbatim and appends
+// "<tag>: <body>" to g_error_detail. Use it only where the caller goes on to
+// fail, directly or through the post-recording hook's error flag.
 void log_error(std::string_view tag, std::string_view body) noexcept;
+
+// Prints the same line as log_error but never appends to g_error_detail, for a
+// diagnosis whose caller does not fail (e.g. clear_stale_replay_artifacts'
+// best-effort cleanup).
+void log_warning(std::string_view tag, std::string_view body) noexcept;
 
 } // namespace haze
