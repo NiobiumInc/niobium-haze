@@ -138,7 +138,7 @@ HAZE_RUNS_DIR = $(CURDIR)/$(BUILD_DIR)/runs
         config-openfhe build-openfhe \
         config-test-openfhe build-test-openfhe \
         test-unit test-sim test-e2e test-readme test-transport test-transport-hw \
-        test-isolation test test-all \
+        test-isolation test-package test test-all \
         check-transport-prereqs \
         clean clean-runs
 
@@ -175,8 +175,10 @@ Usage: make <target> [MODE=debug|release]
                         hardware (Montgomery) mode; results must match
                         test-transport
     test-isolation      Assert libhaze.so exports only the haze* C ABI
+    test-package        Install to $(BUILD_DIR)/install and build+run a
+                        find_package(haze) consumer against it
     test                Default: test-unit + test-sim + test-e2e +
-                        test-isolation + test-readme
+                        test-isolation + test-readme + test-package
     test-all            test + test-transport + test-transport-hw
 
   Cleanup:
@@ -359,7 +361,16 @@ test-readme: build ## Compile + run the README examples (C + C++) via the local 
 	 HAZE_RUNS_DIR="$(HAZE_RUNS_DIR)" \
 	 scripts/test_readme_examples.sh
 
-test: test-unit test-sim test-e2e test-isolation test-readme ## Run default test suites + isolation guard + README examples (no transport dependency)
+test-package: build ## Install to $(BUILD_DIR)/install and build+run a find_package(haze) consumer against it
+	@rm -rf "$(CURDIR)/$(BUILD_DIR)/install" "$(CURDIR)/$(BUILD_DIR)/package_test"
+	cmake --install "$(CURDIR)/$(BUILD_DIR)" --prefix "$(CURDIR)/$(BUILD_DIR)/install"
+	cmake -S "$(CURDIR)/test/package" -B "$(CURDIR)/$(BUILD_DIR)/package_test" \
+		-DCMAKE_BUILD_TYPE=$(CMAKE_CONFIG) \
+		-DCMAKE_PREFIX_PATH="$(CURDIR)/$(BUILD_DIR)/install"
+	cmake --build "$(CURDIR)/$(BUILD_DIR)/package_test" -j $(NUM_CPUS)
+	"$(CURDIR)/$(BUILD_DIR)/package_test/haze_package_consumer"
+
+test: test-unit test-sim test-e2e test-isolation test-readme test-package ## Run default test suites + isolation guard + README examples + package consumer (no transport dependency)
 
 test-all: test test-transport test-transport-hw ## Run everything (both transport modes)
 

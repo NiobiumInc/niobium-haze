@@ -119,6 +119,8 @@
               ./replay_bridge
               # Symbol-isolation version script, referenced at libhaze link time.
               ./linker
+              # hazeConfig.cmake.in, configured into the installed package.
+              ./cmake
             ];
           };
 
@@ -298,32 +300,19 @@
               # SHARED into that exe only; never absorbed into libhaze.so).
               "-DHAZE_BUILD_E2E_TESTS=ON"
               "-DHAZE_TEST_OPENFHE_DIR=${openfhe-stock}"
-              # TODO(haze): add install() rules upstream. Without them cmake
-              # skips its install RPATH rewrite, so bake the install RPATH at
-              # build time (@loader_path on darwin, $ORIGIN on linux). The stock
-              # OpenFHE store path is appended so haze_e2e_tests resolves its
-              # libOPENFHE*.so at run time.
-              "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON"
+              # haze_e2e_tests links the stock OpenFHE's shared libs by raw
+              # path rather than a cmake target, so cmake's install-time
+              # RPATH rewrite needs this to resolve them at run time.
               "-DCMAKE_INSTALL_RPATH=${
                 if stdenv.isDarwin then "@loader_path/../lib" else "$ORIGIN/../lib"
               };${openfhe-stock}/lib"
             ];
-            # No install() rules upstream yet, so cmake's `make install` would
-            # fail; skip it and place artifacts manually.
-            dontUseCmakeInstall = true;
-            installPhase = ''
-              runHook preInstall
-              mkdir -p $out/lib $out/bin $out/include
-              # cp -a preserves any future SOVERSION/VERSION symlink chains;
-              # install -t would flatten them to copies. The replay bridge is
-              # now an OBJECT library absorbed into libhaze.so — no separate
-              # libhaze_replay_bridge.* artifact to copy.
-              cp -a libhaze.* $out/lib/
-              cp -a haze_tests $out/bin/
-              cp -a haze_e2e_tests $out/bin/
-              chmod +x $out/bin/haze_tests $out/bin/haze_e2e_tests
-              cp -r $src/include/haze $out/include/
-              runHook postInstall
+            # haze_tests / haze_e2e_tests install under an opt-in `tests`
+            # component (CMakeLists.txt), skipped by the default install
+            # above - request it explicitly so this package still ships
+            # both binaries.
+            postInstall = ''
+              cmake --install . --component tests
             '';
             meta.platforms = pkgs.lib.platforms.unix;
           };
@@ -421,6 +410,30 @@
               runHook postInstall
             '';
           };
+
+          # Proves the nix-built haze package resolves via
+          # find_package(haze CONFIG REQUIRED): configures, builds and runs
+          # test/package (the same consumer `make test-package` drives)
+          # against `haze`'s own install tree, with no other -D flags.
+          haze-test-package = stdenv.mkDerivation {
+            name = "haze-test-package";
+            src = hazeBuildSrc;
+            nativeBuildInputs = [ pkgs.cmake ];
+            buildInputs = [ haze ];
+            dontUseCmakeConfigure = true;
+            buildPhase = ''
+              runHook preBuild
+              cmake -S test/package -B build-consumer -DCMAKE_BUILD_TYPE=Release
+              cmake --build build-consumer
+              ./build-consumer/haze_package_consumer
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              touch $out
+              runHook postInstall
+            '';
+          };
         in
         {
           inherit
@@ -431,6 +444,7 @@
             haze-clang-format
             haze-clang-tidy
             haze-compile-commands
+            haze-test-package
             clang-tidy-cache
             ;
         };
@@ -579,9 +593,9 @@
                 nativeBuildInputs = [ pkgs.clang ];
                 HAZE_LIB_DIR = "${p.haze}/lib";
                 HAZE_INCLUDE_DIR = "${p.haze}/include";
-                # replay_bridge.h is not installed into the haze package's
-                # include dir; supply it straight from the source tree.
-                HAZE_BRIDGE_INCLUDE_DIR = "${./replay_bridge/include}";
+                # replay_bridge.h installs alongside haze.h under the same
+                # directory as HAZE_INCLUDE_DIR above.
+                HAZE_BRIDGE_INCLUDE_DIR = "${p.haze}/include";
                 STOCK_OPENFHE_DIR = "${p.openfhe-stock}";
                 README = "${./README.md}";
                 CC = "clang";
@@ -609,6 +623,8 @@
                 bash ${./scripts/check_symbol_leak.sh} ${p.haze}/lib
                 touch "$out"
               '';
+
+          test-package = p.haze-test-package;
         }
       );
     };
