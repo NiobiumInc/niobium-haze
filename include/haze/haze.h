@@ -27,8 +27,8 @@ extern "C" {
 // before reading results back.
 //
 // hazeDeviceReset mirrors cudaDeviceReset: it clears all process-global HAZE state (allocator
-// pool, epoch, compiler backend, configuration, streams, events, active device) and the
-// thread-local last-error flag.
+// pool, epoch, compiler backend, configuration, streams, events, active device) and the calling
+// thread's last-error code and message (hazeGetLastError / hazeGetLastErrorMessage).
 
 HAZE_API hazeError_t hazeGetDeviceCount(int *count) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeSetDevice(int device) HAZE_NOEXCEPT;
@@ -226,8 +226,32 @@ HAZE_API hazeError_t hazeEventRecord(hazeEvent_t event, hazeStream_t stream) HAZ
 
 // Error handling. Mirrors CUDA's last-error pattern.
 
+/* Returns the calling thread's most recent hazeError_t and resets it to HAZE_SUCCESS
+ * (read-and-clear; a second consecutive call returns HAZE_SUCCESS unless a new failure
+ * occurred in between). A successful call never clears a pending failure — "sticky"
+ * semantics, matching cudaGetLastError; hazeDeviceReset() also clears it. */
 HAZE_API hazeError_t hazeGetLastError(void) HAZE_NOEXCEPT;
 HAZE_NODISCARD HAZE_API const char *hazeGetErrorString(hazeError_t error) HAZE_NOEXCEPT;
+
+/* Returns the detail behind the calling thread's most recently recorded hazeError_t —
+ * the text HAZE_DEBUG=1 would have printed to stderr for it. Most useful after
+ * hazeGetLastError() returns HAZE_ERROR_INTERNAL, which itself only carries the generic
+ * "internal haze error" text; this returns the underlying cause (e.g. which internal
+ * invariant failed, in which function). Paired 1:1 with the code hazeGetLastError()
+ * reports: a self-explanatory failure (e.g. HAZE_ERROR_INVALID_VALUE from a null-pointer
+ * check) carries "" here, never an earlier, unrelated failure's text.
+ *
+ * Returns "" in three cases: the pending failure carried no detail; the message was
+ * already read (this function reads-and-clears, mirroring hazeGetLastError() above, so a
+ * second consecutive call returns ""); or nothing has failed yet on this thread. A
+ * successful call never touches it — sticky, exactly like hazeGetLastError()'s own code —
+ * so a message from an earlier, unread failure can still be pending after a run of
+ * successful calls. hazeDeviceReset() also clears it.
+ *
+ * The returned pointer is valid until the next haze call on the calling thread (it
+ * refers to thread-local storage that a later call may overwrite); copy it out before
+ * making another haze call if it must outlive that call. Never throws. */
+HAZE_NODISCARD HAZE_API const char *hazeGetLastErrorMessage(void) HAZE_NOEXCEPT;
 
 // Point-wise polynomial arithmetic and scalar variants.
 

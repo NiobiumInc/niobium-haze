@@ -62,7 +62,8 @@ typedef struct haze_exec_s *hazeGraphExec_t;
 
 // Only user-actionable conditions get their own code; anything signalling "haze itself is
 // broken" maps to HAZE_ERROR_INTERNAL (loggable, not recoverable), whose rich classification
-// lives in the internal `HazeInternalError` enum and surfaces via the HAZE_DEBUG=1 stderr log.
+// lives in the internal `HazeInternalError` enum and surfaces via hazeGetLastErrorMessage
+// (also printed to stderr under HAZE_DEBUG=1).
 typedef enum {
     // Values are explicit: the catch-all is a single high bit, which is not
     // sequential, so readability-enum-initial-value requires all-or-none.
@@ -79,7 +80,8 @@ typedef enum {
     HAZE_ERROR_NOT_FLUSHED = 9, // D2H of an untagged / unflushed address: tag output + hazeFlush
     // User-actionable codes stay sequential below this single high bit (2^10), so
     // `err & HAZE_ERROR_INTERNAL` detects an internal error without enumerating every code.
-    HAZE_ERROR_INTERNAL = 1024, // haze invariant broke or backend failed; see HAZE_DEBUG log
+    HAZE_ERROR_INTERNAL =
+        1024, // haze invariant broke or backend failed; see hazeGetLastErrorMessage
 } hazeError_t;
 
 // DMA direction: numbering matches CUDA's cudaMemcpyKind value-for-value, so CUDA ports can
