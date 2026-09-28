@@ -665,6 +665,13 @@ tag plus environment:
   parent-driven `haze_transport_tests` ctest entry (`--mode=http`) routes the
   same run through niobium-client's forwarder and server.
 
+Soak cases are tagged `[.soak]`, which hides them from every suite above; they
+run only when selected by tag. From `build/runs`, `HAZE_TARGET=local
+../haze_tests "[soak]"` runs them in-process, and `HAZE_TEST_FILTER="[soak]"
+make test-transport MODE=release NIOBIUM_COMPILER_ROOT=<checkout>` runs them
+through `nbcc_fhetch_replay`. The one soak case today repeats 50 sequential
+sessions at a 41-prime, N=65536 shape (about 140 s in-process).
+
 ## Project structure
 
 ```

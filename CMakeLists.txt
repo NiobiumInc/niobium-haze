@@ -509,6 +509,7 @@ add_executable(haze_tests
   test/test_input_entries.cpp
   test/test_input_spill.cpp
   test/test_mrp_registry.cpp
+  test/test_sequential_sessions.cpp
   test/test_spill_root_isolation.cpp
   # End-to-end OpenFHE-pipeline tests (real encrypt/decrypt around haze ops).
   # Tagged [integration][e2e] in Catch2 so they run under haze_sim_tests.
