@@ -29,6 +29,7 @@ hazeGetDeviceCount@@HAZE_1.0
 hazeGetDeviceProperties@@HAZE_1.0
 hazeGetErrorString@@HAZE_1.0
 hazeGetLastError@@HAZE_1.0
+hazeGetLastErrorMessage@@HAZE_1.1
 hazeGetPerformanceCounters@@HAZE_1.0
 hazeGraphDestroy@@HAZE_1.0
 hazeGraphExecDestroy@@HAZE_1.0

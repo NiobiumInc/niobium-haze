@@ -5,7 +5,6 @@
 // destinations, no-op flush semantics, CRT base validation, sticky
 // last-error, and the configuration freeze rules.
 
-#include "common/errors.hpp"
 #include "core/stream.hpp" // haze_stream_s/haze_event_s ids for the reset pin
 #include "integration_helpers.hpp"
 
@@ -64,6 +63,55 @@ TEST_CASE("last error is sticky: successful calls do not clear it", "[unit]") {
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
 }
 
+TEST_CASE("hazeGetLastErrorMessage carries the detail behind a real internal failure", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    // hazeDeviceReset clears g_last_error_message along with g_last_error, so
+    // (unlike g_last_error itself) nothing here needs draining: the message
+    // is paired 1:1 with the code by set_error, not free-standing sticky
+    // state — see test_error_detail.cpp for that pairing tested directly.
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
+
+    // Same deterministic replay failure as "failed materialize clears the
+    // epoch" below: an unreachable transport target makes replay fail in
+    // every environment (spawn failure without a compiler; unknown-target
+    // error with one).
+    const uint64_t moduli[] = {kQ0};
+    const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
+    const hazeReplayConfig replay = {.target = "HAZE_TEST_NO_SUCH_TARGET"};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+
+    void *a = nullptr;
+    void *b = nullptr;
+    void *c = nullptr;
+    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
+    std::vector<uint64_t> data(kRingDim, 3);
+    REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_ERROR_INTERNAL);
+    REQUIRE(hazeGetLastError() == HAZE_ERROR_INTERNAL);
+
+    // Non-empty, and carries detail beyond hazeGetErrorString(HAZE_ERROR_INTERNAL)'s
+    // generic "see hazeGetLastErrorMessage" text — the same detail HAZE_DEBUG=1
+    // would have printed to stderr for this failure.
+    const std::string message = hazeGetLastErrorMessage();
+    REQUIRE_FALSE(message.empty());
+    REQUIRE(message.find("replay") != std::string::npos);
+
+    // Reads and clears, mirroring hazeGetLastError: a second read is "".
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
+
+    // A subsequent run of successful calls does not resurrect it.
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
+}
+
 // A plain H2D write ignores ensure_recording_locked's result (it does not
 // require active recording) and retries bring-up on every call, so a bring-up
 // that keeps failing must not grow the pending slot without bound, or leak
@@ -92,7 +140,7 @@ TEST_CASE("a failed bring-up does not leak into a later plain failure, "
     // A later, unrelated plain failure (no record_internal_error in its own
     // path) carries no detail at all - not the 20 retries' accumulated text.
     REQUIRE(hazeMalloc(nullptr, kBytes) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(g_last_error_message.empty());
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
 
     // A compute op DOES require active recording, so it fails at
     // require_recording_locked and carries the latched bring-up cause -
@@ -100,7 +148,7 @@ TEST_CASE("a failed bring-up does not leak into a later plain failure, "
     void *b = nullptr;
     REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
     REQUIRE(hazeAdd(b, a, a, 0, nullptr) == HAZE_ERROR_INTERNAL);
-    const std::string message = g_last_error_message;
+    const std::string message = hazeGetLastErrorMessage();
     REQUIRE_FALSE(message.empty());
     const std::string needle = "InputSpillStore::activate";
     const auto first = message.find(needle);

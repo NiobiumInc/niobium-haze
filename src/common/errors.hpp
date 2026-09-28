@@ -25,7 +25,8 @@
 extern thread_local hazeError_t g_last_error;
 
 // The detail behind g_last_error, paired 1:1 with it by set_error; "" when
-// that failure recorded none. hazeDeviceReset clears it.
+// that failure recorded none. hazeGetLastErrorMessage reads and clears it,
+// and hazeDeviceReset clears it.
 extern thread_local std::string g_last_error_message;
 
 // Detail recorded for the failure in progress, not yet committed by

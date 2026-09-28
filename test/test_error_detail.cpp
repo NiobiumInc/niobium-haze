@@ -19,6 +19,9 @@
 // the internal machinery directly — haze_tests links haze_objs, not just the
 // public C ABI — because the properties belong to that machinery's own
 // contract, independent of which public entry point happens to exercise it.
+// See also "hazeGetLastErrorMessage carries the detail behind a real
+// internal failure" in test_invariant_regressions.cpp, which confirms the
+// same contract end to end through a real hazeFlush() failure.
 
 #include "common/errors.hpp"
 #include "common/log.hpp"
@@ -27,6 +30,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -50,7 +54,7 @@ TEST_CASE("append_error_detail joins multiple causes, innermost first", "[unit]"
     haze::record_internal_error(haze::HazeInternalError::BridgeHookFailed, "outer context");
     REQUIRE(set_error(HAZE_ERROR_INTERNAL) == HAZE_ERROR_INTERNAL);
 
-    const std::string message = g_last_error_message;
+    const std::string message = hazeGetLastErrorMessage();
     const auto inner = message.find("inner cause");
     const auto outer = message.find("outer context");
     REQUIRE(inner != std::string::npos);
@@ -67,7 +71,7 @@ TEST_CASE("record_internal_warning and log_warning never enter the pending slot"
     // A successful call after the warnings above must not surface either of
     // them: nothing was appended, so set_error's exchange yields "".
     REQUIRE(set_error(HAZE_SUCCESS) == HAZE_SUCCESS);
-    REQUIRE(g_last_error_message.empty());
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
 }
 
 TEST_CASE("a plain failure after a detailed one carries no detail", "[unit]") {
@@ -81,7 +85,7 @@ TEST_CASE("a plain failure after a detailed one carries no detail", "[unit]") {
     // call anywhere in its path) must carry "", not the previous failure's
     // text.
     REQUIRE(set_error(HAZE_ERROR_INVALID_VALUE) == HAZE_ERROR_INVALID_VALUE);
-    REQUIRE(g_last_error_message.empty());
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
 }
 
 TEST_CASE("hazeDeviceReset clears the last error, its message, and any pending detail", "[unit]") {
@@ -90,13 +94,13 @@ TEST_CASE("hazeDeviceReset clears the last error, its message, and any pending d
     REQUIRE(set_error(HAZE_ERROR_INTERNAL) == HAZE_ERROR_INTERNAL);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     REQUIRE(hazeGetLastError() == HAZE_SUCCESS);
-    REQUIRE(g_last_error_message.empty());
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
 
     // A warning logged just before a reset (nothing ever committed it into
     // g_last_error_message) must not surface afterward either.
     haze::record_internal_warning(haze::HazeInternalError::SpillIoFailed, "warning before reset");
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    REQUIRE(g_last_error_message.empty());
+    REQUIRE(std::string_view{hazeGetLastErrorMessage()}.empty());
 }
 
 TEST_CASE("the last-error message is thread-local", "[unit]") {
@@ -105,13 +109,13 @@ TEST_CASE("the last-error message is thread-local", "[unit]") {
     REQUIRE(set_error(HAZE_ERROR_INTERNAL) == HAZE_ERROR_INTERNAL);
 
     std::string other_thread_message = "not yet set";
-    std::thread t([&] { other_thread_message = g_last_error_message; });
+    std::thread t([&] { other_thread_message = hazeGetLastErrorMessage(); });
     t.join();
     // A fresh thread has recorded nothing of its own, regardless of what the
     // main thread just did.
     REQUIRE(other_thread_message.empty());
 
     // The main thread's own message survived the other thread's read.
-    const std::string message = g_last_error_message;
+    const std::string message = hazeGetLastErrorMessage();
     REQUIRE(message.find("main thread detail") != std::string::npos);
 }

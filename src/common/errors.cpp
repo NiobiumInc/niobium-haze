@@ -41,7 +41,8 @@ hazeError_t to_public_error(HazeInternalError err) noexcept {
     case HazeInternalError::OutputNotFlushed:
         return HAZE_ERROR_NOT_FLUSHED;
     // Internal: haze invariants / backend failed; caller can't recover, but the
-    // specific variant survives in the HAZE_DEBUG=1 stderr log.
+    // specific variant survives via hazeGetLastErrorMessage (also the
+    // HAZE_DEBUG=1 stderr log).
     case HazeInternalError::BackendInitFailed:
     case HazeInternalError::BackendReplayFailed:
     case HazeInternalError::BackendShapeMismatch:

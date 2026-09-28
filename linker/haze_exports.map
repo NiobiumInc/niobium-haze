@@ -29,5 +29,10 @@ HAZE_1.0 {
 # Enforced automatically, for every exported symbol (not just the ones any
 # one change touches): scripts/check_symbol_leak.sh diffs the full
 # name@@VERSION set against the golden scripts/haze_symbol_versions.txt, so a
-# symbol landing in the wrong node, or a new node that forgets to update the
-# golden file, fails that check.
+# symbol landing in the wrong node — this one or a later one that forgets to
+# update the golden file — fails that check. hazeGetLastErrorMessage is new
+# here (never shipped in 1.0).
+HAZE_1.1 {
+  global:
+    hazeGetLastErrorMessage;
+} HAZE_1.0;
