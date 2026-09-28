@@ -40,11 +40,12 @@ HAZE_1.0 {
 # becomes a live field (opt_level). A pointed-to struct's layout is part of a
 # function's ABI just as much as its own parameter list, so this is the same
 # "ABI changes under an existing name" case and moves here too.
-# hazeModUpExact is new here.
+# hazeModUpExact and hazeModDownExact are new here.
 HAZE_1.1 {
   global:
     hazeConfigureDevice;
     hazeGetLastErrorMessage;
+    hazeModDownExact;
     hazeModUpExact;
     hazeReplayBridgeInitCryptoContext;
 } HAZE_1.0;

@@ -51,4 +51,14 @@ std::vector<niobium::fhetch::Polynomial> raw_lift(const niobium::fhetch::Polynom
 niobium::fhetch::MRP exact_base_convert(const niobium::fhetch::MRP &x,
                                         const niobium::fhetch::ModuliBase &target_base) noexcept;
 
+// Exact CRT rescale, the exact counterpart of fhetch::rescale_fbc. x holds the
+// residues on x.base() of the integer X in [0, prod x.base()); rescale_base is a
+// proper subset of x.base() with product P. The result holds
+// floor(X / P) mod q for each q of x.base() \ rescale_base, in x.base() order.
+// It peels one rescale prime r at a time, X <- (X - raw_lift(X mod r)) / r at
+// every prime still held, which is floor(X / r) exactly; the peels compose to
+// floor(X / P).
+niobium::fhetch::MRP exact_rescale(const niobium::fhetch::MRP &x,
+                                   const niobium::fhetch::ModuliBase &rescale_base) noexcept;
+
 } // namespace haze
