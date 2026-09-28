@@ -200,6 +200,7 @@ add_library(haze_objs OBJECT
   src/core/device.cpp
   src/core/device_state.cpp
   src/core/epoch.cpp
+  src/core/exact_basis.cpp
   src/core/input_spill.cpp
   src/core/is_half_modulus.cpp
   src/core/materialize.cpp
@@ -492,6 +493,7 @@ add_executable(haze_tests
   test/test_is_half_modulus.cpp
   test/test_broadcast.cpp
   test/test_basis_convert.cpp
+  test/test_exact_basis.cpp
   test/test_mul_rotation.cpp
   test/test_ring_dim_consistency.cpp
   test/test_integration_helpers.cpp
