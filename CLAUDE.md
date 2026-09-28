@@ -122,7 +122,7 @@ binary that gets produced.
 make sync                      # init vendor/niobium-fhetch (recursive)
 make build                     # configure + build (debug; build/ for release)
 make test                      # default: test-unit + test-sim + test-e2e
-                               # + test-isolation + test-readme
+                               # + test-isolation + test-readme + test-package
 make test-unit                 # ~[integration] tag, HAZE_TARGET=local
 make test-sim                  # [integration] tag, in-process FHETCH simulator
 make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
@@ -133,6 +133,8 @@ make test-transport NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
                                # device with HAZE_TRANSPORT_TARGET=<id>
 make test-transport-hw NIOBIUM_COMPILER_ROOT=/path/to/niobium-compiler
                                # same suite against func_sim_hw (Montgomery)
+make test-package              # install to $(BUILD_DIR)/install, then build+run a
+                               # find_package(haze) consumer against it
 make test-all                  # everything including both transport modes
 make clean                     # build, dbuild, OpenFHE outputs (only if owned)
 make help                      # full target list

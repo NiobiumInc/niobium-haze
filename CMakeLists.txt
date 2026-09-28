@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
 project(haze LANGUAGES C CXX VERSION 0.1.0)
 
+# Standard install layout (lib/, include/, lib/cmake/<pkg>/) for the
+# find_package(haze CONFIG) package assembled near the end of this file.
+include(GNUInstallDirs)
+
 # ---------------------------------------------------------------------------
 # niobium-fhetch resolution
 # ---------------------------------------------------------------------------
@@ -42,10 +46,15 @@ if(HAZE_USE_PREBUILT_FHETCH)
     target_link_libraries(Niobium::fhetch INTERFACE Niobium::niobium_fhetch)
   endif()
 elseif(NIOBIUM_HAZE_FHETCH_DIR)
+  # EXCLUDE_FROM_ALL: fhetch's own install() rules (libnbfhetch.a, the
+  # niobium/ headers, its NiobiumFhetch cmake package files, fhetch_sim)
+  # must not land in haze's install tree. niobium_fhetch itself still
+  # builds regardless, since haze depends on it directly.
   add_subdirectory(${NIOBIUM_HAZE_FHETCH_DIR}
-                   ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build)
+                   ${CMAKE_BINARY_DIR}/_deps/niobium-fhetch-build
+                   EXCLUDE_FROM_ALL)
 elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/niobium-fhetch/CMakeLists.txt)
-  add_subdirectory(vendor/niobium-fhetch)
+  add_subdirectory(vendor/niobium-fhetch EXCLUDE_FROM_ALL)
 else()
   message(FATAL_ERROR
     "haze cannot find niobium-fhetch. Either pass "
@@ -257,7 +266,7 @@ set_target_properties(haze PROPERTIES OUTPUT_NAME haze)
 
 target_include_directories(haze PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 find_package(Threads REQUIRED)
@@ -356,6 +365,54 @@ endif()
 if(TARGET niobium_fhetch)
   add_dependencies(haze niobium_fhetch)
 endif()
+
+# ---------------------------------------------------------------------------
+# Install — a real CMake package: find_package(haze CONFIG REQUIRED) + the
+# haze::haze target. libhaze.so absorbs OpenFHE/fhetch statically and hides
+# everything but the haze* C ABI (see the symbol isolation section above),
+# so the installed target's usage requirements are limited to its own public
+# headers and leak neither dependency into a consumer's build.
+# ---------------------------------------------------------------------------
+
+# No DESTINATION clauses: GNUInstallDirs (included above) supplies the
+# default lib/bin destinations for CMake >= 3.14, and no INCLUDES
+# DESTINATION either - haze's own target_include_directories() already
+# declares $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>, so repeating
+# it here would just duplicate that entry in the exported target.
+install(TARGETS haze EXPORT hazeTargets)
+
+# replay_bridge.h ships from its own source tree (the bridge is an OBJECT
+# library with no installed artifact of its own; see replay_bridge/CMakeLists.txt),
+# but consumers should see one include boundary — install it alongside
+# haze's own public headers, under the same <prefix>/include/haze.
+install(FILES
+  include/haze/haze.h
+  include/haze/haze_types.h
+  replay_bridge/include/haze/replay_bridge.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/haze
+)
+
+install(EXPORT hazeTargets
+  NAMESPACE haze::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/haze
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+  cmake/hazeConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/hazeConfig.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/haze
+)
+write_basic_package_version_file(
+  ${CMAKE_CURRENT_BINARY_DIR}/hazeConfigVersion.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion
+)
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/hazeConfig.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/hazeConfigVersion.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/haze
+)
 
 # ---------------------------------------------------------------------------
 # Tests (opt-out)
@@ -507,6 +564,17 @@ if(TARGET niobium_fhetch)
   add_dependencies(haze_tests niobium_fhetch)
 endif()
 
+# COMPONENT tests + EXCLUDE_FROM_ALL: haze_tests is still built by default
+# whenever HAZE_BUILD_TESTS=ON (the option above); only its *install* is
+# opt-in, via `cmake --install . --component tests`, so a plain
+# find_package(haze) consumer's default install does not get it.
+install(TARGETS haze_tests
+  RUNTIME
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT tests
+    EXCLUDE_FROM_ALL
+)
+
 # Test helpers (e.g. test/e2e/ops.hpp's CtxParams) use C++20 designated
 # initializers that omit fields with default member initializers. clang's
 # -Wmissing-field-initializers flags those omissions even though they're
@@ -582,6 +650,14 @@ target_compile_options(haze_e2e_tests PRIVATE -Wno-missing-field-initializers)
 # is left to the global CMAKE_INSTALL_RPATH (the nix build appends the stock lib
 # dir there) so it can also reach the installed libhaze under $ORIGIN/../lib.
 set_target_properties(haze_e2e_tests PROPERTIES BUILD_RPATH "${_stock_openfhe_lib}")
+
+# Same COMPONENT tests + EXCLUDE_FROM_ALL as haze_tests above.
+install(TARGETS haze_e2e_tests
+  RUNTIME
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT tests
+    EXCLUDE_FROM_ALL
+)
 endif() # HAZE_BUILD_E2E_TESTS
 
 # ---------------------------------------------------------------------------
