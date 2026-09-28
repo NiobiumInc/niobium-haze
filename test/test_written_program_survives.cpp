@@ -34,8 +34,7 @@ fs::path arm_bridge() {
     const hazeFheParams fhe = {.ring_dim = kN};
     const hazeReplayConfig replay = {.target = "local"};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ, &picked) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kN, kQ) == HAZE_SUCCESS);
     const fs::path dir = niobium::compiler().get_program_directory();
     REQUIRE(!dir.empty());
     return dir;

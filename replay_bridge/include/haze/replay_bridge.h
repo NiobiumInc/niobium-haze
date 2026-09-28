@@ -23,16 +23,16 @@
 extern "C" {
 #endif
 
-/// Build a CKKS CryptoContext for (ring_dim, desired_modulus), write
-/// cryptocontext.dat, and return the OpenFHE-picked scaffold modulus via
-/// `picked_modulus` (non-null). The scaffold prime is overwritten from the
-/// trace at synthesis and never consulted for results, so callers set the
-/// authoritative primes in hazeFheParams::moduli and only read picked_modulus
-/// for reference. Requires hazeConfigureDevice() first, and must be re-called
-/// after every hazeDeviceReset (setup_integration_compute_config enforces this;
-/// the post-recording hook is cleared by reset).
-HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim, uint64_t desired_modulus,
-                                                       uint64_t *picked_modulus) HAZE_NOEXCEPT;
+/// Build a CKKS CryptoContext for (ring_dim, desired_modulus) and write
+/// cryptocontext.dat. `desired_modulus` only seeds OpenFHE's scaffold
+/// construction; the scaffold prime it picks is overwritten from the trace at
+/// synthesis and never consulted for results — callers set the authoritative
+/// primes in hazeFheParams::moduli, and this call does not report the
+/// scaffold value back. Requires hazeConfigureDevice() first, and must be
+/// re-called after every hazeDeviceReset (setup_integration_compute_config
+/// enforces this; the post-recording hook is cleared by reset).
+HAZE_API hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
+                                                       uint64_t desired_modulus) HAZE_NOEXCEPT;
 
 /// Drop the bridge's cached CryptoContexts so they don't outlive a
 /// hazeDeviceReset; idempotent and safe to call before init.

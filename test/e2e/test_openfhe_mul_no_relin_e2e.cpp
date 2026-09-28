@@ -140,9 +140,7 @@ TEMPLATE_TEST_CASE("openfhe mul-no-relin e2e", "[integration][e2e]", FixedManual
     // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
     const hazeReplayConfig replay = {.reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, base.front(), &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, base.front()) == HAZE_SUCCESS);
 
     INFO("ring_dim=" << ring_dim << " towers=" << base.size());
     REQUIRE(base.size() >= 2);

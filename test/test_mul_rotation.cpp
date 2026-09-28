@@ -82,9 +82,7 @@ struct MrpDriver {
         const uint64_t moduli[] = {kQ0, kQ1, kQ2};
         const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
         REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-        uint64_t picked = 0;
-        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &picked) == HAZE_SUCCESS);
-        REQUIRE(picked != 0);
+        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
         base = {kQ0, kQ1, kQ2};
         return kQ0;
     }

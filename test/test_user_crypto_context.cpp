@@ -65,9 +65,7 @@ TEST_CASE("user CC primes: hazeAddMrp round-trips through FIXEDAUTO", "[integrat
     const hazeFheParams fhe = {
         .ring_dim = kRingDim, .moduli = base.data(), .moduli_count = base.size()};
     REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-    uint64_t picked = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base.front(), &picked) == HAZE_SUCCESS);
-    REQUIRE(picked != 0);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, base.front()) == HAZE_SUCCESS);
 
     // Build per-residue inputs + expected output for hazeAddMrp.
     std::vector<std::vector<uint64_t>> a(3);

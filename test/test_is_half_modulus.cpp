@@ -327,8 +327,7 @@ std::filesystem::path record_ihm_program(const std::string &program_name) {
                                      .program_description = "is_half_modulus trace-shape test",
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
 
     const std::vector<uint64_t> input = boundary_input(kQ0, /*seed=*/404040ULL);
     void *d_src = nullptr;

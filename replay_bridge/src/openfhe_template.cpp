@@ -136,15 +136,6 @@ std::expected<Context, BridgeError> build_context(uint64_t ring_dim,
     return Context{.ring_dim = ring_dim, .cc = std::move(cc)};
 }
 
-// First-tower modulus of `cc`'s chain; throws on an empty chain (defensive —
-// build_context already validates non-empty).
-uint64_t first_tower_modulus(const lbcrypto::CryptoContext<DCRTPoly> &cc) {
-    const auto &params = cc->GetCryptoParameters()->GetElementParams()->GetParams();
-    if (params.empty())
-        throw std::runtime_error("first_tower_modulus: empty element params");
-    return params.front()->GetModulus().ConvertToInt();
-}
-
 // Collapse BridgeError to the coarser C-ABI surface.
 hazeError_t to_haze_error(BridgeError e) {
     switch (e) {
@@ -557,11 +548,7 @@ void clear_stale_replay_artifacts() noexcept {
 } // namespace
 
 extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
-                                                         uint64_t desired_modulus,
-                                                         uint64_t *picked_modulus) noexcept {
-    if (picked_modulus == nullptr)
-        return set_error(HAZE_ERROR_INVALID_VALUE);
-
+                                                         uint64_t desired_modulus) noexcept {
     // Configuration must be finalized (hazeConfigureDevice) first; this pre-init
     // reads the frozen replay config, never the builder.
     if (!haze::config_finalized())
@@ -584,8 +571,6 @@ extern "C" hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
         auto built = build_context(ring_dim, {desired_modulus});
         if (!built)
             return set_error(to_haze_error(built.error()));
-
-        *picked_modulus = first_tower_modulus(built->cc);
 
         niobium::compiler().capture_crypto_context(built->cc);
 
