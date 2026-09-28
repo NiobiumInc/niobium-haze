@@ -35,6 +35,12 @@ namespace haze {
 
 namespace fhetch = niobium::fhetch;
 
+fhetch::Polynomial emit_copy(const fhetch::Polynomial &x, uint64_t modulus) noexcept {
+    auto copy = fhetch::sr_addps(x, fhetch::Scalar::from_int(0), kCopyModulus);
+    fhetch::bind_modulus(copy, modulus);
+    return copy;
+}
+
 void EpochState::ensure_recording_locked() {
     if (recording_)
         return;
@@ -266,21 +272,18 @@ std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr add
 
 std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr dst, DevAddr src,
                                                                       uint64_t modulus) noexcept {
-    // The op carries the COPY sentinel (the executor lowers ADDI imm=0 at modulus-table index
-    // 0 as a register copy); the real modulus rides as metadata, recovered from the source
-    // when the caller passed none.
+    // The copy's modulus is recovered from the source when the caller passed none.
     auto src_poly = lookup_or_create_locked(src);
     if (!src_poly)
         return std::unexpected(src_poly.error());
     if (modulus == kCopyModulus)
         modulus = recorded_modulus_locked(src);
-    auto copy = fhetch::sr_addps(*src_poly, fhetch::Scalar::from_int(0), kCopyModulus);
+    auto copy = emit_copy(*src_poly, modulus);
     if (modulus != kCopyModulus) {
         // Bind the source too (a node only touched by copies would otherwise
         // stay sentinel-bound), and record src's modulus to match the binding
         // so a later copy/automorph of src recovers it.
         fhetch::bind_modulus(*src_poly, modulus);
-        fhetch::bind_modulus(copy, modulus);
         addr_modulus_.insert_or_assign(src, modulus);
     }
     store_compute_result_locked(dst, std::move(copy), modulus);

@@ -417,6 +417,14 @@ HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const
 HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,
                                hazeStream_t stream) HAZE_NOEXCEPT;
 
+// hazeModUpExact: hazeModUp's params (hazeModUpParams), shapes and validation, with exact base
+// extension in place of fast base conversion, which is off by a small multiple of prod B_d. For
+// each digit sub-base B_d, X_d is the unique integer in [0, prod B_d) whose residues on B_d are
+// src's; the output at each prime r of src_base ∪ p_base is X_d mod r, so src itself at B_d's
+// primes. Coefficient form in and out. hazeReplayConfig's reduced_noise does not affect it.
+HAZE_API hazeError_t hazeModUpExact(void *const *dst, const void *const *src, const void *params,
+                                    hazeStream_t stream) HAZE_NOEXCEPT;
+
 // Graph recording and execution mirror CUDA's graph API; every entry currently returns
 // HAZE_ERROR_NOT_SUPPORTED.
 

@@ -35,6 +35,13 @@ namespace haze {
 // "modulus unknown" marker for the addr->modulus tracking below.
 inline constexpr uint64_t kCopyModulus = 0xFFFFFFFFFFFFFFFFULL;
 
+// Records a pass-through copy of x: sr_addps imm=0 at the kCopyModulus sentinel,
+// which the executor lowers as a register copy (modulus-table index 0). The
+// copy's real modulus rides as metadata, bound to `modulus`; kCopyModulus
+// leaves the sentinel binding.
+niobium::fhetch::Polynomial emit_copy(const niobium::fhetch::Polynomial &x,
+                                      uint64_t modulus) noexcept;
+
 class DeviceState;
 class EpochState;
 EpochState &epoch() noexcept; // defined in device_state.cpp

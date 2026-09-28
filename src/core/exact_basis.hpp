@@ -40,4 +40,15 @@ namespace haze {
 std::vector<niobium::fhetch::Polynomial> raw_lift(const niobium::fhetch::Polynomial &v, uint64_t q,
                                                   std::span<const uint64_t> dst_base) noexcept;
 
+// Exact base conversion, the exact counterpart of fhetch::fast_base_convert. x
+// holds the residues on x.base() = (b_0, ..., b_{k-1}) of the integer X in
+// [0, b_0 * ... * b_{k-1}); the result holds X mod r for each r in
+// target_base, in target_base order, and a copy of x at every prime the two
+// bases share. Garner's mixed radix writes X = sum_t y_t * M_t with
+// M_t = b_0 * ... * b_{t-1} and y_t in [0, b_t): each y_t is solved at b_t from
+// the partial sum of the digits before it, then raw_lift carries it to every
+// prime whose sum is still open.
+niobium::fhetch::MRP exact_base_convert(const niobium::fhetch::MRP &x,
+                                        const niobium::fhetch::ModuliBase &target_base) noexcept;
+
 } // namespace haze
