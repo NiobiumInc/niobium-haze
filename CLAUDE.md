@@ -150,6 +150,7 @@ mkdir -p dbuild/runs && cd dbuild/runs
 HAZE_TARGET=local ../haze_tests "[integration]"           # all integration tests
 HAZE_TARGET=local ../haze_tests "hazeAdd: pointwise sum"  # one case by name
 HAZE_TARGET=local ../haze_tests --list-tests              # enumerate
+HAZE_TARGET=local ../haze_tests "[soak]"                  # hidden soak cases, minutes
 ```
 
 Target dispatch is two-tier: `"local"` runs the in-process FHETCH simulator
