@@ -512,8 +512,7 @@ TEST_CASE("bridge honors a custom program name for cryptocontext.dat", "[integra
                                      .program_description = "invariant-review case",
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
 
     const uint64_t q = kQ0;
     auto a = haze::test::make_residue(q, 11, kRingDim);
@@ -549,8 +548,7 @@ TEST_CASE("local flush without cryptocontext.dat fails loudly", "[integration]")
     const hazeReplayConfig fixture_replay = {.target = "local",
                                              .program_name = "haze_missing_cc_fixture_review"};
     REQUIRE(hazeConfigureDevice(&fhe, &fixture_replay) == HAZE_SUCCESS);
-    uint64_t fixture_scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &fixture_scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
     {
         auto a = haze::test::make_residue(kQ0, 3, kRingDim);
         auto devs = haze::test::allocate_and_h2d_residues({a}, {kQ0});
@@ -570,8 +568,7 @@ TEST_CASE("local flush without cryptocontext.dat fails loudly", "[integration]")
     // missing-file check deterministically, not a stale replay.
     const hazeReplayConfig replay = {.target = "local", .program_name = "haze_missing_cc_review"};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
     auto cc_path = fs::path{"haze_missing_cc_review"} / "cryptocontext.dat";
     REQUIRE(fs::exists(cc_path));
     REQUIRE(fs::remove(cc_path));
@@ -686,13 +683,12 @@ TEST_CASE("bridge pre-init requires an explicit configure", "[unit]") {
     // The bridge pre-init reads the frozen replay config via bootstrap_compiler,
     // so it must run after hazeConfigureDevice(); calling it earlier is rejected.
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_ERROR_CONFIGERR);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_ERROR_CONFIGERR);
     hazeGetLastError();
     // After the explicit configure it succeeds.
     const uint64_t moduli[] = {kQ0};
     const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 1};
     REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }

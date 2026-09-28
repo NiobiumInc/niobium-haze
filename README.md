@@ -140,8 +140,7 @@ int main(void) {
     hazeConfigureDevice(&fhe, NULL);
     /* Seed the CryptoContext the local simulator uses to reconstruct values;
        requires the configure above to have run first. */
-    uint64_t picked = 0;
-    hazeReplayBridgeInitCryptoContext(ring_dim, q[0], &picked);
+    hazeReplayBridgeInitCryptoContext(ring_dim, q[0]);
 
     /* ---- Allocate the MRP groups; stage host inputs (a = 1, b = 2). ---- */
     void *d_a[kNumLimbs], *d_b[kNumLimbs], *d_dst[kNumLimbs];
@@ -278,8 +277,7 @@ int main() {
     hazeDeviceReset();
     hazeFheParams fhe = {.ring_dim = N, .moduli = q_base.data(), .moduli_count = towers};
     hazeConfigureDevice(&fhe, nullptr);
-    uint64_t picked = 0;
-    hazeReplayBridgeInitCryptoContext(N, q_base[0], &picked);
+    hazeReplayBridgeInitCryptoContext(N, q_base[0]);
 
     // ---- Stage each ciphertext's (c0, c1) limbs to the device as one MRP group. ----
     auto h2d = [&](const std::vector<std::vector<uint64_t>> &chain) {

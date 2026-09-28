@@ -60,8 +60,7 @@ void setup_chain_config(const std::vector<uint64_t> &moduli) {
         .ring_dim = kRingDim, .moduli = moduli.data(), .moduli_count = moduli.size()};
     const hazeReplayConfig replay = {.target = haze::test::target_from_env(), .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0], &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0]) == HAZE_SUCCESS);
 }
 
 // H2D `vals` and record them under moduli[mod_idx] via a zero-add (the values
@@ -472,8 +471,7 @@ std::string record_broadcast_trace(const std::string &program_name, int in_range
                                      .program_description = "broadcast trace-shape test",
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0], &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0]) == HAZE_SUCCESS);
 
     std::vector<std::vector<uint64_t>> inputs(base.size());
     for (std::size_t i = 0; i < base.size(); ++i)

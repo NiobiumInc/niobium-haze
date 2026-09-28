@@ -83,8 +83,7 @@ inline uint64_t setup_integration_compute_config(uint64_t ring_dim = 4096,
     const hazeFheParams fhe = {.ring_dim = ring_dim, .moduli = moduli, .moduli_count = 1};
     const hazeReplayConfig replay = {.target = target_from_env(), .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus) == HAZE_SUCCESS);
     return modulus;
 }
 
@@ -100,8 +99,7 @@ setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 57646
     const hazeFheParams fhe = {.ring_dim = ring_dim, .moduli = moduli, .moduli_count = 3};
     const hazeReplayConfig replay = {.target = target_from_env(), .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0; // built then overwritten from the trace; not used for results
-    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus, &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(ring_dim, modulus) == HAZE_SUCCESS);
     return {modulus, kQ1, kQ2};
 }
 

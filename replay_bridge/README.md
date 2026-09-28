@@ -92,8 +92,7 @@ The bridge is a pure-C ABI (in
 
 ```c
 hazeError_t hazeReplayBridgeInitCryptoContext(uint64_t ring_dim,
-                                              uint64_t desired_modulus,
-                                              uint64_t *picked_modulus);
+                                              uint64_t desired_modulus);
 void        hazeReplayBridgeReset(void);
 int         hazeReplayBridgeTakeHookHadError(void);
 ```
@@ -104,6 +103,9 @@ needs as scalars + uint64 limbs. `Init` builds the CryptoContext from
 keyswitch keys are extracted to raw limbs caller-side (see
 [`test/openfhe_key_extract.hpp`](../test/openfhe_key_extract.hpp)) and replayed
 through haze's MRP C ABI, so the bridge never touches a caller's OpenFHE objects.
+`desired_modulus` only seeds the scaffold CryptoContext's construction; the
+scaffold prime OpenFHE picks from it is overwritten from the trace at synthesis
+and never consulted for results, so `Init` does not report it back.
 
 Init must be called after every `hazeDeviceReset` (which fires
 `hazeReplayBridgeReset` for you);

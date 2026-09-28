@@ -130,8 +130,7 @@ void configure(const std::string &program_name, const std::vector<uint64_t> &mod
                                      .program_description = "input entry shape test",
                                      .reduced_noise = 1};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    uint64_t scaffold = 0;
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0], &scaffold) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, moduli[0]) == HAZE_SUCCESS);
 }
 
 std::vector<std::vector<uint64_t>> residues_for(const std::vector<uint64_t> &base, uint64_t seed) {

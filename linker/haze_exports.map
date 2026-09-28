@@ -31,8 +31,12 @@ HAZE_1.0 {
 # name@@VERSION set against the golden scripts/haze_symbol_versions.txt, so a
 # symbol landing in the wrong node — this one or a later one that forgets to
 # update the golden file — fails that check. hazeGetLastErrorMessage is new
-# here (never shipped in 1.0).
+# here (never shipped in 1.0). hazeReplayBridgeInitCryptoContext keeps its
+# name but drops its third (picked_modulus) parameter — an ABI break carried
+# under the same name, so it must not also satisfy an old binary's
+# @HAZE_1.0 request.
 HAZE_1.1 {
   global:
     hazeGetLastErrorMessage;
+    hazeReplayBridgeInitCryptoContext;
 } HAZE_1.0;
