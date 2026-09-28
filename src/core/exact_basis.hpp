@@ -1,0 +1,43 @@
+// Copyright (C) 2026, All rights reserved by Niobium Microsystems.
+// The contents of this file and all related materials provided herein (the
+// "Product") may not be used except pursuant to a separate written
+// agreement signed by a duly authorized officer of Niobium Microsystems,
+// Inc. (a "License Agreement").
+// Without limiting the foregoing, you may not, at any time or for any
+// reason, directly or indirectly, in whole or in part: (i) copy, modify,
+// or create derivative works of the Product; (ii) rent, lease, lend, sell,
+// sublicense, assign, distribute, publish, transfer, or otherwise make
+// available the Product; (iii) reverse engineer, disassemble, decompile,
+// decode, or adapt the Product; or (iv) remove any proprietary notices
+// from the Product.
+#pragma once
+
+#include <cstdint>
+#include <niobium/fhetch_api.h>
+#include <span>
+#include <vector>
+
+namespace haze {
+
+// Exact CRT base conversion. fhetch's fast base conversion leaves a small
+// multiple of the source modulus product in every output; the gadgets here
+// reproduce the source integer itself.
+
+// Exact single-prime lift. Each coefficient of v is a residue in [0, q), read
+// as the integer of the same value; the result holds that integer mod p for
+// each p in dst_base, index-aligned. Every p in dst_base differs from q.
+//
+// The recorded chain is, with h = (q-1)/2, sub_scalar(h) at q, then per p
+// emit_centered_switch (add_scalar(h) at q, a cross-prime rebase to p,
+// add_scalar(-h mod p) at p) and add_scalar(h mod p). The two shift pairs
+// cancel, so the lift is exact for any q. They are recorded for the hardware
+// replay driver: its switchmod rule recognizes this shape and replaces it with
+// its own SwitchModulus, while a bare cross-prime rebase has no immediates
+// valid in both data formats and replays only on a driver that re-domains
+// cross-modulus multiplies. A driver may rewrite the chain with other rules
+// too; the recorded trace does not depend on the driver.
+// hazeReplayConfig::reduced_noise does not affect the lift.
+std::vector<niobium::fhetch::Polynomial> raw_lift(const niobium::fhetch::Polynomial &v, uint64_t q,
+                                                  std::span<const uint64_t> dst_base) noexcept;
+
+} // namespace haze
