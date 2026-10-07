@@ -1010,7 +1010,6 @@ TEST_CASE("hazeBasisConvertCentered centers whatever the configured variant", "[
     }
 }
 
-
 TEST_CASE("hazeBasisConvertCentered matches hazeBasisConvert when the configured variant is "
           "already centered",
           "[integration]") {
