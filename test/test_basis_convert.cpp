@@ -1009,3 +1009,62 @@ TEST_CASE("hazeBasisConvertCentered centers whatever the configured variant", "[
         free_all(configured_dst);
     }
 }
+
+
+TEST_CASE("hazeBasisConvertCentered matches hazeBasisConvert when the configured variant is "
+          "already centered",
+          "[integration]") {
+    // ReducedNoise config: hazeBasisConvert already centers via the configured lift, so the two
+    // entry points must agree bit-for-bit -- a regression that accidentally stopped threading
+    // reduced_noise() through basis_convert_centered (e.g. hardcoding Standard) would otherwise
+    // pass unnoticed, since the asymmetric (Standard-config) test above cannot see it.
+    configure_sixteen_moduli(1);
+
+    struct Shape {
+        std::vector<uint64_t> src_base;
+        std::vector<uint64_t> dst_base;
+    };
+    const std::vector<Shape> shapes = {
+        {.src_base = {kBigBase[0]}, .dst_base = {kBigBase[0], kBigBase[1], kBigBase[2]}},
+        {.src_base = {kBigBase[kSrcLimbs - 1]}, .dst_base = {kBigBase[0], kBigBase[1]}},
+        {.src_base = {kBigBase[kSrcLimbs], kBigBase[kSrcLimbs + 1]},
+         .dst_base = {kBigBase[0], kBigBase[1], kBigBase[2]}},
+    };
+    uint64_t seed = 97531ULL;
+    for (const Shape &shape : shapes) {
+        std::vector<std::vector<uint64_t>> residues(shape.src_base.size());
+        for (size_t i = 0; i < shape.src_base.size(); ++i) {
+            residues[i] = make_residue(shape.src_base[i], seed++);
+            for (size_t k = 1; k < residues[i].size(); k += 2)
+                residues[i][k] = shape.src_base[i] - 1 - residues[i][k];
+        }
+        auto src_ptrs = allocate_and_h2d(residues, shape.src_base);
+        std::vector<const void *> src_const_ptrs(src_ptrs.begin(), src_ptrs.end());
+        auto centered_dst = allocate_dst(shape.dst_base.size());
+        auto configured_dst = allocate_dst(shape.dst_base.size());
+
+        hazeBasisConvertParams params{};
+        params.src_base = shape.src_base.data();
+        params.src_base_len = shape.src_base.size();
+        params.dst_base = shape.dst_base.data();
+        params.dst_base_len = shape.dst_base.size();
+        REQUIRE(hazeBasisConvertCentered(centered_dst.data(), src_const_ptrs.data(), &params,
+                                         nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeBasisConvert(configured_dst.data(), src_const_ptrs.data(), &params, nullptr) ==
+                HAZE_SUCCESS);
+        for (void *p : centered_dst)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+        for (void *p : configured_dst)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+        REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+        const auto centered =
+            ref::fast_base_convert(residues, shape.src_base, shape.dst_base, /*centered=*/true);
+        check_against_reference(centered_dst, centered, shape.dst_base);
+        check_against_reference(configured_dst, centered, shape.dst_base);
+
+        free_all(src_ptrs);
+        free_all(centered_dst);
+        free_all(configured_dst);
+    }
+}

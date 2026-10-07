@@ -41,10 +41,6 @@ fhetch::MRP fast_base_convert_centered(const fhetch::MRP &x,
     return fhetch::fast_base_convert(x, target_base, fhetch::FbcVariant::ReducedNoise);
 }
 
-fhetch::MRP rescale_centered(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) {
-    return fhetch::rescale_fbc(x, rescale_base, fhetch::FbcVariant::ReducedNoise);
-}
-
 // FBC under the replay config: centered (fhetch's per-term ThreeOp form) when reduced_noise is
 // set, fhetch's Standard form otherwise.
 fhetch::MRP lift(const fhetch::MRP &x, const fhetch::ModuliBase &target_base) {
@@ -54,9 +50,9 @@ fhetch::MRP lift(const fhetch::MRP &x, const fhetch::ModuliBase &target_base) {
 }
 
 fhetch::MRP rescale(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) {
-    if (replay_config().reduced_noise())
-        return rescale_centered(x, rescale_base);
-    return fhetch::rescale_fbc(x, rescale_base, fhetch::FbcVariant::Standard);
+    const auto variant = replay_config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
+                                                         : fhetch::FbcVariant::Standard;
+    return fhetch::rescale_fbc(x, rescale_base, variant);
 }
 
 // Validation helpers; each returns InvalidArgument with a debug-log
