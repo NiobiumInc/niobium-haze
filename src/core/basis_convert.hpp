@@ -28,6 +28,11 @@ namespace haze {
 std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
                                                      const hazeBasisConvertParams &params) noexcept;
 
+// basis_convert with the centered conversion whatever the configured FBC variant.
+std::expected<void, HazeInternalError>
+basis_convert_centered(void *const *dst, const void *const *src,
+                       const hazeBasisConvertParams &params) noexcept;
+
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
                                                 const hazeModDownParams &params) noexcept;
 
