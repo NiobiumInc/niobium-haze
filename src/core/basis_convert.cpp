@@ -33,12 +33,30 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// FBC mode from engine config: reduced_noise selects the centered variant. The
-// center shape stays fhetch's ThreeOp default, which the hardware replay
-// driver's switchmod matcher recognizes just as well as the 4-op form.
-fhetch::FbcVariant fbc_variant() noexcept {
-    return replay_config().reduced_noise() ? fhetch::FbcVariant::ReducedNoise
-                                           : fhetch::FbcVariant::Standard;
+// Always-centered FBC/rescale, whatever the configured variant: fhetch's own per-term
+// ThreeOp centering (center_mod_q_into_p) — the shape the hardware replay driver's switchmod
+// matcher recognizes.
+fhetch::MRP fast_base_convert_centered(const fhetch::MRP &x,
+                                       const fhetch::ModuliBase &target_base) {
+    return fhetch::fast_base_convert(x, target_base, fhetch::FbcVariant::ReducedNoise);
+}
+
+fhetch::MRP rescale_centered(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) {
+    return fhetch::rescale_fbc(x, rescale_base, fhetch::FbcVariant::ReducedNoise);
+}
+
+// FBC under the replay config: centered (fhetch's per-term ThreeOp form) when reduced_noise is
+// set, fhetch's Standard form otherwise.
+fhetch::MRP lift(const fhetch::MRP &x, const fhetch::ModuliBase &target_base) {
+    if (replay_config().reduced_noise())
+        return fast_base_convert_centered(x, target_base);
+    return fhetch::fast_base_convert(x, target_base, fhetch::FbcVariant::Standard);
+}
+
+fhetch::MRP rescale(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) {
+    if (replay_config().reduced_noise())
+        return rescale_centered(x, rescale_base);
+    return fhetch::rescale_fbc(x, rescale_base, fhetch::FbcVariant::Standard);
 }
 
 // Validation helpers; each returns InvalidArgument with a debug-log
@@ -144,9 +162,9 @@ std::expected<void, HazeInternalError> validate(const hazeModUpParams &p) noexce
     return {};
 }
 
-} // namespace
-
-std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
+// hazeBasisConvert's recording, with the conversion itself supplied by the caller.
+template <auto ConvertFn>
+std::expected<void, HazeInternalError> convert_basis(void *const *dst, const void *const *src,
                                                      const hazeBasisConvertParams &p) noexcept {
     if (auto v = validate(p); !v) {
         return v;
@@ -162,12 +180,23 @@ std::expected<void, HazeInternalError> basis_convert(void *const *dst, const voi
     }
 
     const fhetch::ModuliBase target_base(p.dst_base, p.dst_base + p.dst_base_len);
-    // Thread config()'s FBC variant (matching mod_down/mod_up) rather than the
-    // 2-arg fast_base_convert default (ReducedNoise): with reduced_noise off this
-    // Standard lift composes byte-for-byte against a split rescale/keyswitch
-    // mod-down, and with it on tracks the centered variant automatically.
-    fhetch::MRP result = fhetch::fast_base_convert(*src_mrp, target_base, fbc_variant());
+    fhetch::MRP result = ConvertFn(*src_mrp, target_base);
     return store_mrp_locked(dst, result, p.dst_base, p.dst_base_len);
+}
+
+} // namespace
+
+std::expected<void, HazeInternalError> basis_convert(void *const *dst, const void *const *src,
+                                                     const hazeBasisConvertParams &p) noexcept {
+    // The configured lift (matching mod_down/mod_up), so a split keyswitch mod-down composes
+    // byte-for-byte against hazeModDown under either variant.
+    return convert_basis<lift>(dst, src, p);
+}
+
+std::expected<void, HazeInternalError>
+basis_convert_centered(void *const *dst, const void *const *src,
+                       const hazeBasisConvertParams &p) noexcept {
+    return convert_basis<fast_base_convert_centered>(dst, src, p);
 }
 
 std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *const *src,
@@ -186,7 +215,7 @@ std::expected<void, HazeInternalError> mod_down(void *const *dst, const void *co
     }
 
     const fhetch::ModuliBase rescale_base(p.rescale_base, p.rescale_base + p.rescale_base_len);
-    fhetch::MRP result = fhetch::rescale_fbc(*src_mrp, rescale_base, fbc_variant());
+    fhetch::MRP result = rescale(*src_mrp, rescale_base);
     // result.base() == src_base \ rescale_base in original order; use it directly
     // so HAZE-side and backend-side agree on the dst layout.
     const auto &dst_base = result.base();
@@ -219,18 +248,14 @@ std::expected<void, HazeInternalError> mod_up(void *const *dst, const void *cons
 
     const fhetch::ModuliBase p_base(p.p_base, p.p_base + p.p_base_len);
 
-    // Open-code fhetch::dig_decomp so the per-digit lift follows the configured FBC
-    // variant. dig_decomp hardcodes FbcVariant::ReducedNoise (centered), but mod_down and
-    // basis_convert thread the replay config's fbc_variant(); mod_up must too, otherwise
-    // reduced_noise cannot toggle the keyswitch mod-up and a non-reduced-noise context gets a
-    // mismatched (always-centered) digit decomposition. The per-digit target is src_base ∪ p_base
-    // (Q∥P), exactly as dig_decomp builds it, and each lifted digit's base equals that target.
+    // Open-code fhetch::dig_decomp, which hardcodes the per-term centered FBC, so each digit
+    // takes the configured lift. The per-digit target is src_base + p_base (Q||P), as in
+    // dig_decomp.
     const fhetch::MRP &x = *src_mrp;
     fhetch::ModuliBase target_base = x.base();
     target_base.insert(target_base.end(), p_base.begin(), p_base.end());
     for (size_t d = 0; d < p.digit_count; ++d) {
-        const fhetch::MRP digit = fhetch::fast_base_convert(fhetch::mr_subset(x, digit_bases[d]),
-                                                            target_base, fbc_variant());
+        const fhetch::MRP digit = lift(fhetch::mr_subset(x, digit_bases[d]), target_base);
         const auto &d_base = digit.base();
         auto stored =
             store_mrp_locked(dst + (d * d_base.size()), digit, d_base.data(), d_base.size());

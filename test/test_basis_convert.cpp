@@ -547,12 +547,11 @@ constexpr uint64_t kBigBase[kSrcLimbs + kPLimbs] = {
 // The picked modulus is intentionally not realigned; the trace's
 // modulus_table carries the real kBigBase[i] values from the recorded
 // sr_* ops.
-void configure_sixteen_moduli() {
+void configure_sixteen_moduli(int reduced_noise) {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
     const hazeFheParams fhe = {
         .ring_dim = kRingDim, .moduli = kBigBase, .moduli_count = kSrcLimbs + kPLimbs};
-    const hazeReplayConfig replay = {.reduced_noise = 1};
+    const hazeReplayConfig replay = {.reduced_noise = reduced_noise};
     REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
     uint64_t picked = 0;
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kBigBase[0], &picked) == HAZE_SUCCESS);
@@ -602,7 +601,8 @@ using lbcrypto::BigInteger;
 // invariant.
 std::vector<std::vector<uint64_t>>
 fast_base_convert(const std::vector<std::vector<uint64_t>> &residues,
-                  const std::vector<uint64_t> &src_base, const std::vector<uint64_t> &dst_base) {
+                  const std::vector<uint64_t> &src_base, const std::vector<uint64_t> &dst_base,
+                  bool centered) {
     const size_t k = src_base.size();
 
     BigInteger Q(1);
@@ -647,7 +647,7 @@ fast_base_convert(const std::vector<std::vector<uint64_t>> &residues,
             BigInteger acc(0);
             for (size_t i = 0; i < k; ++i) {
                 BigInteger scaled_at_p;
-                if (kReducedNoise && scaled[i] > halfQ[i]) {
+                if (centered && scaled[i] > halfQ[i]) {
                     // Signed rebase: scaled[i] - q_i (negative) reduced mod p,
                     // expressed positively as (scaled mod p + p - q_i mod p) mod p.
                     const BigInteger qi_mod_p = BigInteger(src_base[i]).Mod(pp);
@@ -690,7 +690,7 @@ std::vector<std::vector<uint64_t>> rescale_fbc(const std::vector<std::vector<uin
     for (size_t i = 0; i < rescale_base.size(); ++i) {
         rescale_residues[i] = residues[rescale_src_idx[i]];
     }
-    auto lifted = fast_base_convert(rescale_residues, rescale_base, target_base);
+    auto lifted = fast_base_convert(rescale_residues, rescale_base, target_base, kReducedNoise);
 
     std::vector<std::vector<uint64_t>> out(target_base.size(), std::vector<uint64_t>(kRingDim, 0));
     for (size_t j = 0; j < target_base.size(); ++j) {
@@ -737,7 +737,7 @@ std::vector<std::vector<std::vector<uint64_t>>> dig_decomp(
             const auto src_idx = static_cast<size_t>(it - src_base.begin());
             d_residues[i] = residues[src_idx];
         }
-        out[d] = fast_base_convert(d_residues, digit_bases[d], target_base);
+        out[d] = fast_base_convert(d_residues, digit_bases[d], target_base, kReducedNoise);
     }
     return out;
 }
@@ -801,7 +801,8 @@ void check_against_reference(const std::vector<void *> &dst,
 } // namespace
 
 TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[integration]") {
-    configure_sixteen_moduli();
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    configure_sixteen_moduli(1);
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
     // dst_base is the four extension primes — none of them overlap
@@ -831,7 +832,7 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[int
         REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
     REQUIRE(hazeFlush() == HAZE_SUCCESS);
 
-    auto expected = ref::fast_base_convert(residues, src_base, dst_base);
+    auto expected = ref::fast_base_convert(residues, src_base, dst_base, ref::kReducedNoise);
     check_against_reference(dst_ptrs, expected, dst_base);
 
     free_all(src_ptrs);
@@ -839,7 +840,8 @@ TEST_CASE("hazeBasisConvert: 12-limb fast base convert matches reference", "[int
 }
 
 TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
-    configure_sixteen_moduli();
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    configure_sixteen_moduli(1);
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
     // Drop the last two src primes — typical CKKS rescale pattern (two
@@ -879,7 +881,8 @@ TEST_CASE("hazeModDown: 12-limb rescale matches reference", "[integration]") {
 }
 
 TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") {
-    configure_sixteen_moduli();
+    // Match the ReducedNoise reference oracle (WITH_REDUCED_NOISE OpenFHE).
+    configure_sixteen_moduli(1);
 
     const std::vector<uint64_t> src_base(kBigBase, kBigBase + kSrcLimbs);
     const std::vector<uint64_t> p_base(kBigBase + kSrcLimbs, kBigBase + kSrcLimbs + kPLimbs);
@@ -945,4 +948,64 @@ TEST_CASE("hazeModUp: 12-limb digit-decomp matches reference", "[integration]") 
 
     free_all(src_ptrs);
     free_all(dst_ptrs);
+}
+
+TEST_CASE("hazeBasisConvertCentered centers whatever the configured variant", "[integration]") {
+    // Standard config: hazeBasisConvert must stay uncentered while the centered entry point,
+    // used for OpenFHE's rescale and ModRaise, still centers. The {q0} -> {q0, q1, ...} shape
+    // is a ModRaise (q0 passes through) and {q_last} -> rest is a one-tower rescale lift.
+    configure_sixteen_moduli(0);
+
+    struct Shape {
+        std::vector<uint64_t> src_base;
+        std::vector<uint64_t> dst_base;
+    };
+    const std::vector<Shape> shapes = {
+        {.src_base = {kBigBase[0]}, .dst_base = {kBigBase[0], kBigBase[1], kBigBase[2]}},
+        {.src_base = {kBigBase[kSrcLimbs - 1]}, .dst_base = {kBigBase[0], kBigBase[1]}},
+        {.src_base = {kBigBase[kSrcLimbs], kBigBase[kSrcLimbs + 1]},
+         .dst_base = {kBigBase[0], kBigBase[1], kBigBase[2]}},
+    };
+    uint64_t seed = 31337ULL;
+    for (const Shape &shape : shapes) {
+        std::vector<std::vector<uint64_t>> residues(shape.src_base.size());
+        for (size_t i = 0; i < shape.src_base.size(); ++i) {
+            residues[i] = make_residue(shape.src_base[i], seed++);
+            // make_residue stays far below q/2; mirror every other slot into the upper half.
+            for (size_t k = 1; k < residues[i].size(); k += 2)
+                residues[i][k] = shape.src_base[i] - 1 - residues[i][k];
+        }
+        auto src_ptrs = allocate_and_h2d(residues, shape.src_base);
+        std::vector<const void *> src_const_ptrs(src_ptrs.begin(), src_ptrs.end());
+        auto centered_dst = allocate_dst(shape.dst_base.size());
+        auto configured_dst = allocate_dst(shape.dst_base.size());
+
+        hazeBasisConvertParams params{};
+        params.src_base = shape.src_base.data();
+        params.src_base_len = shape.src_base.size();
+        params.dst_base = shape.dst_base.data();
+        params.dst_base_len = shape.dst_base.size();
+        REQUIRE(hazeBasisConvertCentered(centered_dst.data(), src_const_ptrs.data(), &params,
+                                         nullptr) == HAZE_SUCCESS);
+        REQUIRE(hazeBasisConvert(configured_dst.data(), src_const_ptrs.data(), &params, nullptr) ==
+                HAZE_SUCCESS);
+        for (void *p : centered_dst)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+        for (void *p : configured_dst)
+            REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+        REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+        const auto centered =
+            ref::fast_base_convert(residues, shape.src_base, shape.dst_base, /*centered=*/true);
+        const auto uncentered =
+            ref::fast_base_convert(residues, shape.src_base, shape.dst_base, /*centered=*/false);
+        // The two oracles must disagree, or this shape cannot tell the variants apart.
+        REQUIRE(centered != uncentered);
+        check_against_reference(centered_dst, centered, shape.dst_base);
+        check_against_reference(configured_dst, uncentered, shape.dst_base);
+
+        free_all(src_ptrs);
+        free_all(centered_dst);
+        free_all(configured_dst);
+    }
 }

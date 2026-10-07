@@ -39,6 +39,12 @@ extern "C" hazeError_t hazeBasisConvert(void *const *dst, const void *const *src
     return dispatch<hazeBasisConvertParams, haze::basis_convert>(dst, src, params);
 }
 
+extern "C" hazeError_t hazeBasisConvertCentered(void *const *dst, const void *const *src,
+                                                const void *params,
+                                                hazeStream_t /*stream*/) noexcept {
+    return dispatch<hazeBasisConvertParams, haze::basis_convert_centered>(dst, src, params);
+}
+
 extern "C" hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
                                    hazeStream_t /*stream*/) noexcept {
     return dispatch<hazeModDownParams, haze::mod_down>(dst, src, params);

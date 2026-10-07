@@ -363,6 +363,11 @@ HAZE_API hazeError_t hazeRotAutomorphCoeffMrp(void *const *dst, const void *cons
 
 HAZE_API hazeError_t hazeBasisConvert(void *const *dst, const void *const *src, const void *params,
                                       hazeStream_t stream) HAZE_NOEXCEPT;
+// hazeBasisConvert with the centered conversion whatever hazeReplayConfig::reduced_noise says,
+// as OpenFHE's rescale and bootstrap ModRaise always center (SwitchModulus).
+HAZE_API hazeError_t hazeBasisConvertCentered(void *const *dst, const void *const *src,
+                                              const void *params,
+                                              hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeModDown(void *const *dst, const void *const *src, const void *params,
                                  hazeStream_t stream) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeModUp(void *const *dst, const void *const *src, const void *params,

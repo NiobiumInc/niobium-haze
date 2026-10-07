@@ -151,7 +151,7 @@ typedef struct {
 // holds `uint64_t` primes matching those passed in hazeFheParams::moduli; polynomial
 // pointers travel via the matching function's `dst` / `src` arguments, never inside the struct.
 
-// hazeBasisConvert: convert an MRP from src_base to dst_base.
+// hazeBasisConvert / hazeBasisConvertCentered: convert an MRP from src_base to dst_base.
 //   src: array of src_base_len input poly pointers.
 //   dst: array of dst_base_len output poly pointers.
 typedef struct {
