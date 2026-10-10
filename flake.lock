@@ -53,17 +53,17 @@
     "openfhe-stock-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1775844454,
-        "narHash": "sha256-BBHhnn5uQEsoUDPwFhe32oRDs5xJqh/YyUD5nd+hfp8=",
-        "ref": "refs/tags/v1.5.1",
-        "rev": "1306d14f8c26bb6150d3e6ad54f28dfe1007689e",
-        "revCount": 770,
+        "lastModified": 1791570212,
+        "narHash": "sha256-o+7jbsGEkeyQ/GTWK3BkyKc1su04mxMaBhpM6oQ/6ck=",
+        "ref": "refs/tags/v1.6.1",
+        "rev": "b59e1f291965f14fbee5172cd83a20f5b856204f",
+        "revCount": 849,
         "submodules": true,
         "type": "git",
         "url": "https://github.com/openfheorg/openfhe-development.git"
       },
       "original": {
-        "ref": "refs/tags/v1.5.1",
+        "ref": "refs/tags/v1.6.1",
         "submodules": true,
         "type": "git",
         "url": "https://github.com/openfheorg/openfhe-development.git"
