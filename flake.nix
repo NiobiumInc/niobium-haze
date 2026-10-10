@@ -23,7 +23,7 @@
     # gates that its rev matches the one pinned here, and the daily openfhe-bump
     # workflow updates both together.
     openfhe-stock-src = {
-      url = "git+https://github.com/openfheorg/openfhe-development.git?ref=refs/tags/v1.5.1&submodules=1";
+      url = "git+https://github.com/openfheorg/openfhe-development.git?ref=refs/tags/v1.6.1&submodules=1";
       flake = false;
     };
 
