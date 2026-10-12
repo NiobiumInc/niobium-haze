@@ -368,6 +368,45 @@ TEST_CASE("recorded outputs: a non-grouped output keeps its own probe", "[integr
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
 
+// A result at the last level of the chain has one limb. It is still an MRP
+// result, so it exports as a group like any other, never as haze_out_<n>.
+TEST_CASE("recorded outputs: a one-limb MRP compute result emits one group entry",
+          "[integration]") {
+    const std::vector<uint64_t> base = {kQ0};
+    const auto dir = record_one_group("haze_outputs_one_limb", base);
+    const auto names = output_names(dir, "haze_outputs_one_limb");
+
+    REQUIRE(count_with_prefix(names, "haze_mrp_out_") == 1);
+    REQUIRE(count_with_prefix(names, "haze_out_") == 0);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
+TEST_CASE("recorded inputs: a single-tower upload still feeds a one-limb MRP op", "[integration]") {
+    // Grouping one-limb outputs leaves the input side alone: a plain
+    // modulus-less upload (plaintext, scalar, key material) is still accepted.
+    const std::vector<uint64_t> base = {kQ0};
+    configure("haze_inputs_single_tower_mrp", base);
+    const auto src = haze::test::allocate_and_h2d_residues(residues_for(base, 0xB0B0ULL));
+    const auto dst = haze::test::allocate_dst_residues(base.size(), kBytes);
+    REQUIRE(hazeAddMrp(dst.data(), haze::test::to_const(src).data(),
+                       haze::test::to_const(src).data(), base.data(), base.size(),
+                       nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(dst[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
+
+    const std::filesystem::path dir{"haze_inputs_single_tower_mrp"};
+    const auto entries = read_manifest(dir, "haze_inputs_single_tower_mrp");
+    REQUIRE(count_prefixed(entries, "haze_in_") == 1);
+    REQUIRE(count_prefixed(entries, "haze_mrp_in_") == 0);
+    const auto names = output_names(dir, "haze_inputs_single_tower_mrp");
+    REQUIRE(count_with_prefix(names, "haze_mrp_out_") == 1);
+    REQUIRE(count_with_prefix(names, "haze_out_") == 0);
+
+    haze::test::free_all_residues(src);
+    haze::test::free_all_residues(dst);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+}
+
 TEST_CASE("recorded outputs: every residue of a grouped output is still populated",
           "[integration]") {
     // Readback moved to the group's MRP probe, so a missed residue would surface

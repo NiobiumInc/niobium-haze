@@ -301,7 +301,7 @@ TEST_CASE("hazeMemcpyMrp(D2D) from a never-written source returns SOURCE_UNAVAIL
     haze::test::free_all_residues(src);
 }
 
-TEST_CASE("hazeMemcpyMrp(D2D) with base_len 1 copies without registering a group",
+TEST_CASE("hazeMemcpyMrp(D2D) with base_len 1 copies and registers a one-limb group",
           "[integration]") {
     const uint64_t q = haze::test::setup_integration_compute_config();
     const auto residue = haze::test::make_residue(q, /*seed=*/11, kRingDim);
@@ -323,6 +323,9 @@ TEST_CASE("hazeMemcpyMrp(D2D) with base_len 1 copies without registering a group
     std::vector<uint64_t> out(kRingDim);
     REQUIRE(hazeMemcpy(out.data(), dst, kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) == HAZE_SUCCESS);
     REQUIRE(out == residue);
+
+    // Read back through the one-limb group, as a multi-limb copy is.
+    haze::test::check_mrp_against_per_residue({q}, {residue});
 
     REQUIRE(hazeFree(dst) == HAZE_SUCCESS);
     REQUIRE(hazeFree(src) == HAZE_SUCCESS);

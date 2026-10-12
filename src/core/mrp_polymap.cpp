@@ -117,11 +117,9 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
         epoch().store_compute_result_locked(a, mrp[base[i]], base[i]);
         addrs.push_back(a);
     }
-    if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(addrs.front());
-        return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
-    }
-    return {};
+    // Group even a one-limb result, so every MRP output exports as haze_mrp_out_<m>.
+    auto group_name = epoch().mrp_group_name_locked(addrs.front());
+    return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
 }
 
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
@@ -197,11 +195,8 @@ copy_device_to_device_mrp(void *const *dst, const void *const *src, std::size_t 
             return copied;
         addrs.push_back(d);
     }
-    if (len > 1) {
-        auto group_name = epoch().mrp_group_name_locked(addrs.front());
-        return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
-    }
-    return {};
+    auto group_name = epoch().mrp_group_name_locked(addrs.front());
+    return epoch().record_mrp_group_locked(addrs, std::span(base, len), std::move(group_name));
 }
 
 } // namespace haze
