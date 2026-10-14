@@ -114,6 +114,29 @@ setup_integration_mrp3_config(uint64_t ring_dim = 4096, uint64_t modulus = 57646
     return {modulus, kQ1, kQ2};
 }
 
+// One pointwise add, tagged and flushed: enough to drive a real replay when
+// the configured target is non-local (or exercise the recording-and-flush
+// path on "local"). The operands are arbitrary -- this exists to exercise
+// the dispatch, not to check arithmetic.
+inline void run_minimal_add(uint64_t ring_dim) {
+    const std::size_t bytes = ring_dim * sizeof(uint64_t);
+    void *a = nullptr;
+    void *b = nullptr;
+    void *c = nullptr;
+    REQUIRE(hazeMalloc(&a, bytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&b, bytes) == HAZE_SUCCESS);
+    REQUIRE(hazeMalloc(&c, bytes) == HAZE_SUCCESS);
+    const std::vector<uint64_t> data(ring_dim, 3);
+    REQUIRE(hazeMemcpy(a, data.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeMemcpy(b, data.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
+    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
+    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
+}
+
 // a + b mod q for a, b in [0, q): one conditional subtract, no overflow for
 // q < 2^63 (all suite primes qualify).
 inline uint64_t add_mod(uint64_t a, uint64_t b, uint64_t q) {

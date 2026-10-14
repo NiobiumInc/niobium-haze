@@ -18,10 +18,10 @@
 // rejection case lives in test_config.cpp beside the other "hazeConfigureDevice
 // rejects ..." cases.
 
+#include "filesystem_helpers.hpp"
 #include "integration_helpers.hpp"
 
 #include <catch2/catch_test_macros.hpp>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -33,7 +33,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -42,21 +41,14 @@ namespace {
 constexpr uint64_t kRingDim = 4096;
 constexpr uint64_t kModulus = 576460752303415297ULL; // standard CKKS test prime (see
                                                      // integration_helpers.hpp)
-constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 
 // Configures a single-prime SRP context at the given opt_level, pinned to a
-// dedicated project directory (fs::temp_directory_path(), matching
-// test_replay_bridge_program_dir.cpp) so this case's project can't collide
-// with another case's default cwd/haze. Removes any stale directory from a
-// prior run of the SAME case_name first, so a leftover file from an earlier
-// (possibly failing) run can't make fs::exists succeed for the wrong reason.
-// Returns the project directory.
+// dedicated, unique project directory (haze::test::make_unique_temp_dir) so
+// this case's project can't collide with another case's default cwd/haze,
+// or with a leftover from an earlier run. Returns the project directory.
 fs::path configure_with_opt_level(int opt_level, std::string_view case_name) {
     const fs::path dir =
-        fs::temp_directory_path() / ("haze_opt_level_test_" + std::string(case_name));
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-    REQUIRE(fs::create_directories(dir, ec));
+        haze::test::make_unique_temp_dir("haze_opt_level_test_" + std::string(case_name));
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const uint64_t moduli[] = {kModulus};
@@ -68,27 +60,6 @@ fs::path configure_with_opt_level(int opt_level, std::string_view case_name) {
     // A non-local flush fails without the CryptoContext the bridge captures.
     REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kModulus) == HAZE_SUCCESS);
     return dir;
-}
-
-// One pointwise add, tagged and flushed: enough to drive a real replay
-// through the compiler. This suite checks the replay's reported optimization
-// level, not the arithmetic, so the operands are arbitrary.
-void run_minimal_add() {
-    void *a = nullptr;
-    void *b = nullptr;
-    void *c = nullptr;
-    REQUIRE(hazeMalloc(&a, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&b, kBytes) == HAZE_SUCCESS);
-    REQUIRE(hazeMalloc(&c, kBytes) == HAZE_SUCCESS);
-    const std::vector<uint64_t> data(kRingDim, 3);
-    REQUIRE(hazeMemcpy(a, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeMemcpy(b, data.data(), kBytes, HAZE_MEMCPY_HOST_TO_DEVICE) == HAZE_SUCCESS);
-    REQUIRE(hazeAdd(c, a, b, 0, nullptr) == HAZE_SUCCESS);
-    REQUIRE(hazeTagOutput(c) == HAZE_SUCCESS);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
-    REQUIRE(hazeFree(a) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(b) == HAZE_SUCCESS);
-    REQUIRE(hazeFree(c) == HAZE_SUCCESS);
 }
 
 // nbcc_fhetch_replay's per-project secondary work (including
@@ -156,7 +127,7 @@ TEST_CASE("opt_level reaches the compiler-side replay, independent of prior stat
     for (const OptLevelCase &c : {OptLevelCase{.level = 3, .case_name = "o3", .want = "O3"},
                                   OptLevelCase{.level = 0, .case_name = "o0", .want = "O0"}}) {
         const fs::path dir = configure_with_opt_level(c.level, c.case_name);
-        run_minimal_add();
+        haze::test::run_minimal_add(kRingDim);
 
         if (!http) {
             const fs::path stats = stats_path_for(dir);
