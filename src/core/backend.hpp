@@ -78,11 +78,11 @@ class CompilerBackend {
     // directory are current NOW rather than what this session actually used.
     [[nodiscard]] std::filesystem::path reset() noexcept HAZE_EXCLUDES(init_mutex_);
 
-    // The vendor compiler's active program directory, for callers (the spill store
-    // activation site) that need it without including compiler.h themselves. Wraps
-    // a vendor call that can throw; a caught throw becomes BackendInitFailed.
-    [[nodiscard]] static std::expected<std::filesystem::path, HazeInternalError>
-    program_directory() noexcept;
+    // The absolute, weakly canonical program directory this session brought up
+    // (recorded_program_directory_), for the spill store activation site: empty
+    // until a successful ensure_initialized() and again after reset(). Takes
+    // init_mutex_.
+    [[nodiscard]] std::filesystem::path program_directory() noexcept HAZE_EXCLUDES(init_mutex_);
 
     CompilerBackend(const CompilerBackend &) = delete;
     CompilerBackend &operator=(const CompilerBackend &) = delete;
@@ -96,23 +96,19 @@ class CompilerBackend {
     std::atomic<bool> initialized_{false};
     HazeMutex init_mutex_;
 
-    // Records which program directory THIS SESSION brought up: the exact
-    // path config.cpp resolved and pinned into the vendor compiler at
-    // configure time (see ensure_initialized(), which just copies it back
-    // from the compiler -- no resolution of its own is needed there).
-    // Whenever hazeReplayConfig::remove_program_directory was set,
-    // ReplayConfig::create already resolved this with
-    // std::filesystem::canonical() before bring-up -- absolute, with every
-    // symlink in every component fully resolved and no lexical fallback --
-    // so there is no working-directory-dependent resolution left for
-    // anything downstream to get wrong. A live re-query
-    // (niobium::compiler().get_program_directory(), wrapped by
-    // program_directory() below) is not used here instead: it can throw
-    // when queried before this session's own ensure_initialized() ever ran
-    // (program_directory() itself catches that and returns
-    // BackendInitFailed), whereas this member is a plain
-    // std::filesystem::path -- always valid, empty until a bring-up
-    // completes -- with nothing for reset()'s teardown path to catch.
+    // Records which program directory THIS SESSION brought up: the path
+    // config.cpp pinned into the vendor compiler at configure time, made
+    // absolute and weakly canonical by ensure_initialized(). Whenever
+    // hazeReplayConfig::remove_program_directory was set, ReplayConfig::create
+    // already resolved it with std::filesystem::canonical() before bring-up --
+    // every symlink in every component fully resolved, no lexical fallback --
+    // so no working-directory-dependent resolution is left for anything
+    // downstream to get wrong. A live re-query
+    // (niobium::compiler().get_program_directory()) is not used instead: it
+    // can throw when queried before this session's own ensure_initialized()
+    // ever ran, and it answers for whatever working directory is current now,
+    // whereas this member is a plain std::filesystem::path -- always valid,
+    // empty until a bring-up completes -- with nothing for teardown to catch.
     // reset() hands it back via std::exchange and clears it.
     std::filesystem::path recorded_program_directory_ HAZE_GUARDED_BY(init_mutex_);
 };

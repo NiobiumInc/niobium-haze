@@ -456,16 +456,18 @@ CUDA-shape parity but do not flush and do not model ordering.
 ### Input spill store
 
 `InputSpillStore` (`src/core/input_spill.{hpp,cpp}`) holds each live tagged
-input's residue as an address-keyed file (`addr_<hex>.spill`) under
-`<program dir parent>/haze_input_spill`, written at H2D tag time so a
-pre-flush D2H of that address is served from disk instead of the (evicted)
-shadow. Per-recording name snapshots are hardlinks taken at tag time
-(`bind_name`) and are what feed the replay bridge; `put()` always writes then
-renames, so a re-upload lands on a fresh inode and an existing hardlink keeps
-referencing the bytes it had at snapshot time. Entries are erased on
-overwrite, memset, or free, and the whole store is cleared at device reset —
-the recording arena's `fhetch::Polynomial` for a tagged input holds no
-residue bytes of its own, metadata only.
+input's residue as an address-keyed file (`addr_<hex>.spill`) under the root
+`InputSpillStore::root_for` names, the program dir's sibling
+`<parent>/<name>.haze_input_spill`, written at H2D tag time so a pre-flush D2H
+of that address is served from disk instead of the (evicted) shadow. Reset
+removes the whole root, so it is named after the program dir: processes with
+distinct program dirs never share one. Per-recording name snapshots are
+hardlinks taken at tag time (`bind_name`) and are what feed the replay bridge;
+`put()` always writes then renames, so a re-upload lands on a fresh inode and
+an existing hardlink keeps referencing the bytes it had at snapshot time.
+Entries are erased on overwrite, memset, or free, and the whole store is
+cleared at device reset — the recording arena's `fhetch::Polynomial` for a
+tagged input holds no residue bytes of its own, metadata only.
 
 Every `hazeMalloc` allocation must equal the configured polynomial size
 (`ring_dim * sizeof(uint64_t)`). `hazeConfigureDevice` is required before

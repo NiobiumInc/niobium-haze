@@ -26,6 +26,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -38,6 +39,7 @@ namespace {
 constexpr uint32_t kMagic = 0x485A5350;
 constexpr uint32_t kVersion = 2;
 constexpr std::size_t kHeaderBytes = (sizeof(uint32_t) * 2) + sizeof(uint64_t);
+constexpr std::string_view kRootSuffix = ".haze_input_spill";
 
 // Shared file shape for both addr- and name-scoped records: magic, version, ring_dim,
 // then ring_dim u64 values. Returns false (path already removed) on any write failure.
@@ -92,6 +94,14 @@ bool is_single_path_component(const std::string &name) {
 }
 
 } // namespace
+
+std::filesystem::path InputSpillStore::root_for(const std::filesystem::path &program_dir) {
+    std::filesystem::path dir = program_dir.lexically_normal();
+    // A trailing separator leaves an empty filename, whose parent is the directory itself.
+    if (!dir.has_filename())
+        dir = dir.parent_path();
+    return dir.parent_path() / (dir.filename().string() + std::string{kRootSuffix});
+}
 
 std::string InputSpillStore::addr_filename(DevAddr addr) {
     std::ostringstream name;

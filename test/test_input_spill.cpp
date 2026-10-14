@@ -523,3 +523,28 @@ TEST_CASE("input spill: put fails when its scratch path is blocked by a director
 
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("input spill: root_for names a sibling of the normalised program dir", "[unit]") {
+    using haze::InputSpillStore;
+    const fs::path expected{"/runs/session_0.haze_input_spill"};
+    CHECK(InputSpillStore::root_for("/runs/session_0") == expected);
+    // A trailing separator would otherwise make parent_path() the program dir itself.
+    CHECK(InputSpillStore::root_for("/runs/session_0/") == expected);
+    CHECK(InputSpillStore::root_for("/runs/./other/../session_0") == expected);
+    CHECK(InputSpillStore::root_for("/runs/a/session_0") !=
+          InputSpillStore::root_for("/runs/b/session_0"));
+    // Made absolute first, as the backend records it, "." and "a/.." name the working
+    // directory rather than normalising to a bare "." whose root would land inside it.
+    const auto root_for = [](const fs::path &dir) {
+        return InputSpillStore::root_for(fs::absolute(dir));
+    };
+    const fs::path cwd = fs::current_path();
+    CHECK(root_for("session_0") == cwd / "session_0.haze_input_spill");
+    const fs::path cwd_root = cwd.parent_path() / (cwd.filename().string() + ".haze_input_spill");
+    CHECK(root_for(".") == cwd_root);
+    CHECK(root_for("./") == cwd_root);
+    CHECK(root_for("a/..") == cwd_root);
+    const fs::path parent = cwd.parent_path();
+    CHECK(root_for("..") ==
+          parent.parent_path() / (parent.filename().string() + ".haze_input_spill"));
+}
