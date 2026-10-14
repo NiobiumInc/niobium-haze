@@ -21,6 +21,7 @@
 #include <expected>
 #include <filesystem>
 #include <haze/haze_types.h>
+#include <niobium/checks.h>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -202,6 +203,26 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
                 return std::unexpected(HazeInternalError::DuplicateModulus);
             }
         p.moduli_[i] = qi;
+    }
+    // Caller-chosen NTT roots: none (the minimal root for every modulus) or one
+    // per caller modulus, twiddle_generators[i] pairing with moduli[i].
+    if (raw.twiddle_count != 0 && raw.twiddle_count != raw.moduli_count) {
+        const std::string detail =
+            "FheParams::create: twiddle_count " + std::to_string(raw.twiddle_count) +
+            " is neither 0 nor moduli_count " + std::to_string(raw.moduli_count);
+        record_internal_error(HazeInternalError::InvalidArgument, detail.c_str());
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
+    for (size_t i = 0; i < raw.twiddle_count; ++i) {
+        const uint64_t root = raw.twiddle_generators[i];
+        if (!niobium::is_primitive_2n_root(root, raw.ring_dim, raw.moduli[i])) {
+            const std::string detail =
+                "FheParams::create: twiddle_generators[" + std::to_string(i) +
+                "] = " + std::to_string(root) + " is not a primitive 2N-th root of unity mod " +
+                std::to_string(raw.moduli[i]) + " for N = " + std::to_string(raw.ring_dim);
+            record_internal_error(HazeInternalError::InvalidArgument, detail.c_str());
+            return std::unexpected(HazeInternalError::InvalidArgument);
+        }
     }
     // One program-wide aux prime for hazeIsHalfModulus, generated here and
     // appended as the last chain entry; compute calls never derive it.

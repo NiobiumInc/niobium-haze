@@ -48,4 +48,19 @@ inline uint64_t modinv_prime(uint64_t a, uint64_t q) {
     return powmod(a % q, q - 2U, q);
 }
 
+/// Smallest quadratic non-residue mod an odd prime q (Euler's criterion).
+inline uint64_t smallest_qnr(uint64_t q) {
+    uint64_t z = 2;
+    while (powmod(z, (q - 1U) / 2U, q) != q - 1U)
+        ++z;
+    return z;
+}
+
+/// (smallest QNR)^((q-1)/2N): a primitive 2N-th root of unity mod a prime
+/// q ≡ 1 (mod 2N), since its N-th power is z^((q-1)/2) = -1. It is generally
+/// not the minimal root, so a transform using it is distinguishable.
+inline uint64_t qnr_root(uint64_t q, uint64_t ring_dim) {
+    return powmod(smallest_qnr(q), (q - 1U) / (2U * ring_dim), q);
+}
+
 } // namespace niobium::mod_arith
