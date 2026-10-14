@@ -599,8 +599,9 @@ hermetically — no live worktree required, suitable for CI.
   github.com on a clean worktree (nix issue #13324); the repo is public, so
   HTTPS fetches work without SSH credentials. The submodule under `vendor/niobium-fhetch` remains
   the source of truth for `make build` (non-nix users); CI gates that the
-  submodule rev recorded in haze's index matches the rev pinned in
-  `flake.lock`. After bumping the submodule, run
+  submodule rev recorded in haze's index, and that commit's `lastModified`
+  and `revCount`, match the pin in `flake.lock`
+  (`scripts/sync-fhetch-rev.sh --check`). After bumping the submodule, run
   `scripts/sync-fhetch-rev.sh` to realign `flake.lock` and commit both
   in the same change.
 - The hermetic packages live entirely in `/nix/store`. The macOS SDK / ABI
