@@ -111,18 +111,17 @@ std::expected<void, HazeInternalError> CompilerBackend::ensure_initialized() noe
     // so a thrown init becomes BackendInitFailed, not a process termination.
     try {
         bootstrap_compiler();
-        // Copies the exact path config.cpp already pinned into the vendor
-        // compiler at configure time. When hazeReplayConfig::remove_program_directory
-        // was set, ReplayConfig::create resolved program_directory with
-        // std::filesystem::canonical(), which requires the directory to
-        // already exist and fully resolves every symlink in every
-        // component (no lexical fallback, unlike weakly_canonical) -- and
-        // that resolved path -- not the caller's original string -- is what
-        // bootstrap_compiler() (just above) handed to set_program_directory.
-        // There is no further resolution to do here: no working directory
-        // is left to get wrong, because the path was never relative or
-        // symlink-bearing to begin with by the time it reaches this point.
-        recorded_program_directory_ = niobium::compiler().get_program_directory();
+        // Records the path config.cpp pinned into the vendor compiler at
+        // configure time, resolved once, here, the way the vendor compiler's
+        // own file opens resolve it: made absolute against the working
+        // directory at bring-up, then weakly_canonical, which follows every
+        // symlink in the part that exists and normalises the rest. When
+        // hazeReplayConfig::remove_program_directory was set,
+        // ReplayConfig::create already resolved program_directory with
+        // std::filesystem::canonical(), so this returns that same path. A
+        // throw from either call is caught below like any bring-up failure.
+        recorded_program_directory_ = std::filesystem::weakly_canonical(
+            std::filesystem::absolute(niobium::compiler().get_program_directory()));
         // haze emits IR via fhetch::sr_* directly, so the OpenFHE-side CPROBE
         // capture path is dead weight; mute it globally. Distinct from
         // openfhe_cprobe_pause_recording, which would also silence sr_*.
@@ -219,15 +218,9 @@ std::filesystem::path CompilerBackend::reset() noexcept {
     return std::exchange(recorded_program_directory_, {});
 }
 
-std::expected<std::filesystem::path, HazeInternalError>
-CompilerBackend::program_directory() noexcept {
-    try {
-        return niobium::compiler().get_program_directory();
-    } catch (...) {
-        record_internal_error(HazeInternalError::BackendInitFailed,
-                              "CompilerBackend::program_directory");
-        return std::unexpected(HazeInternalError::BackendInitFailed);
-    }
+std::filesystem::path CompilerBackend::program_directory() noexcept {
+    HazeLockGuard lock(init_mutex_);
+    return recorded_program_directory_;
 }
 
 } // namespace haze

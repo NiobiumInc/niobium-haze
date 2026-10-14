@@ -166,12 +166,11 @@ std::size_t count_prefixed(const std::vector<InputEntry> &entries, const std::st
 }
 
 // Mirrors InputSpillStore's private addr_filename(): the shape is a stable on-disk
-// contract a couple of these tests need to check directly. The root sits at cwd
-// (a sibling of every program dir, shared for the process's lifetime).
-std::filesystem::path spill_file_for(void *ptr) {
+// contract a couple of these tests need to check directly.
+std::filesystem::path spill_file_for(const std::filesystem::path &program_dir, void *ptr) {
     std::ostringstream name;
     name << "addr_" << std::hex << haze::to_uintptr(haze::to_dev_addr(ptr)) << ".spill";
-    return std::filesystem::path{"haze_input_spill"} / name.str();
+    return haze::InputSpillStore::root_for(std::filesystem::absolute(program_dir)) / name.str();
 }
 
 // Record `src + src` over one uploaded MRP group and return the project dir.
@@ -724,9 +723,9 @@ TEST_CASE("spill activation failure prevents recording, loudly", "[integration]"
     const std::vector<uint64_t> base = {kQ0};
     const std::string program_name = "haze_spill_activation_failure";
     const std::filesystem::path dir{program_name};
-    // The spill root is a process-wide sibling of the program dir (cwd/haze_input_spill),
-    // not a child of it; configure()'s hazeDeviceReset() already cleared it.
-    const std::filesystem::path spill_root{"haze_input_spill"};
+    // The spill root is a sibling of the program dir, not a child of it.
+    const std::filesystem::path spill_root =
+        haze::InputSpillStore::root_for(std::filesystem::absolute(dir));
     std::filesystem::remove_all(dir);
     configure(program_name, base);
 
@@ -791,10 +790,10 @@ TEST_CASE("an input never used in a modulus-bearing op is dropped from inputs.js
     REQUIRE(entries.size() == 1);
     REQUIRE(entries.front().name == "haze_mrp_in_0");
     // Dropped from the manifest, but the flush left its bytes alone.
-    REQUIRE(std::filesystem::exists(spill_file_for(unused_ptr)));
+    REQUIRE(std::filesystem::exists(spill_file_for(dir, unused_ptr)));
 
     REQUIRE(hazeFree(unused_ptr) == HAZE_SUCCESS);
-    REQUIRE_FALSE(std::filesystem::exists(spill_file_for(unused_ptr)));
+    REQUIRE_FALSE(std::filesystem::exists(spill_file_for(dir, unused_ptr)));
 
     haze::test::free_all_residues(src);
     haze::test::free_all_residues(dst);
@@ -887,7 +886,6 @@ TEST_CASE("fhetch input registry survives a failed flush; hazeDeviceReset still 
 TEST_CASE("a failed MRP tag restores every shadow and leaves no spill entries", "[integration]") {
     const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
     const auto residues = residues_for(base, 0xF100ULL);
-    const std::filesystem::path spill_root{"haze_input_spill"};
 
     // Control: the identical upload with no interference, its own program dir. Its
     // input .bin is the byte-for-byte oracle the recovered upload below must match.
@@ -910,11 +908,13 @@ TEST_CASE("a failed MRP tag restores every shadow and leaves no spill entries", 
 
     const std::string program_name = "haze_spill_mrp_tag_failure";
     const std::filesystem::path dir{program_name};
+    const std::filesystem::path spill_root =
+        haze::InputSpillStore::root_for(std::filesystem::absolute(dir));
     std::filesystem::remove_all(dir);
     configure(program_name, base);
 
     // A throwaway SRP upload activates the spill store first: activate() itself
-    // creates haze_input_spill, so the chmod below must land after that, or it would
+    // creates the spill root, so the chmod below must land after that, or it would
     // make activate() (not put()) the failure point.
     void *scratch = nullptr;
     REQUIRE(hazeMalloc(&scratch, kBytes) == HAZE_SUCCESS);
@@ -1002,10 +1002,11 @@ TEST_CASE("a failed MRP tag mid-way through undoes an already-spilled prefix", "
     // blocker itself.
     const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
     const auto residues = residues_for(base, 0xF200ULL);
-    const std::filesystem::path spill_root{"haze_input_spill"};
 
     const std::string program_name = "haze_spill_mrp_prefix_rollback";
     const std::filesystem::path dir{program_name};
+    const std::filesystem::path spill_root =
+        haze::InputSpillStore::root_for(std::filesystem::absolute(dir));
     std::filesystem::remove_all(dir);
     configure(program_name, base);
 

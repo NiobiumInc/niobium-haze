@@ -49,6 +49,13 @@ namespace haze {
 // bind_name/take_named must be a single path component (no '/').
 class InputSpillStore {
   public:
+    // The root for an ABSOLUTE program directory (precondition; the backend records it
+    // so): its sibling "<parent>/<name>.haze_input_spill", from the lexically normalised
+    // path, so a trailing '/' or a '.' or '..' segment names the same root. A program
+    // directory is unique among live processes, so its root is too, and the next reset
+    // under that directory removes files a crashed run left there.
+    [[nodiscard]] static std::filesystem::path root_for(const std::filesystem::path &program_dir);
+
     // Directory is created here. Idempotent while already active with the SAME root
     // (records persist across recordings' activate calls); re-activating with a
     // DIFFERENT root while active is a hard error.
