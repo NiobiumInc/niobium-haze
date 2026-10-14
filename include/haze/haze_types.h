@@ -162,9 +162,8 @@ typedef struct {
 // optimization_stats.json and the record-phase timing_summary.json) lands in
 // R/, and the run (the replay outputs, timing.json and the timing_summary.json
 // that accumulates both phases) in R.run/nbcc_fhetch_replay_source_<B>/.
-// niobium::replay_output_directory() and niobium::replay_run_directory()
-// (niobium/compiler.h) return the two. This applies to direct dispatch only:
-// through the HTTP forwarder, the replay and its output stay on the server.
+// This applies to direct dispatch only: through the HTTP forwarder, the
+// replay and its output stay on the server.
 // The compiler's own per-process timing_summary_<role>_<pid>.json goes to
 // NB_TIMING_SUMMARY_DIR if set, else the CWD, regardless of --out. With
 // NB_TIMING_SUMMARY_DIR set, nbcc_fhetch_replay also mirrors each
