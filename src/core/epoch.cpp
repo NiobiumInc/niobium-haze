@@ -50,14 +50,10 @@ void EpochState::ensure_recording_locked() {
         return;
     }
     // The root sits OUTSIDE the program dir (a sibling of it, not a child) so
-    // fhebench's post-flush project rename cannot carry the store away, and an
-    // input's on-disk residue survives a program dir change across epochs.
-    auto dir = CompilerBackend::program_directory();
-    if (!dir) {
-        latch_bringup_failure_locked(bringup_mark);
-        return;
-    }
-    if (!input_spill().activate(dir->parent_path() / "haze_input_spill")) {
+    // fhebench's post-flush project rename cannot carry the store away, and it is
+    // named after that dir, so processes with distinct program dirs never share one:
+    // a reset removes the whole root. The backend recorded the dir absolute.
+    if (!input_spill().activate(InputSpillStore::root_for(backend().program_directory()))) {
         latch_bringup_failure_locked(bringup_mark);
         return;
     }

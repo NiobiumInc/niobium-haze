@@ -34,18 +34,19 @@
 // allocator: its code must never call into epoch, allocator, or backend.
 //
 // The init_mutex_ edge: first-compute bring-up takes init_mutex_ while holding
-// epoch_mutex_ (EpochState::ensure_recording_locked calls ensure_initialized
-// under the lock). The other two init_mutex_ acquirers hold NO epoch lock — the
-// replay-bridge pre-init (hazeReplayBridgeInitCryptoContext) and hazeDeviceReset,
-// which resets epoch, backend, and allocator sequentially, never nested. This
-// asymmetry cannot deadlock because init_mutex_ is a LEAF: the code holding it
-// (ensure_initialized / bootstrap_compiler) reads only the lock-free config and
-// calls the vendor compiler — never epoch() or allocator() — so no reverse edge
-// exists and the graph stays acyclic. Invariant to preserve: never acquire
-// epoch_mutex_ or the allocator lock while holding init_mutex_. clang TSA does
-// NOT enforce this cross-mutex order (it does no lock-ordering analysis, and
-// init_mutex_ is CompilerBackend-private while ensure_initialized runs both with
-// and without epoch_mutex_ held), so it rests on this contract and review.
+// epoch_mutex_ (EpochState::ensure_recording_locked calls ensure_initialized and
+// program_directory under the lock). The other two init_mutex_ acquirers hold NO
+// epoch lock — the replay-bridge pre-init (hazeReplayBridgeInitCryptoContext) and
+// hazeDeviceReset, which resets epoch, backend, and allocator sequentially, never
+// nested. This asymmetry cannot deadlock because init_mutex_ is a LEAF: the code
+// holding it (ensure_initialized / bootstrap_compiler / program_directory) reads
+// only CompilerBackend's own state and the lock-free config and calls the vendor
+// compiler — never epoch() or allocator() — so no reverse edge exists and the
+// graph stays acyclic. Invariant to preserve: never acquire epoch_mutex_ or the
+// allocator lock while holding init_mutex_. clang TSA does NOT enforce this
+// cross-mutex order (it does no lock-ordering analysis, and init_mutex_ is
+// CompilerBackend-private while ensure_initialized runs both with and without
+// epoch_mutex_ held), so it rests on this contract and review.
 // OpenFHE's global CryptoContextFactory is itself touched under both locks —
 // under init_mutex_ at replay-bridge init, under epoch_mutex_ by local
 // replay's register_crypto_context at flush — which is race-free only because
