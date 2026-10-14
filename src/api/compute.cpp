@@ -97,16 +97,16 @@ extern "C" hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
                                hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(
-        haze::unary_pq_op<fhetch::sr_ntt>(haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
+    return set_internal_result(haze::unary_pq_op<haze::record_ntt>(
+        haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
 }
 
 extern "C" hazeError_t hazeINTT(void *dst, const void *src, int mod_idx,
                                 hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_pq_op<fhetch::sr_intt>(haze::to_dev_addr(dst),
-                                                                  haze::to_dev_addr(src), mod_idx));
+    return set_internal_result(haze::unary_pq_op<haze::record_intt>(
+        haze::to_dev_addr(dst), haze::to_dev_addr(src), mod_idx));
 }
 
 extern "C" hazeError_t hazeAutomorph(void *dst, const void *src, uint64_t index,
@@ -184,14 +184,15 @@ extern "C" hazeError_t hazeNTTMrp(void *const *dst, const void *const *src, cons
                                   size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_ntt>(dst, src, base, base_len));
+    return set_internal_result(haze::unary_p_op_mrp<haze::record_mr_ntt>(dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeINTTMrp(void *const *dst, const void *const *src, const uint64_t *base,
                                    size_t base_len, hazeStream_t /*stream*/) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
-    return set_internal_result(haze::unary_p_op_mrp<fhetch::mr_intt>(dst, src, base, base_len));
+    return set_internal_result(
+        haze::unary_p_op_mrp<haze::record_mr_intt>(dst, src, base, base_len));
 }
 
 extern "C" hazeError_t hazeAutomorphMrp(void *const *dst, const void *const *src, uint64_t index,

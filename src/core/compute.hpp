@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <expected>
 #include <niobium/fhetch_api.h>
+#include <optional>
 
 namespace haze {
 
@@ -74,7 +75,36 @@ std::expected<void, HazeInternalError> binary_ps_op(DevAddr dst, DevAddr src, ui
     return {};
 }
 
-// Polynomial-modulus. Used by hazeNTT, hazeINTT.
+// NTT / INTT emission for one residue: q's caller root (FheParams::ntt_root)
+// through the rooted form, else the rootless form, which records no root and
+// leaves the minimal root to the trace consumer. hazeConfigureDevice validated
+// every caller root for the ring dimension all polynomials share, so the rooted
+// forms never reject.
+template <auto Rootless, auto Rooted>
+niobium::fhetch::Polynomial with_configured_root(const niobium::fhetch::Polynomial &a, uint64_t q) {
+    const std::optional<uint64_t> root = fhe_params().ntt_root(q);
+    return root.has_value() ? Rooted(a, q, *root) : Rootless(a, q);
+}
+
+// The MRP form applies the SRP one to each residue, as mr_ntt and
+// mr_ntt_with_roots do, so a base may mix rooted primes with rootless ones (the
+// aux prime, or a prime outside the chain).
+template <auto SrpTransform> niobium::fhetch::MRP each_residue(const niobium::fhetch::MRP &x) {
+    const niobium::fhetch::ModuliBase &base = x.base();
+    niobium::fhetch::MRP z(base, x[base[0]].ring_dimension());
+    for (const uint64_t q : base)
+        z[q] = SrpTransform(x[q], q);
+    return z;
+}
+
+inline constexpr auto record_ntt =
+    &with_configured_root<niobium::fhetch::sr_ntt, niobium::fhetch::sr_ntt_with_root>;
+inline constexpr auto record_intt =
+    &with_configured_root<niobium::fhetch::sr_intt, niobium::fhetch::sr_intt_with_root>;
+inline constexpr auto record_mr_ntt = &each_residue<record_ntt>;
+inline constexpr auto record_mr_intt = &each_residue<record_intt>;
+
+// Polynomial-modulus. Used by hazeNTT, hazeINTT (with record_ntt / record_intt).
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_pq_op(DevAddr dst, DevAddr src, int mod_idx) noexcept {
     if (auto live = allocator().require_allocated(dst); !live)
@@ -167,8 +197,9 @@ binary_ps_op_mrp(void *const *dst, const void *const *src, const uint64_t *scala
     return {};
 }
 
-// MRP polynomial-only (hazeNTTMrp, hazeINTTMrp): mr_ntt/mr_intt carry their
-// base inside the MRP, so this can't reuse unary_pq_op.
+// MRP polynomial-only (hazeNTTMrp, hazeINTTMrp, with record_mr_ntt /
+// record_mr_intt): the transform reads its base from the MRP, so this can't
+// reuse unary_pq_op.
 template <auto OpFn>
 std::expected<void, HazeInternalError> unary_p_op_mrp(void *const *dst, const void *const *src,
                                                       const uint64_t *base,

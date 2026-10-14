@@ -178,7 +178,12 @@ unexpected failures.
 The last of those is what keeps haze honest about data formats. haze records
 ordinary-form traces for every target and the replay driver applies any hardware
 transform itself, so the two transport runs assert the same oracles and must
-agree. Two documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
+agree. One case diverges by target: in `test_ntt_roots.cpp`, the
+evaluation-form INTT under a caller NTT root (`hazeFheParams::twiddle_generators`)
+accepts, under `HAZE_TRANSPORT_HW=1`, either values that match the reference or
+a refused flush (`HAZE_ERROR_INTERNAL`). `func_sim_hw` transforms only with the
+minimal root and refuses such a recording; the V80 honours the root. Two
+documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
 `test-transport-hw`), via the helpers in `integration_helpers.hpp`:
 
 - `skip_if_hw_elision` — `hazeBroadcast*Mrp` with `operand_in_range` set. The

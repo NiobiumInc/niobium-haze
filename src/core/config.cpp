@@ -242,6 +242,13 @@ std::expected<FheParams, HazeInternalError> FheParams::create(const hazeFheParam
     return p;
 }
 
+std::optional<uint64_t> FheParams::ntt_root(uint64_t modulus) const noexcept {
+    for (size_t i = 0; i < twiddle_generators_.size(); ++i)
+        if (moduli_[i] == modulus)
+            return twiddle_generators_[i];
+    return std::nullopt;
+}
+
 std::expected<ReplayConfig, HazeInternalError>
 ReplayConfig::create(const hazeReplayConfig *raw) noexcept {
     ReplayConfig rc; // defaults; a NULL struct or NULL field keeps them

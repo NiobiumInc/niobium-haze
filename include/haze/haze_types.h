@@ -127,7 +127,8 @@ typedef struct {
 //
 // twiddle_generators optionally names one NTT root per modulus:
 // twiddle_generators[i] is a primitive 2N-th root of unity psi_i mod moduli[i]
-// (N = ring_dim), written in [1, moduli[i]) with psi_i^N == moduli[i] - 1.
+// (N = ring_dim), written in [1, moduli[i]) with psi_i^N == moduli[i] - 1, and
+// every hazeNTT / hazeINTT at moduli[i] uses it (see hazeNTT in haze.h).
 // twiddle_count is 0 (no caller roots) or exactly moduli_count. Any other
 // count, or an entry that is not such a root, makes hazeConfigureDevice return
 // HAZE_ERROR_INVALID_VALUE and install nothing. The generated aux prime (see
