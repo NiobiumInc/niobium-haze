@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,13 +66,19 @@ class FheParams {
     // The program-wide hazeIsHalfModulus aux prime, generated at create() and
     // appended as the last chain entry (0 = no moduli configured).
     uint64_t aux_modulus() const noexcept { return aux_modulus_; }
+    // The caller's primitive 2N-th root psi for `modulus`, in [1, modulus), or
+    // nullopt when the caller supplied none, for the aux prime, and for a modulus
+    // outside the chain. nullopt leaves the minimal root to the trace consumer.
+    std::optional<uint64_t> ntt_root(uint64_t modulus) const noexcept;
 
   private:
     uint64_t ring_dim_ = 0;
     std::array<uint64_t, static_cast<size_t>(kMaxCiphertextModuli)> moduli_{};
     uint64_t aux_modulus_ = 0;
     int moduli_count_ = 0;
-    std::vector<uint64_t> twiddle_generators_; // stored for the trace; no reader yet
+    // Empty, or twiddle_generators_[i] is the root for moduli_[i] (the caller's
+    // moduli precede the aux prime).
+    std::vector<uint64_t> twiddle_generators_;
 };
 
 // Immutable replay configuration (target + program metadata + the FBC variant):
