@@ -8,8 +8,9 @@
     # consumed only by the hermetic mkPackages derivations. `flake = false`
     # keeps it lazy so `nix develop` never resolves it (nix #13324).
     # The vendor/niobium-fhetch submodule stays the source of truth for
-    # non-nix `make build`; CI gates that its rev matches the one pinned
-    # here, and scripts/sync-fhetch-rev.sh realigns them after a bump.
+    # non-nix `make build`; CI gates that its rev, lastModified and
+    # revCount match the ones pinned here (scripts/sync-fhetch-rev.sh
+    # --check), and scripts/sync-fhetch-rev.sh realigns them after a bump.
     niobium-fhetch-src = {
       url = "git+https://github.com/NiobiumInc/niobium-fhetch.git?submodules=1";
       flake = false;

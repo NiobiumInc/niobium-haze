@@ -42,19 +42,19 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Verify flake.lock niobium-fhetch rev matches submodule
+      - name: Verify flake.lock niobium-fhetch pin matches submodule
         # Strict gate: the niobium-fhetch flake input must pin the same
         # rev haze's index records for the submodule, else nix and
-        # `make build` test different sources. Realign after a bump with
+        # `make build` test different sources, with that commit's
+        # lastModified and revCount, else nix rejects the lock when it
+        # fetches the input. revCount needs the submodule's full history,
+        # which the depth-1 checkout lacks. Realign after a bump with
         # scripts/sync-fhetch-rev.sh.
         run: |
-          submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
-          lock_rev=$(jq -r '.nodes."niobium-fhetch-src".locked.rev' flake.lock)
-          if [ "$submodule_rev" != "$lock_rev" ]; then
-            echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
-            echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
-            exit 1
+          if [ "$(git -C vendor/niobium-fhetch rev-parse --is-shallow-repository)" = true ]; then
+            git -C vendor/niobium-fhetch fetch --quiet --unshallow
           fi
+          scripts/sync-fhetch-rev.sh --check
 
       - name: Verify flake.lock openfhe-stock rev matches submodule
         # Same strict gate for the stock OpenFHE used by haze_e2e_tests: the
@@ -164,17 +164,15 @@ jobs:
           test -f vendor/niobium-fhetch/vendor/openfhe/CMakeLists.txt
           test -d vendor/niobium-fhetch/vendor/json
 
-      - name: Verify flake.lock niobium-fhetch rev matches submodule
-        # See lint job for rationale: strict gate that the flake input
-        # rev equals the submodule rev recorded in haze's index.
+      - name: Verify flake.lock niobium-fhetch pin matches submodule
+        # See lint job for rationale: strict gate that the flake input's
+        # rev, lastModified and revCount match the submodule commit
+        # recorded in haze's index.
         run: |
-          submodule_rev=$(git ls-tree HEAD vendor/niobium-fhetch | awk '{print $3}')
-          lock_rev=$(jq -r '.nodes."niobium-fhetch-src".locked.rev' flake.lock)
-          if [ "$submodule_rev" != "$lock_rev" ]; then
-            echo "::error::niobium-fhetch submodule rev ($submodule_rev) does not match flake.lock ($lock_rev)."
-            echo "Run scripts/sync-fhetch-rev.sh and commit flake.lock."
-            exit 1
+          if [ "$(git -C vendor/niobium-fhetch rev-parse --is-shallow-repository)" = true ]; then
+            git -C vendor/niobium-fhetch fetch --quiet --unshallow
           fi
+          scripts/sync-fhetch-rev.sh --check
 
       - name: Verify flake.lock openfhe-stock rev matches submodule
         # Same strict gate for the stock OpenFHE used by haze_e2e_tests: the
