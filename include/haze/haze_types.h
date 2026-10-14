@@ -123,8 +123,15 @@ typedef struct {
 
 // FHE-scheme parameters. ring_dim is required (a power of two in the device
 // envelope). moduli lists moduli_count ciphertext-modulus primes (contiguous,
-// non-zero, unique); twiddle_generators is optional NTT metadata. A *_count of
-// 0 permits the matching pointer to be NULL.
+// non-zero, unique). A *_count of 0 permits the matching pointer to be NULL.
+//
+// twiddle_generators optionally names one NTT root per modulus:
+// twiddle_generators[i] is a primitive 2N-th root of unity psi_i mod moduli[i]
+// (N = ring_dim), written in [1, moduli[i]) with psi_i^N == moduli[i] - 1.
+// twiddle_count is 0 (no caller roots) or exactly moduli_count. Any other
+// count, or an entry that is not such a root, makes hazeConfigureDevice return
+// HAZE_ERROR_INVALID_VALUE and install nothing. The generated aux prime (see
+// hazeConfigureDevice) takes no caller root.
 typedef struct {
     uint64_t ring_dim;
     const uint64_t *moduli;
