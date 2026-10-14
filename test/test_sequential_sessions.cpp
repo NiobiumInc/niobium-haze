@@ -15,8 +15,9 @@
 // directory under one shared parent, at a 41-prime key-switching shape: a
 // 37-prime chain Q plus 4 special primes P. The session in the middle has one
 // flush fail deliberately and then records and flushes again, and every session
-// must round-trip exactly. Each session removes its program directory and its
-// replay output when it ends, so disk use stays at one session's worth.
+// must round-trip exactly. Each session removes its program directory when it
+// ends (the replay's own output nests inside it), so disk use stays at one
+// session's worth.
 //
 // The default case runs at N=4096 (about 10 s on `local`). The soak case runs
 // the same 50 sessions at N=65536 (about 140 s on `local`, 820 MB peak RSS); it
@@ -164,12 +165,6 @@ void free_epoch(const Epoch &e) {
     haze::test::free_all_residues(e.product_dev);
 }
 
-// Where a non-local replay writes its secondary work: the working directory,
-// named after the project's basename (the same path test_opt_level.cpp reads).
-fs::path replay_output_for(const fs::path &program_dir) {
-    return fs::current_path() / ("nbcc_fhetch_replay_source_" + program_dir.filename().string());
-}
-
 void run_sessions(uint64_t ring_dim) {
     const Shape shape = key_switching_shape(ring_dim);
     const fs::path root = fs::absolute("haze_sequential_sessions");
@@ -202,8 +197,7 @@ void run_sessions(uint64_t ring_dim) {
         REQUIRE(hazeFlush() == HAZE_SUCCESS);
         check_epoch(shape, e);
         free_epoch(e);
-        fs::remove_all(dir);
-        fs::remove_all(replay_output_for(dir));
+        fs::remove_all(dir); // the replay's own output nests inside it
     }
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     fs::remove_all(root);
