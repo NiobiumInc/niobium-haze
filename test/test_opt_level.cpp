@@ -29,6 +29,7 @@
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <iterator>
+#include <niobium/compiler.h>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -45,20 +46,17 @@ constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
 
 // Configures a single-prime SRP context at the given opt_level, pinned to a
 // dedicated project directory (fs::temp_directory_path(), matching
-// test_replay_bridge_program_dir.cpp) so this test's
-// nbcc_fhetch_replay_source_<basename>/ output can't collide with another
-// case's default cwd/haze. Removes any stale output from a prior run of the
-// SAME case_name first, so a leftover file from an earlier (possibly failing)
-// run can't make fs::exists succeed for the wrong reason. Returns the
-// project directory.
+// test_replay_bridge_program_dir.cpp) so this case's project can't collide
+// with another case's default cwd/haze. Removes any stale directory from a
+// prior run of the SAME case_name first, so a leftover file from an earlier
+// (possibly failing) run can't make fs::exists succeed for the wrong reason.
+// Returns the project directory.
 fs::path configure_with_opt_level(int opt_level, std::string_view case_name) {
     const fs::path dir =
         fs::temp_directory_path() / ("haze_opt_level_test_" + std::string(case_name));
     std::error_code ec;
     fs::remove_all(dir, ec);
     REQUIRE(fs::create_directories(dir, ec));
-    fs::remove_all(fs::current_path() / ("nbcc_fhetch_replay_source_" + dir.filename().string()),
-                   ec);
 
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     const uint64_t moduli[] = {kModulus};
@@ -93,15 +91,14 @@ void run_minimal_add() {
     REQUIRE(hazeFree(c) == HAZE_SUCCESS);
 }
 
-// nbcc_fhetch_replay writes its per-project secondary work (including
-// optimization_stats.json) under nbcc_fhetch_replay_source_<project
-// basename>/, relative to its own CWD — which is the test binary's CWD under
-// both make test-sim and make test-transport (see CLAUDE.md). Under HTTP
-// transport this path is on the SERVER, not visible here at all -- guard
-// with haze::test::http_transport_active() before using it.
+// nbcc_fhetch_replay's per-project secondary work (including
+// optimization_stats.json) lives under niobium::replay_output_directory(project_dir),
+// nested inside the project directory (see compiler.h's replay_project() doc
+// comment). Under HTTP transport this path is on the SERVER, not visible
+// here at all -- guard with haze::test::http_transport_active() before using
+// it.
 fs::path stats_path_for(const fs::path &project_dir) {
-    return fs::current_path() / ("nbcc_fhetch_replay_source_" + project_dir.filename().string()) /
-           "optimization_stats.json";
+    return niobium::replay_output_directory(project_dir) / "optimization_stats.json";
 }
 
 // Reads the one field this suite checks out of
@@ -123,8 +120,7 @@ std::string read_optimization_level(const fs::path &stats_path) {
 
 void cleanup(const fs::path &project_dir) {
     std::error_code ec;
-    fs::remove_all(project_dir, ec);
-    fs::remove_all(stats_path_for(project_dir).parent_path(), ec);
+    fs::remove_all(project_dir, ec); // the replay's own output nests inside it
     hazeReplayBridgeReset();
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
 }
