@@ -166,7 +166,7 @@ HAZE_API hazeError_t hazeTagOutput(void *ptr) HAZE_NOEXCEPT;
 HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
 
 /* One-shot device configuration. Fill a hazeFheParams (required) with the ring
- * dimension, ciphertext moduli, and optional twiddle generators, and optionally
+ * dimension, ciphertext moduli, and optional per-modulus NTT roots, and optionally
  * a hazeReplayConfig with the target, program metadata, and data-format toggles
  * (pass NULL to accept all defaults, including target "local"). Then call this
  * once — the caller owns both structs; haze copies what it needs and retains no
@@ -177,6 +177,8 @@ HAZE_API hazeError_t hazeFlush(void) HAZE_NOEXCEPT;
  * in the device envelope; ciphertext moduli non-zero, contiguous, and unique)
  * and returns HAZE_ERROR_CONFIGERR on a bad config or HAZE_ERROR_INVALID_VALUE
  * on a malformed struct (NULL fhe, a NULL array with a non-zero count, a
+ * twiddle_count other than 0 or moduli_count, a twiddle_generators entry that is
+ * not a primitive 2N-th root of unity mod its modulus, a
  * hazeReplayConfig::opt_level outside 0-3, a remove_program_directory outside
  * 0-1, remove_program_directory set with no explicit program_directory, with
  * a program_directory that does not already exist as a directory (a missing

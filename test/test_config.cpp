@@ -1,6 +1,8 @@
 // Copyright (C) 2026, All rights reserved by Niobium Microsystems.
 #include "filesystem_helpers.hpp"
+#include "mod_arith_ref.hpp"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -15,20 +17,28 @@
 // (hazeFheParams + optional hazeReplayConfig) — the caller owns the structs and
 // no config state is held before the call. There are no getters, so accept
 // tests can only assert HAZE_SUCCESS. Per-argument problems (a bad ring
-// dimension, a zero modulus, too many moduli) surface as
-// HAZE_ERROR_INVALID_VALUE; whole-config invariants (duplicate moduli,
-// reconfiguring under live allocations) as HAZE_ERROR_CONFIGERR. Nothing is
-// installed on a failed configure.
+// dimension, a zero modulus, too many moduli, an NTT root that is not a
+// primitive 2N-th root) surface as HAZE_ERROR_INVALID_VALUE; whole-config
+// invariants (duplicate moduli, reconfiguring under live allocations) as
+// HAZE_ERROR_CONFIGERR. Nothing is installed on a failed configure.
+
+namespace {
+
+namespace ma = niobium::mod_arith;
+
+constexpr uint64_t kRingDim = 4096;
+// Two distinct NTT-friendly primes (q ≡ 1 mod 2N) for N=4096; the same
+// constants are used by test_basis_convert.cpp.
+constexpr uint64_t kQ0 = 576460752303415297ULL;
+constexpr uint64_t kQ1 = 576460752303439873ULL;
+
+} // namespace
 
 TEST_CASE("hazeConfigureDevice accepts a well-formed config", "[unit]") {
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    // Two distinct NTT-friendly primes (q ≡ 1 mod 2N) for N=4096; the same
-    // constants are used by test_basis_convert.cpp.
-    constexpr uint64_t kQ0 = 576460752303415297ULL;
-    constexpr uint64_t kQ1 = 576460752303439873ULL;
     const uint64_t moduli[] = {kQ0, kQ1};
-    const uint64_t twiddle[] = {3, 5};
-    const hazeFheParams fhe = {.ring_dim = 4096,
+    const uint64_t twiddle[] = {ma::qnr_root(kQ0, kRingDim), ma::qnr_root(kQ1, kRingDim)};
+    const hazeFheParams fhe = {.ring_dim = kRingDim,
                                .moduli = moduli,
                                .moduli_count = 2,
                                .twiddle_generators = twiddle,
@@ -418,4 +428,70 @@ TEST_CASE("hazeConfigureDevice rejects an empty remove_program_directory program
     const std::string message = hazeGetLastErrorMessage();
     REQUIRE_FALSE(message.empty());
     REQUIRE(message.find("program_directory") != std::string::npos);
+}
+TEST_CASE("hazeConfigureDevice rejects an NTT root that is not a primitive 2N-th root", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0, kQ1};
+    const uint64_t psi0 = ma::qnr_root(kQ0, kRingDim);
+    const uint64_t psi1 = ma::qnr_root(kQ1, kRingDim);
+    // Each candidate replaces the second root, so the error must name index 1.
+    const uint64_t bad_roots[] = {
+        0,                           // never a root
+        1,                           // order 1
+        kQ1 - 1,                     // -1: order 2
+        ma::mulmod(psi1, psi1, kQ1), // psi^2: order N, not 2N
+        psi1 + kQ1,                  // a root, but not in [1, q)
+        psi0,                        // a root for the other modulus
+        ma::smallest_qnr(kQ1),       // a non-residue, not a root
+    };
+    for (const uint64_t bad : bad_roots) {
+        CAPTURE(bad);
+        const uint64_t roots[] = {psi0, bad};
+        const hazeFheParams fhe = {.ring_dim = kRingDim,
+                                   .moduli = moduli,
+                                   .moduli_count = 2,
+                                   .twiddle_generators = roots,
+                                   .twiddle_count = 2};
+        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+        const std::string message = hazeGetLastErrorMessage();
+        CAPTURE(message);
+        REQUIRE(message.find("twiddle_generators[1]") != std::string::npos);
+        REQUIRE(message.find(std::to_string(kQ1)) != std::string::npos);
+    }
+    // Nothing is installed on failure: the corrected roots configure cleanly.
+    const uint64_t good[] = {psi0, psi1};
+    const hazeFheParams fhe = {.ring_dim = kRingDim,
+                               .moduli = moduli,
+                               .moduli_count = 2,
+                               .twiddle_generators = good,
+                               .twiddle_count = 2};
+    REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
+}
+
+TEST_CASE("hazeConfigureDevice rejects a twiddle_count other than 0 or moduli_count", "[unit]") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const uint64_t moduli[] = {kQ0, kQ1};
+    const uint64_t psi0 = ma::qnr_root(kQ0, kRingDim);
+    const uint64_t psi1 = ma::qnr_root(kQ1, kRingDim);
+    const uint64_t roots[] = {psi0, psi1, psi1};
+    struct Shape {
+        std::size_t moduli_count;
+        std::size_t twiddle_count;
+    };
+    for (const Shape shape : {Shape{.moduli_count = 2, .twiddle_count = 1},
+                              Shape{.moduli_count = 2, .twiddle_count = 3},
+                              Shape{.moduli_count = 0, .twiddle_count = 1}}) {
+        CAPTURE(shape.moduli_count, shape.twiddle_count);
+        const hazeFheParams fhe = {.ring_dim = kRingDim,
+                                   .moduli = moduli,
+                                   .moduli_count = shape.moduli_count,
+                                   .twiddle_generators = roots,
+                                   .twiddle_count = shape.twiddle_count};
+        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_ERROR_INVALID_VALUE);
+        REQUIRE(hazeGetLastError() == HAZE_ERROR_INVALID_VALUE);
+        const std::string message = hazeGetLastErrorMessage();
+        CAPTURE(message);
+        REQUIRE(message.find("twiddle_count") != std::string::npos);
+    }
 }

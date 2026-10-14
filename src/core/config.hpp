@@ -44,12 +44,13 @@ class FheParams {
   public:
     // Validate the caller's struct and deep-copy it into an immutable FheParams.
     // Enforces per-argument invariants (ring_dim in the device envelope; moduli
-    // non-zero, prime, and within the modulus envelope), the whole-config invariant
-    // (moduli unique), and struct well-formedness (a NULL array with a non-zero
-    // count is InvalidArgument). When any moduli are supplied, a dedicated aux
-    // prime for hazeIsHalfModulus is generated and appended as the last chain
-    // entry (see aux_modulus()). Nothing partial escapes — on any failure it
-    // returns the error and no object.
+    // non-zero, prime, and within the modulus envelope; each NTT root a primitive
+    // 2N-th root of unity mod its modulus), the whole-config invariants (moduli
+    // unique; twiddle_count 0 or moduli_count), and struct well-formedness (a
+    // NULL array with a non-zero count is InvalidArgument). When any moduli are
+    // supplied, a dedicated aux prime for hazeIsHalfModulus is generated and
+    // appended as the last chain entry (see aux_modulus()). Nothing partial
+    // escapes — on any failure it returns the error and no object.
     static std::expected<FheParams, HazeInternalError> create(const hazeFheParams &raw) noexcept;
 
     FheParams() = default; // empty pre-configure placeholder (ring_dim 0 = unconfigured)
