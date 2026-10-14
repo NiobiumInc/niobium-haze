@@ -301,9 +301,22 @@ HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
 //
 // INPUT FORMAT: hazeMemcpy(H2D) bytes are evaluation form, natural order (what
 // CKKS ciphertext limbs already are), since the C ABI carries no format tag.
-// Uploading coefficient-form bytes and calling hazeNTT on them works on an
-// ordinary-form target but not a hardware one, whose driver bit-reverses inputs
-// on load and so scrambles them before the NTT runs.
+// "Natural" is the slot order hazeNTT itself produces (see ROOT), as opposed to
+// a hardware target's own layout. Uploading coefficient-form bytes and calling
+// hazeNTT on them works on an ordinary-form target but not a hardware one, whose
+// driver bit-reverses inputs on load and so scrambles them before the NTT runs.
+//
+// ROOT: a transform at modulus q uses the primitive 2N-th root psi that
+// hazeFheParams::twiddle_generators names for q, else the minimal primitive
+// 2N-th root of unity mod q (twiddle_count 0, the aux prime, or a prime outside
+// the configured chain). Slot j of hazeNTT's output holds a(psi^(2*brv(j) + 1))
+// mod q, brv reversing log2(N) bits, and hazeINTT inverts it with the same psi.
+// That slot order is the natural order of INPUT FORMAT: the brv is part of the
+// evaluation form itself, not the hardware reordering described there. The Mrp
+// forms choose per residue. A replay target that transforms only with the
+// minimal root refuses a trace carrying any other, and hazeFlush then returns
+// HAZE_ERROR_INTERNAL. The target's reason appears on the replay driver's
+// stderr; hazeGetLastErrorMessage reports only that the replay failed.
 
 HAZE_API hazeError_t hazeNTT(void *dst, const void *src, int mod_idx,
                              hazeStream_t stream) HAZE_NOEXCEPT;

@@ -65,14 +65,16 @@ simulator internals, see the companion repository:
 
 2. **Configure** — fill a `hazeFheParams` (ring dimension + the ciphertext
    moduli array) and pass it to `hazeConfigureDevice(&fhe, &replay)` in one call
-   to lock in the FHE parameter set. The optional `hazeReplayConfig` picks a
-   non-default replay target (`.target = "FUNC_SIM"`, or set `HAZE_TARGET` in the
-   environment), a compiler-side optimization level for that target
-   (`.opt_level = 1..3`; 0 leaves it at the replay driver's own default), whether
-   `hazeDeviceReset` deletes the program directory this session actually used
-   (`.remove_program_directory = 1`; 0 keeps it — requires an explicit
-   `program_directory` that already exists as a directory, outside the
-   current directory and its ancestors, and is mutually exclusive with
+   to lock in the FHE parameter set. Its optional `twiddle_generators` names one
+   primitive 2N-th root of unity per modulus for every `hazeNTT` / `hazeINTT` to
+   use; without them each modulus uses its minimal root. The optional
+   `hazeReplayConfig` picks a non-default replay target (`.target = "FUNC_SIM"`,
+   or set `HAZE_TARGET` in the environment), a compiler-side optimization level
+   for that target (`.opt_level = 1..3`; 0 leaves it at the replay driver's own
+   default), whether `hazeDeviceReset` deletes the program directory this
+   session actually used (`.remove_program_directory = 1`; 0 keeps it — requires
+   an explicit `program_directory` that already exists as a directory, outside
+   the current directory and its ancestors, and is mutually exclusive with
    `hazeWriteProgram`, whose contract is to publish that same directory), and
    other hardware/replay options; pass `NULL` for all defaults.
 
