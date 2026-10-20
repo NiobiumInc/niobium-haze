@@ -109,6 +109,12 @@ typedef enum {
     HAZE_MEMORY_TYPE_HOST = 1,
     HAZE_MEMORY_TYPE_DEVICE = 2,
 } hazeMemoryType;
+
+// Polynomial form of uploaded bytes; see hazeMemcpyMrpFormat.
+typedef enum {
+    HAZE_POLY_FORMAT_EVALUATION = 0,
+    HAZE_POLY_FORMAT_COEFFICIENT = 1,
+} hazePolyFormat;
 // NOLINTEND(cppcoreguidelines-use-enum-class,performance-enum-size)
 
 typedef struct {

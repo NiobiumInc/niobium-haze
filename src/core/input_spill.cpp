@@ -23,6 +23,8 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <niobium/fhetch_api.h>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -175,8 +177,17 @@ bool InputSpillStore::has(DevAddr addr) const noexcept {
     return records_.contains(addr);
 }
 
+std::optional<niobium::fhetch::Format> InputSpillStore::format(DevAddr addr) const noexcept {
+    HazeLockGuard lock(mutex_);
+    auto it = records_.find(addr);
+    if (it == records_.end())
+        return std::nullopt;
+    return it->second.format;
+}
+
 std::expected<void, HazeInternalError>
-InputSpillStore::put(DevAddr addr, std::vector<uint64_t> &&residue) noexcept {
+InputSpillStore::put(DevAddr addr, std::vector<uint64_t> &&residue,
+                     niobium::fhetch::Format format) noexcept {
     std::filesystem::path tmp_path;
     try {
         // Consuming the parameter releases the caller's buffer even on validation-failure
@@ -211,7 +222,7 @@ InputSpillStore::put(DevAddr addr, std::vector<uint64_t> &&residue) noexcept {
                                   "InputSpillStore::put: rename failed");
             return std::unexpected(HazeInternalError::SpillIoFailed);
         }
-        records_.insert_or_assign(addr, Record{.ring_dim = owned.size()});
+        records_.insert_or_assign(addr, Record{.ring_dim = owned.size(), .format = format});
         return {};
     } catch (...) {
         std::error_code ec;
@@ -388,7 +399,7 @@ InputSpillStore::bind_name(const std::string &name, std::vector<DevAddr> &&addrs
     }
 }
 
-std::expected<std::vector<std::vector<uint64_t>>, HazeInternalError>
+std::expected<InputSpillStore::NamedResidues, HazeInternalError>
 InputSpillStore::take_named(const std::string &name) noexcept {
     try {
         HazeLockGuard lock(mutex_);
@@ -450,7 +461,7 @@ InputSpillStore::take_named(const std::string &name) noexcept {
             record_internal_error(HazeInternalError::SpillIoFailed, body.str().c_str());
             return std::unexpected(HazeInternalError::SpillIoFailed);
         }
-        return residues;
+        return NamedResidues{.residues = std::move(residues), .format = recs.front().format};
     } catch (...) {
         record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::take_named");
         return std::unexpected(HazeInternalError::SpillIoFailed);

@@ -24,6 +24,7 @@
 #include <expected>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
+#include <niobium/fhetch_api.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -162,11 +163,25 @@ extern "C" hazeError_t hazeMemcpyAsync(void *dst, const void *src, size_t count,
 extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, size_t count,
                                      hazeMemcpyKind kind, const uint64_t *base,
                                      size_t base_len) noexcept {
+    return hazeMemcpyMrpFormat(dst, src, count, kind, base, base_len, HAZE_POLY_FORMAT_EVALUATION);
+}
+
+extern "C" hazeError_t hazeMemcpyMrpFormat(void *const *dst, const void *const *src, size_t count,
+                                           hazeMemcpyKind kind, const uint64_t *base,
+                                           size_t base_len, hazePolyFormat format) noexcept {
     if (dst == nullptr || src == nullptr || base == nullptr || base_len == 0)
         return set_error(HAZE_ERROR_INVALID_VALUE);
+    if (format != HAZE_POLY_FORMAT_EVALUATION && format != HAZE_POLY_FORMAT_COEFFICIENT)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
 
-    if (kind == HAZE_MEMCPY_HOST_TO_DEVICE)
-        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base, base_len));
+    if (kind == HAZE_MEMCPY_HOST_TO_DEVICE) {
+        const niobium::fhetch::Format recorded = format == HAZE_POLY_FORMAT_COEFFICIENT
+                                                     ? niobium::fhetch::Format::Coefficient
+                                                     : niobium::fhetch::Format::Evaluation;
+        return set_internal_result(haze::copy_h2d_mrp(dst, src, count, base, base_len, recorded));
+    }
+    if (format != HAZE_POLY_FORMAT_EVALUATION)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
     if (kind == HAZE_MEMCPY_DEVICE_TO_HOST)
         return set_internal_result(haze::copy_to_host_mrp(dst, src, count, base_len));
     if (kind == HAZE_MEMCPY_DEVICE_TO_DEVICE)

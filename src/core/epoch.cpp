@@ -25,6 +25,7 @@
 #include <expected>
 #include <ios>
 #include <niobium/fhetch_api.h>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -145,8 +146,10 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     // on disk) touches neither the shadow nor the store and needs no rollback.
     bool promoted_this_call = false;
     std::vector<uint64_t> residue;
-    if (!input_spill().has(addr)) {
+    std::optional<fhetch::Format> format = input_spill().format(addr);
+    if (!format) {
         // Fresh live-in: promote the shadow the same way an eager H2D tag would.
+        format = fhetch::Format::Evaluation;
         auto components = allocator().extract_polynomial_components(addr, ring_dim);
         if (!components) {
             // An addr with neither shadow nor a spilled residue has no value to read;
@@ -160,7 +163,7 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
             return std::unexpected(components.error());
         }
         residue = *components;
-        auto put = input_spill().put(addr, std::move(*components));
+        auto put = input_spill().put(addr, std::move(*components), *format);
         if (!put) {
             // extract_polynomial_components() already evicted the shadow; restore it, since
             // the allocator's contract is that an error path never destroys the caller's bytes.
@@ -195,7 +198,7 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     }
     fhetch::Polynomial poly;
     try {
-        poly = fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation);
+        poly = fhetch::Polynomial::zeros(ring_dim, *format);
         fhetch::tag_input(name, poly);
         poly_map_.emplace(addr, poly);
     } catch (...) {
@@ -305,7 +308,7 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
     if (!components)
         return std::unexpected(components.error());
     auto residue = *components;
-    auto put = input_spill().put(addr, std::move(*components));
+    auto put = input_spill().put(addr, std::move(*components), fhetch::Format::Evaluation);
     if (!put) {
         // extract_polynomial_components() already evicted the shadow; restore it, since
         // the allocator's contract is that an error path never destroys the caller's bytes.
@@ -370,7 +373,8 @@ std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr 
 
 std::expected<void, HazeInternalError>
 EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
-                                     std::span<const uint64_t> moduli) noexcept {
+                                     std::span<const uint64_t> moduli,
+                                     fhetch::Format format) noexcept {
     // No recording (failed init): keep H2D as a plain shadow write and skip the
     // tag, matching tag_h2d_input_locked.
     if (!recording_) {
@@ -422,7 +426,8 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
     // authoritative for rollback until the whole tag has committed.
     std::size_t put_count = 0;
     for (; put_count < addrs.size(); ++put_count) {
-        auto put = input_spill().put(addrs[put_count], std::vector<uint64_t>(residues[put_count]));
+        auto put =
+            input_spill().put(addrs[put_count], std::vector<uint64_t>(residues[put_count]), format);
         if (!put) {
             erase_puts(put_count);
             restore_shadows(addrs.size());
@@ -462,8 +467,7 @@ EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
         std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
         pairs.reserve(addrs.size());
         for (std::size_t i = 0; i < addrs.size(); ++i)
-            pairs.emplace_back(fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation),
-                               moduli[i]);
+            pairs.emplace_back(fhetch::Polynomial::zeros(ring_dim, format), moduli[i]);
         fhetch::tag_input(name, fhetch::MRP::from_pairs(pairs));
         for (std::size_t i = 0; i < addrs.size(); ++i) {
             // The caller declared this residue's prime, so bind it rather than

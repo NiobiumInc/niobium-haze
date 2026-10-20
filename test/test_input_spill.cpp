@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <niobium/fhetch_api.h>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -30,6 +32,9 @@ namespace fs = std::filesystem;
 using haze::DevAddr;
 
 namespace {
+
+constexpr niobium::fhetch::Format kEvaluation = niobium::fhetch::Format::Evaluation;
+constexpr niobium::fhetch::Format kCoefficient = niobium::fhetch::Format::Coefficient;
 
 DevAddr addr(uint64_t n) {
     return DevAddr{0x4000000000ULL + (n * 0x8000)};
@@ -61,7 +66,7 @@ TEST_CASE("input spill: put/read/erase round-trips one address, overwrite allowe
     REQUIRE_FALSE(store.has(a));
 
     const std::vector<uint64_t> first = pattern(0, ring_dim);
-    auto put_first = store.put(a, std::vector<uint64_t>(first));
+    auto put_first = store.put(a, std::vector<uint64_t>(first), kEvaluation);
     REQUIRE(put_first.has_value());
     REQUIRE(store.has(a));
 
@@ -72,7 +77,7 @@ TEST_CASE("input spill: put/read/erase round-trips one address, overwrite allowe
 
     // Overwrite: the same address, a different residue.
     const std::vector<uint64_t> second = pattern(1, ring_dim);
-    auto put_second = store.put(a, std::vector<uint64_t>(second));
+    auto put_second = store.put(a, std::vector<uint64_t>(second), kEvaluation);
     REQUIRE(put_second.has_value());
     std::vector<uint64_t> after_overwrite(ring_dim, 0);
     auto read_after_overwrite = store.read(a, std::as_writable_bytes(std::span{after_overwrite}));
@@ -98,7 +103,7 @@ TEST_CASE("input spill: read serves full and partial reads", "[unit]") {
     constexpr std::size_t ring_dim = 32;
     const DevAddr a = addr(1);
     const std::vector<uint64_t> residue = pattern(0, ring_dim);
-    auto put_result = store.put(a, std::vector<uint64_t>(residue));
+    auto put_result = store.put(a, std::vector<uint64_t>(residue), kEvaluation);
     REQUIRE(put_result.has_value());
 
     std::vector<uint64_t> full(ring_dim, 0);
@@ -138,13 +143,13 @@ TEST_CASE("input spill: put validates shape and activation", "[unit]") {
 
     haze::InputSpillStore store;
 
-    auto before_activate = store.put(addr(0), pattern(0, 4));
+    auto before_activate = store.put(addr(0), pattern(0, 4), kEvaluation);
     REQUIRE(!before_activate.has_value());
     REQUIRE(before_activate.error() == haze::HazeInternalError::SpillIoFailed);
 
     REQUIRE(store.activate(dir).has_value());
 
-    auto empty_residue = store.put(addr(0), {});
+    auto empty_residue = store.put(addr(0), {}, kEvaluation);
     REQUIRE(!empty_residue.has_value());
     REQUIRE(empty_residue.error() == haze::HazeInternalError::SpillIoFailed);
 
@@ -180,17 +185,17 @@ TEST_CASE("input spill: bind_name / take_named reads addrs in order without eras
     const DevAddr a1 = addr(1);
     const std::vector<uint64_t> r0 = pattern(0, ring_dim);
     const std::vector<uint64_t> r1 = pattern(1, ring_dim);
-    REQUIRE(store.put(a0, std::vector<uint64_t>(r0)).has_value());
-    REQUIRE(store.put(a1, std::vector<uint64_t>(r1)).has_value());
+    REQUIRE(store.put(a0, std::vector<uint64_t>(r0), kEvaluation).has_value());
+    REQUIRE(store.put(a1, std::vector<uint64_t>(r1), kEvaluation).has_value());
 
     auto bound = store.bind_name("group", {a0, a1});
     REQUIRE(bound.has_value());
 
     auto taken = store.take_named("group");
     REQUIRE(taken.has_value());
-    REQUIRE(taken->size() == 2);
-    REQUIRE((*taken)[0] == r0);
-    REQUIRE((*taken)[1] == r1);
+    REQUIRE(taken->residues.size() == 2);
+    REQUIRE(taken->residues[0] == r0);
+    REQUIRE(taken->residues[1] == r1);
 
     // The name binding is consumed, but the addrs' bytes are not: take_named again
     // fails on the name, while the addrs are still there to read directly.
@@ -210,15 +215,16 @@ TEST_CASE("input spill: bind_name / take_named reads addrs in order without eras
 
     // bind_name snapshots immediately: a later overwrite/erase of the addr cannot
     // perturb what an already-bound name reads back.
-    REQUIRE(store.put(a1, std::vector<uint64_t>(r0)).has_value());
+    REQUIRE(store.put(a1, std::vector<uint64_t>(r0), kEvaluation).has_value());
     auto rebound = store.bind_name("group2", {a1});
     REQUIRE(rebound.has_value());
-    REQUIRE(store.put(a1, std::vector<uint64_t>(r1)).has_value()); // overwrite after snapshot
-    REQUIRE(store.erase(a1).has_value());                          // and even free it
+    REQUIRE(store.put(a1, std::vector<uint64_t>(r1), kEvaluation)
+                .has_value());            // overwrite after snapshot
+    REQUIRE(store.erase(a1).has_value()); // and even free it
     auto taken2 = store.take_named("group2");
     REQUIRE(taken2.has_value());
-    REQUIRE(taken2->size() == 1);
-    REQUIRE((*taken2)[0] == r0); // the snapshot at bind_name time, not the later overwrite
+    REQUIRE(taken2->residues.size() == 1);
+    REQUIRE(taken2->residues[0] == r0); // the snapshot at bind_name time, not the later overwrite
 
     // bind_name on an addr with no record fails immediately (nothing to snapshot).
     auto dangling = store.bind_name("dangling", {a0, a1});
@@ -227,6 +233,38 @@ TEST_CASE("input spill: bind_name / take_named reads addrs in order without eras
     // a0's snapshot (index 0) was written before a1 (index 1) failed; the rollback must
     // remove it too, not just report the error.
     REQUIRE_FALSE(fs::exists(dir / "name_dangling_0.spill"));
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("input spill: a record keeps its form, and a snapshot the form at bind time", "[unit]") {
+    const fs::path dir{"input_spill_scratch_format"};
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+
+    haze::InputSpillStore store;
+    REQUIRE(store.activate(dir).has_value());
+
+    constexpr std::size_t ring_dim = 16;
+    const DevAddr a0 = addr(0);
+    const DevAddr a1 = addr(1);
+    REQUIRE_FALSE(store.format(a0).has_value());
+    REQUIRE(store.put(a0, pattern(0, ring_dim), kCoefficient).has_value());
+    REQUIRE(store.put(a1, pattern(1, ring_dim), kCoefficient).has_value());
+    REQUIRE(store.format(a0) == std::optional{kCoefficient});
+    REQUIRE(store.format(a1) == std::optional{kCoefficient});
+
+    REQUIRE(store.bind_name("g", {a0, a1}).has_value());
+    REQUIRE(store.put(a0, pattern(2, ring_dim), kEvaluation).has_value());
+    REQUIRE(store.put(a1, pattern(3, ring_dim), kEvaluation).has_value());
+    REQUIRE(store.format(a0) == std::optional{kEvaluation});
+
+    auto taken = store.take_named("g");
+    REQUIRE(taken.has_value());
+    REQUIRE(taken->format == kCoefficient);
+
+    REQUIRE(store.erase(a0).has_value());
+    REQUIRE_FALSE(store.format(a0).has_value());
 
     fs::remove_all(dir, ec);
 }
@@ -242,18 +280,18 @@ TEST_CASE("input spill: snapshots are immune to a later put's rename", "[unit]")
     constexpr std::size_t ring_dim = 16;
     const DevAddr a = addr(0);
     const std::vector<uint64_t> original = pattern(0, ring_dim);
-    REQUIRE(store.put(a, std::vector<uint64_t>(original)).has_value());
+    REQUIRE(store.put(a, std::vector<uint64_t>(original), kEvaluation).has_value());
     REQUIRE(store.bind_name("snap", {a}).has_value());
 
     // put()'s write-then-rename always plants a fresh inode at addr's path, so the
     // hardlinked snapshot keeps the ORIGINAL bytes even after this overwrite.
     const std::vector<uint64_t> updated = pattern(1, ring_dim);
-    REQUIRE(store.put(a, std::vector<uint64_t>(updated)).has_value());
+    REQUIRE(store.put(a, std::vector<uint64_t>(updated), kEvaluation).has_value());
 
     auto taken = store.take_named("snap");
     REQUIRE(taken.has_value());
-    REQUIRE(taken->size() == 1);
-    REQUIRE((*taken)[0] == original);
+    REQUIRE(taken->residues.size() == 1);
+    REQUIRE(taken->residues[0] == original);
 
     std::vector<uint64_t> readback(ring_dim, 0);
     REQUIRE(store.read(a, std::as_writable_bytes(std::span{readback})).has_value());
@@ -273,7 +311,7 @@ TEST_CASE("input spill: activate is idempotent for the same root, a hard error f
     haze::InputSpillStore store;
     REQUIRE(store.activate(dir_a).has_value());
     const DevAddr a = addr(0);
-    REQUIRE(store.put(a, pattern(0, 8)).has_value());
+    REQUIRE(store.put(a, pattern(0, 8), kEvaluation).has_value());
 
     // Re-activating the SAME root while active keeps existing records.
     REQUIRE(store.activate(dir_a).has_value());
@@ -306,7 +344,7 @@ TEST_CASE("input spill: activate failure is a hard error", "[unit]") {
 
     // A failed activate leaves the store inactive: put() behaves as if
     // activate() had never been called.
-    auto put_after_failed_activate = store.put(addr(0), pattern(0, 4));
+    auto put_after_failed_activate = store.put(addr(0), pattern(0, 4), kEvaluation);
     REQUIRE(!put_after_failed_activate.has_value());
     REQUIRE(put_after_failed_activate.error() == haze::HazeInternalError::SpillIoFailed);
 
@@ -323,8 +361,8 @@ TEST_CASE("input spill: clear_names drops manifests only; clear tears everything
 
     const DevAddr a = addr(0);
     const DevAddr b = addr(1);
-    REQUIRE(store.put(a, pattern(0, 8)).has_value());
-    REQUIRE(store.put(b, pattern(1, 8)).has_value());
+    REQUIRE(store.put(a, pattern(0, 8), kEvaluation).has_value());
+    REQUIRE(store.put(b, pattern(1, 8), kEvaluation).has_value());
     REQUIRE(store.bind_name("g", {a, b}).has_value());
 
     store.clear_names();
@@ -339,13 +377,13 @@ TEST_CASE("input spill: clear_names drops manifests only; clear tears everything
     REQUIRE(!fs::exists(dir));
     REQUIRE_FALSE(store.has(a));
 
-    auto put_after_clear = store.put(a, pattern(0, 8));
+    auto put_after_clear = store.put(a, pattern(0, 8), kEvaluation);
     REQUIRE(!put_after_clear.has_value());
     REQUIRE(put_after_clear.error() == haze::HazeInternalError::SpillIoFailed);
 
     REQUIRE(store.activate(dir).has_value());
     const std::vector<uint64_t> expected = pattern(2, 8);
-    REQUIRE(store.put(a, std::vector<uint64_t>(expected)).has_value());
+    REQUIRE(store.put(a, std::vector<uint64_t>(expected), kEvaluation).has_value());
     std::vector<uint64_t> readback(8, 0);
     REQUIRE(store.read(a, std::as_writable_bytes(std::span{readback})).has_value());
     REQUIRE(readback == expected);
@@ -364,8 +402,8 @@ TEST_CASE("input spill: take_named terminalizes when snapshot deletion fails", "
     constexpr std::size_t ring_dim = 8;
     const DevAddr a0 = addr(0);
     const DevAddr a1 = addr(1);
-    REQUIRE(store.put(a0, pattern(0, ring_dim)).has_value());
-    REQUIRE(store.put(a1, pattern(1, ring_dim)).has_value());
+    REQUIRE(store.put(a0, pattern(0, ring_dim), kEvaluation).has_value());
+    REQUIRE(store.put(a1, pattern(1, ring_dim), kEvaluation).has_value());
     REQUIRE(store.bind_name("g", {a0, a1}).has_value());
 
     // Block deletion, not reading, of the name-scoped snapshots: owner_read | owner_exec
@@ -405,7 +443,7 @@ TEST_CASE("input spill: bind_name and take_named reject a path-separator name", 
     REQUIRE(store.activate(dir).has_value());
 
     const DevAddr a = addr(0);
-    REQUIRE(store.put(a, pattern(0, 8)).has_value());
+    REQUIRE(store.put(a, pattern(0, 8), kEvaluation).has_value());
 
     auto bad_bind = store.bind_name("nested/name", {a});
     REQUIRE(!bad_bind.has_value());
@@ -431,8 +469,8 @@ TEST_CASE("input spill: bind_name re-registration with fewer addrs drops the tra
     constexpr std::size_t ring_dim = 8;
     const DevAddr a0 = addr(0);
     const DevAddr a1 = addr(1);
-    REQUIRE(store.put(a0, pattern(0, ring_dim)).has_value());
-    REQUIRE(store.put(a1, pattern(1, ring_dim)).has_value());
+    REQUIRE(store.put(a0, pattern(0, ring_dim), kEvaluation).has_value());
+    REQUIRE(store.put(a1, pattern(1, ring_dim), kEvaluation).has_value());
 
     REQUIRE(store.bind_name("g", {a0, a1}).has_value());
     REQUIRE(fs::exists(dir / "name_g_0.spill"));
@@ -446,7 +484,7 @@ TEST_CASE("input spill: bind_name re-registration with fewer addrs drops the tra
 
     auto taken = store.take_named("g");
     REQUIRE(taken.has_value());
-    REQUIRE(taken->size() == 1);
+    REQUIRE(taken->residues.size() == 1);
 
     fs::remove_all(dir, ec);
 }
@@ -461,7 +499,7 @@ TEST_CASE("input spill: take_named rejects a corrupted record file", "[unit]") {
 
     constexpr std::size_t ring_dim = 16;
     const DevAddr a = addr(0);
-    REQUIRE(store.put(a, pattern(0, ring_dim)).has_value());
+    REQUIRE(store.put(a, pattern(0, ring_dim), kEvaluation).has_value());
     REQUIRE(store.bind_name("corrupt", {a}).has_value());
 
     // take_named reads the name-scoped snapshot bind_name wrote, not the addr-scoped
@@ -509,7 +547,7 @@ TEST_CASE("input spill: put fails when its scratch path is blocked by a director
     const fs::path tmp_path = dir / tmp_name.str();
     REQUIRE(fs::create_directory(tmp_path));
 
-    auto blocked = store.put(a, pattern(0, ring_dim));
+    auto blocked = store.put(a, pattern(0, ring_dim), kEvaluation);
     REQUIRE(!blocked.has_value());
     REQUIRE(blocked.error() == haze::HazeInternalError::SpillIoFailed);
     REQUIRE_FALSE(store.has(a));
@@ -517,7 +555,7 @@ TEST_CASE("input spill: put fails when its scratch path is blocked by a director
     // (an empty directory), so the blocker is already gone -- nothing to clear by hand.
     REQUIRE_FALSE(fs::exists(tmp_path));
 
-    auto retried = store.put(a, pattern(0, ring_dim));
+    auto retried = store.put(a, pattern(0, ring_dim), kEvaluation);
     REQUIRE(retried.has_value());
     REQUIRE(store.has(a));
 

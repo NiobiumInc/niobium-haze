@@ -49,3 +49,9 @@ HAZE_1.1 {
     hazeModUpExact;
     hazeReplayBridgeInitCryptoContext;
 } HAZE_1.0;
+
+# hazeMemcpyMrpFormat is new here.
+HAZE_1.2 {
+  global:
+    hazeMemcpyMrpFormat;
+} HAZE_1.1;
