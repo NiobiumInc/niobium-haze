@@ -54,11 +54,12 @@ inline bool hw_target_active() {
     return v != nullptr && v[0] != '\0';
 }
 
-// Skip a case that uploads COEFFICIENT-form bytes and transforms them in-trace;
-// see the hazeNTT input-format contract in haze.h.
+// Skip a single-residue case that uploads COEFFICIENT-form bytes through plain hazeMemcpy, which
+// records them as evaluation form; see the hazeNTT input-format contract in haze.h.
 inline void skip_if_hw_coefficient_input() {
     if (hw_target_active())
-        SKIP("uploads coefficient-form input; hardware targets require evaluation form "
+        SKIP("uploads coefficient-form input untagged; hardware targets need "
+             "hazeMemcpyMrpFormat(..., HAZE_POLY_FORMAT_COEFFICIENT) "
              "(see the hazeNTT input-format contract in haze.h)");
 }
 

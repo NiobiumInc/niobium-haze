@@ -52,6 +52,12 @@ struct SrpDriver {
         return haze::test::allocate_and_h2d_residues(residues);
     }
 
+    // The single-residue path has no form tag, so coefficient-form bytes are recorded as
+    // evaluation form; cases that depend on the form call skip_if_hw_coefficient_input.
+    static std::vector<void *> h2d_coefficient(const std::vector<std::vector<uint64_t>> &residues) {
+        return h2d(residues);
+    }
+
     // Re-upload into already-allocated slots.
     static void h2d_into(const std::vector<void *> &ptrs,
                          const std::vector<std::vector<uint64_t>> &residues) {
@@ -126,6 +132,10 @@ struct MrpDriver {
         return haze::test::allocate_and_h2d_residues(residues, base);
     }
 
+    std::vector<void *> h2d_coefficient(const std::vector<std::vector<uint64_t>> &residues) const {
+        return haze::test::allocate_and_h2d_residues(residues, base, HAZE_POLY_FORMAT_COEFFICIENT);
+    }
+
     // Re-upload into already-allocated slots; each upload is its own declaration
     // and gets its own recorded entry.
     void h2d_into(const std::vector<void *> &ptrs,
@@ -139,12 +149,8 @@ struct MrpDriver {
     }
 
     uint64_t setup() {
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-        const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
-        base = {kQ0, kQ1, kQ2};
+        base = haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+        REQUIRE(base == std::vector<uint64_t>{kQ0, kQ1, kQ2});
         return kQ0;
     }
 
@@ -452,6 +458,8 @@ TEMPLATE_TEST_CASE("hazeMulScalar: pointwise scalar product retrieved after D2H"
 // ===========================================================================
 
 TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriver, MrpDriver) {
+    if constexpr (TestType::kNumResidues == 1)
+        haze::test::skip_if_hw_coefficient_input();
     TestType d;
     d.setup();
 
@@ -464,7 +472,7 @@ TEMPLATE_TEST_CASE("NTT round-trip: INTT(NTT(x)) == x", "[integration]", SrpDriv
         }
     }
 
-    auto d_src = d.h2d(src);
+    auto d_src = d.h2d_coefficient(src);
     auto d_ntt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_intt = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
 
@@ -496,9 +504,6 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
     // lands at X^(j*k mod 2N) (sign-flipped if ≥ N). With k=5, j=1, j*k=5<N,
     // expected is +1 at position 5; the round-trip test alone is symmetric
     // and wouldn't catch a substitution-direction bug.
-    // Direction-sensitivity is also why this needs the coefficient-input skip
-    // while the symmetric round-trip above does not: there the load-time
-    // permutation cancels, here it does not.
     if constexpr (TestType::kNumResidues == 1)
         haze::test::skip_if_hw_coefficient_input();
     TestType d;
@@ -522,7 +527,7 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
         row[out_pos] = 1;
     }
 
-    auto d_src = d.h2d(src);
+    auto d_src = d.h2d_coefficient(src);
     auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_back = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
@@ -544,6 +549,8 @@ TEMPLATE_TEST_CASE("automorph impulse: X^1 -> X^k under automorph(_, k)", "[inte
 
 TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == x", "[integration]",
                    SrpDriver, MrpDriver) {
+    if constexpr (TestType::kNumResidues == 1)
+        haze::test::skip_if_hw_coefficient_input();
     TestType d;
     d.setup();
 
@@ -561,7 +568,7 @@ TEMPLATE_TEST_CASE("automorph round-trip: automorph(k) then automorph(k_inv) == 
         src[i] = haze::test::make_residue(d.base[i], 0xA170ULL + i, kRingDim);
     }
 
-    auto d_src = d.h2d(src);
+    auto d_src = d.h2d_coefficient(src);
     auto d_eval = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut1 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
     auto d_aut2 = haze::test::allocate_dst_residues(TestType::kNumResidues, kBytes);
@@ -623,7 +630,7 @@ TEST_CASE("hazeRotAutomorphCoeffMrp: impulse lands at the spec-defined position"
     REQUIRE(expected[0][1] == 0);
     REQUIRE(expected[0][kRingDim - 2] == 0);
 
-    auto d_src = d.h2d(src);
+    auto d_src = d.h2d_coefficient(src);
     auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_rot = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
@@ -661,7 +668,7 @@ TEST_CASE("hazeRotAutomorphCoeffMrp: rot(_, k) ∘ rot(_, N-k) == -x", "[integra
         }
     }
 
-    auto d_src = d.h2d(src);
+    auto d_src = d.h2d_coefficient(src);
     auto d_eval = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_coef = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
     auto d_aut1 = haze::test::allocate_dst_residues(MrpDriver::kNumResidues, kBytes);
@@ -697,14 +704,12 @@ std::vector<std::vector<uint64_t>> run_ntt_mul_intt(const Driver &d,
                                                     const std::vector<std::vector<uint64_t>> &b) {
     REQUIRE(a.size() == Driver::kNumResidues);
     REQUIRE(b.size() == Driver::kNumResidues);
-    // a and b are chosen COEFFICIENT vectors uploaded by H2D. Only the SRP
-    // raw-memory input path needs the skip (see CLAUDE.md's coefficient-input
-    // exception); the MRP arm passes under func_sim_hw and stays live.
+    // a and b are chosen COEFFICIENT vectors; the MRP arm uploads them tagged.
     if constexpr (Driver::kNumResidues == 1)
         haze::test::skip_if_hw_coefficient_input();
 
-    auto d_a = d.h2d(a);
-    auto d_b = d.h2d(b);
+    auto d_a = d.h2d_coefficient(a);
+    auto d_b = d.h2d_coefficient(b);
     auto d_a_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
     auto d_b_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
     auto d_c_eval = haze::test::allocate_dst_residues(Driver::kNumResidues, kBytes);
