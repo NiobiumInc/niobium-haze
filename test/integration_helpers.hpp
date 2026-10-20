@@ -14,6 +14,7 @@
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -173,10 +174,12 @@ allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues) {
 }
 
 // Same, but declaring each residue's prime, so the upload records one MRP input
-// carrying the moduli; this is how a ciphertext's residues must be uploaded.
+// carrying the moduli; this is how a ciphertext's residues must be uploaded. A
+// `format` uploads with hazeMemcpyMrpFormat, else hazeMemcpyMrp.
 inline std::vector<void *>
 allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues,
-                          const std::vector<uint64_t> &base) {
+                          const std::vector<uint64_t> &base,
+                          std::optional<hazePolyFormat> format = std::nullopt) {
     REQUIRE(residues.size() == base.size());
     std::vector<void *> ptrs(residues.size(), nullptr);
     std::vector<const void *> srcs(residues.size(), nullptr);
@@ -186,8 +189,12 @@ allocate_and_h2d_residues(const std::vector<std::vector<uint64_t>> &residues,
         REQUIRE(hazeMalloc(&ptrs[i], bytes) == HAZE_SUCCESS);
         srcs[i] = residues[i].data();
     }
-    REQUIRE(hazeMemcpyMrp(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE, base.data(),
-                          base.size()) == HAZE_SUCCESS);
+    const hazeError_t uploaded =
+        format ? hazeMemcpyMrpFormat(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE,
+                                     base.data(), base.size(), *format)
+               : hazeMemcpyMrp(ptrs.data(), srcs.data(), bytes, HAZE_MEMCPY_HOST_TO_DEVICE,
+                               base.data(), base.size());
+    REQUIRE(uploaded == HAZE_SUCCESS);
     return ptrs;
 }
 

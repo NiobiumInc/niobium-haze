@@ -150,7 +150,7 @@ class EpochState {
     std::expected<void, HazeInternalError> tag_h2d_input_locked(DevAddr addr) noexcept
         HAZE_REQUIRES(mutex_);
 
-    // Tag one MRP input for an H2D upload whose caller declared `moduli` (hazeMemcpyMrp),
+    // Tag one MRP input for an H2D upload whose caller declared `moduli` (hazeMemcpyMrpFormat),
     // binding each residue's real modulus instead of erasing it. Emits exactly one entry per
     // upload - the sole input tag a grouped residue ever gets, so nothing downstream has to
     // decide which of two entries governs an address. All-or-nothing: residues are collected
@@ -158,8 +158,8 @@ class EpochState {
     // addr-scoped record behind (a re-upload's superseded record is dropped, which a later
     // D2H reads correctly from the restored shadow).
     std::expected<void, HazeInternalError>
-    tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
-                             std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
+    tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs, std::span<const uint64_t> moduli,
+                             niobium::fhetch::Format format) noexcept HAZE_REQUIRES(mutex_);
 
     // Register an MRP-shaped grouping so replay emits a single fhetch::tag_output(name, MRP);
     // re-registration is latest-write-wins (identical membership no-ops, anything else

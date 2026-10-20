@@ -332,6 +332,16 @@ slice_array_values(const std::vector<std::vector<uint64_t>> &per_residue_values,
     return out;
 }
 
+// Marks every DCRTPoly and tower as coefficient form without transforming the values, which
+// SetFormat would do.
+void relabel_coefficient(lbcrypto::CiphertextImpl<DCRTPoly> &ct) {
+    for (auto &dcrt : ct.GetElements()) {
+        dcrt.OverrideFormat(Format::COEFFICIENT);
+        for (auto &tower : dcrt.GetAllElements())
+            tower.OverrideFormat(Format::COEFFICIENT);
+    }
+}
+
 // Dispatch on shape.kind; empty per_residue_values yields a template.
 lbcrypto::Ciphertext<DCRTPoly>
 synthesize_for_shape(const Context &ctx, const niobium::CapturedShape &shape,
@@ -444,25 +454,27 @@ void on_post_recording(const HookCtx &hctx) {
                 log_hook_error(body.str());
                 return;
             }
-            if (spilled->size() != rec.addr_ids.size()) {
+            if (spilled->residues.size() != rec.addr_ids.size()) {
                 std::ostringstream body;
-                body << "input '" << rec.name << "': spilled residue count " << spilled->size()
-                     << " != addr_ids count " << rec.addr_ids.size();
+                body << "input '" << rec.name << "': spilled residue count "
+                     << spilled->residues.size() << " != addr_ids count " << rec.addr_ids.size();
                 log_hook_error(body.str());
                 return;
             }
-            if (spilled->front().size() != hctx.ring_dim) {
+            if (spilled->residues.front().size() != hctx.ring_dim) {
                 // Reports a tower-0 mismatch before any CC work; fill_native_poly
                 // throws for the other towers.
                 std::ostringstream body;
                 body << "input '" << rec.name << "': spilled residue length "
-                     << spilled->front().size() << " != ring_dim " << hctx.ring_dim;
+                     << spilled->residues.front().size() << " != ring_dim " << hctx.ring_dim;
                 log_hook_error(body.str());
                 return;
             }
             // synthesize_for_shape rebases towers to the trace primes, so the
             // .bin carries the exact moduli (see switch_tower_modulus).
-            auto ct = synthesize_for_shape(*ctx, rec.shape, *spilled);
+            auto ct = synthesize_for_shape(*ctx, rec.shape, spilled->residues);
+            if (spilled->format == niobium::fhetch::Format::Coefficient)
+                relabel_coefficient(*ct);
             if (!niobium::detail::write_ciphertext_input_bin(rec.name, ct, rec.addr_ids)) {
                 log_hook_error("write_ciphertext_input_bin failed for '" + rec.name + "'");
             }

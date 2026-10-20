@@ -124,7 +124,8 @@ std::expected<void, HazeInternalError> store_mrp_locked(void *const *dst_polys,
 
 std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void *const *src,
                                                     std::size_t count, const uint64_t *base,
-                                                    std::size_t len) noexcept {
+                                                    std::size_t len,
+                                                    fhetch::Format format) noexcept {
     // Same base contract as the D2D arm: the primes are recorded now, so a
     // malformed base would poison the input entry rather than one instruction.
     if (auto v = validate_moduli_base(base, len); !v)
@@ -141,7 +142,7 @@ std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void
     for (std::size_t i = 0; i < len; ++i)
         addrs.push_back(to_dev_addr(dst[i]));
     EpochSession session;
-    return epoch().tag_h2d_mrp_input_locked(addrs, std::span(base, len));
+    return epoch().tag_h2d_mrp_input_locked(addrs, std::span(base, len), format);
 }
 
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,

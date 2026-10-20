@@ -110,6 +110,13 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
                                    hazeMemcpyKind kind, const uint64_t *base,
                                    size_t base_len) HAZE_NOEXCEPT;
 
+// hazeMemcpyMrp with the polynomial form of H2D bytes declared; hazeMemcpyMrp passes
+// HAZE_POLY_FORMAT_EVALUATION. An unknown format, or COEFFICIENT with D2H or D2D, returns
+// HAZE_ERROR_INVALID_VALUE.
+HAZE_API hazeError_t hazeMemcpyMrpFormat(void *const *dst, const void *const *src, size_t count,
+                                         hazeMemcpyKind kind, const uint64_t *base, size_t base_len,
+                                         hazePolyFormat format) HAZE_NOEXCEPT;
+
 // Read-only query, never starting, finalizing or perturbing an epoch: writes into `out` (NUL-
 // terminated) the MRP input group name minted for the H2D upload that most recently wrote `ptr`'s
 // address — re-uploading the same address, by hazeMemcpyMrp or a plain hazeMemcpy, answers the
@@ -299,12 +306,11 @@ HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
 
 // Number-theoretic transform (NTT) and its inverse.
 //
-// INPUT FORMAT: hazeMemcpy(H2D) bytes are evaluation form, natural order (what
-// CKKS ciphertext limbs already are), since the C ABI carries no format tag.
-// "Natural" is the slot order hazeNTT itself produces (see ROOT), as opposed to
-// a hardware target's own layout. Uploading coefficient-form bytes and calling
-// hazeNTT on them works on an ordinary-form target but not a hardware one, whose
-// driver bit-reverses inputs on load and so scrambles them before the NTT runs.
+// INPUT FORMAT: H2D bytes are recorded as evaluation form in natural order (the
+// slot order hazeNTT produces, see ROOT) unless uploaded with
+// hazeMemcpyMrpFormat(..., HAZE_POLY_FORMAT_COEFFICIENT). A hardware target
+// reorders evaluation-form inputs on load, so coefficient bytes recorded as
+// evaluation are scrambled before hazeNTT.
 //
 // ROOT: a transform at modulus q uses the primitive 2N-th root psi that
 // hazeFheParams::twiddle_generators names for q, else the minimal primitive

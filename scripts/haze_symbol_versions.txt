@@ -48,6 +48,7 @@ hazeMallocMrp@@HAZE_1.0
 hazeMemcpy@@HAZE_1.0
 hazeMemcpyAsync@@HAZE_1.0
 hazeMemcpyMrp@@HAZE_1.0
+hazeMemcpyMrpFormat@@HAZE_1.2
 hazeMemcpyPeerAsync@@HAZE_1.0
 hazeMemset@@HAZE_1.0
 hazeMemsetAsync@@HAZE_1.0

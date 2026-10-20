@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <niobium/fhetch_api.h>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -62,12 +64,24 @@ class InputSpillStore {
     [[nodiscard]] std::expected<void, HazeInternalError>
     activate(std::filesystem::path dir) noexcept HAZE_EXCLUDES(mutex_);
 
+    // A name's snapshotted residues in bind_name's addrs order, and the one form they were all put
+    // with (bind_name's callers never mix forms within a name).
+    struct NamedResidues {
+        std::vector<std::vector<uint64_t>> residues;
+        niobium::fhetch::Format format;
+    };
+
     // Membership: the D2H mode discriminator (deterministic, not a fallback probe).
     [[nodiscard]] bool has(DevAddr addr) const noexcept HAZE_EXCLUDES(mutex_);
 
-    // One polynomial per address; overwrite allowed (a re-upload replaces the file).
+    // The form addr's record was put with, or nullopt when addr has no record.
+    [[nodiscard]] std::optional<niobium::fhetch::Format> format(DevAddr addr) const noexcept
+        HAZE_EXCLUDES(mutex_);
+
+    // One polynomial per address, in `format`; overwrite allowed (a re-upload replaces the file).
     [[nodiscard]] std::expected<void, HazeInternalError>
-    put(DevAddr addr, std::vector<uint64_t> &&residue) noexcept HAZE_EXCLUDES(mutex_);
+    put(DevAddr addr, std::vector<uint64_t> &&residue, niobium::fhetch::Format format) noexcept
+        HAZE_EXCLUDES(mutex_);
 
     // Seekable partial read from the start of addr's residue; dst.size() bytes.
     [[nodiscard]] std::expected<void, HazeInternalError>
@@ -90,7 +104,7 @@ class InputSpillStore {
     // SpillRecordMissing. A read failure leaves the record intact and retriable; once every
     // read succeeds the record is retired unconditionally, even if deleting a snapshot file
     // then fails -- a retry sees SpillRecordMissing, never a half-deleted record.
-    [[nodiscard]] std::expected<std::vector<std::vector<uint64_t>>, HazeInternalError>
+    [[nodiscard]] std::expected<NamedResidues, HazeInternalError>
     take_named(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
 
     // Drops every name's snapshotted copies, leaving addr records (and their bytes)
@@ -105,6 +119,7 @@ class InputSpillStore {
   private:
     struct Record {
         std::size_t ring_dim;
+        niobium::fhetch::Format format;
     };
     // Removes name's snapshot files [0, count) -- bind_name's rollback on a partial
     // failure, and reused by overwrite/clear paths that retire a name's snapshots.
