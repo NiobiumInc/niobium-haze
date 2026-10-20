@@ -14,7 +14,6 @@
 #include <cstdint>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
 #include <vector>
 
 namespace {
@@ -78,12 +77,8 @@ struct MrpDriver {
     }
 
     uint64_t setup() {
-        REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-        const uint64_t moduli[] = {kQ0, kQ1, kQ2};
-        const hazeFheParams fhe = {.ring_dim = kRingDim, .moduli = moduli, .moduli_count = 3};
-        REQUIRE(hazeConfigureDevice(&fhe, nullptr) == HAZE_SUCCESS);
-        REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
-        base = {kQ0, kQ1, kQ2};
+        base = haze::test::setup_integration_mrp3_config(kRingDim, kQ0);
+        REQUIRE(base == std::vector<uint64_t>{kQ0, kQ1, kQ2});
         return kQ0;
     }
 

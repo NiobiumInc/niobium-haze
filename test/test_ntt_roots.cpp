@@ -15,10 +15,11 @@
 // modulus by hazeConfigureDevice and carried by every recorded hazeNTT /
 // hazeINTT and their Mrp forms. The [unit] cases read the frozen config and the
 // written trace; the [integration] cases compare values with a definition-level
-// reference NTT. Cases that upload coefficient-form bytes skip under
-// HAZE_TRANSPORT_HW (see skip_if_hw_coefficient_input). The evaluation-form
-// INTT case runs there too and accepts either outcome a hardware-format target
-// may have: honouring the root, or refusing a trace that carries one.
+// reference NTT. Single-residue cases that upload coefficient-form bytes skip
+// under HAZE_TRANSPORT_HW (see skip_if_hw_coefficient_input); the Mrp cases
+// upload them with hazeMemcpyMrpFormat. Every rooted case that runs there
+// accepts either outcome a hardware-format target may have: honouring the root,
+// or refusing a trace that carries one.
 
 #include "core/config.hpp"
 #include "integration_helpers.hpp"
@@ -231,13 +232,29 @@ std::string omega_operand(uint64_t root) {
     return ", omega=" + std::to_string(root) + "\n";
 }
 
-// Uploads `residues` under `base`, runs hazeNTTMrp then hazeINTTMrp over
-// `base`, and checks the evaluation form against reference_ntt at
-// expected_roots[i] and the round trip against the input.
+// hazeFlush, true when it ran the recording. A hardware-format target either
+// honours a caller root or, when it transforms only with the minimal one,
+// refuses the trace with HAZE_ERROR_INTERNAL.
+bool flush_unless_hw_refuses() {
+    const hazeError_t flushed = hazeFlush();
+    if (haze::test::hw_target_active()) {
+        REQUIRE((flushed == HAZE_SUCCESS || flushed == HAZE_ERROR_INTERNAL));
+    } else {
+        REQUIRE(flushed == HAZE_SUCCESS);
+    }
+    if (flushed != HAZE_SUCCESS)
+        REQUIRE(hazeGetLastError() == HAZE_ERROR_INTERNAL);
+    return flushed == HAZE_SUCCESS;
+}
+
+// Uploads coefficient-form `residues` under `base`, runs hazeNTTMrp then
+// hazeINTTMrp over `base`, and checks the evaluation form against reference_ntt
+// at expected_roots[i] and the round trip against the input.
 void check_mrp_transforms(const std::vector<uint64_t> &base,
                           const std::vector<std::vector<uint64_t>> &residues,
                           const std::vector<uint64_t> &expected_roots) {
-    const std::vector<void *> d_x = haze::test::allocate_and_h2d_residues(residues, base);
+    const std::vector<void *> d_x =
+        haze::test::allocate_and_h2d_residues(residues, base, HAZE_POLY_FORMAT_COEFFICIENT);
     const std::vector<void *> d_eval = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<void *> d_back = haze::test::allocate_dst_residues(base.size(), kBytes);
     const std::vector<const void *> x_view = haze::test::to_const(d_x);
@@ -248,11 +265,13 @@ void check_mrp_transforms(const std::vector<uint64_t> &base,
             HAZE_SUCCESS);
     tag_outputs(d_eval);
     tag_outputs(d_back);
-    REQUIRE(hazeFlush() == HAZE_SUCCESS);
-    for (std::size_t i = 0; i < base.size(); ++i) {
-        INFO("residue " << i << " (mod " << base[i] << ")");
-        require_equal(read_back(d_eval[i]), reference_ntt(residues[i], base[i], expected_roots[i]));
-        require_equal(read_back(d_back[i]), residues[i]);
+    if (flush_unless_hw_refuses()) {
+        for (std::size_t i = 0; i < base.size(); ++i) {
+            INFO("residue " << i << " (mod " << base[i] << ")");
+            require_equal(read_back(d_eval[i]),
+                          reference_ntt(residues[i], base[i], expected_roots[i]));
+            require_equal(read_back(d_back[i]), residues[i]);
+        }
     }
     haze::test::free_all_residues(d_x);
     haze::test::free_all_residues(d_eval);
@@ -351,24 +370,13 @@ TEST_CASE("hazeINTT with a configured root inverts the reference NTT at that roo
     const std::vector<void *> d_out = haze::test::allocate_dst_residues(1, kBytes);
     REQUIRE(hazeINTT(d_out[0], d_eval[0], 0, nullptr) == HAZE_SUCCESS);
     tag_outputs(d_out);
-    const hazeError_t flushed = hazeFlush();
-    if (haze::test::hw_target_active()) {
-        // A hardware-format target either honours the root or, when it
-        // transforms only with the minimal one, refuses the trace.
-        REQUIRE((flushed == HAZE_SUCCESS || flushed == HAZE_ERROR_INTERNAL));
-    } else {
-        REQUIRE(flushed == HAZE_SUCCESS);
-    }
-    if (flushed == HAZE_SUCCESS)
+    if (flush_unless_hw_refuses())
         require_equal(read_back(d_out[0]), a);
-    else
-        REQUIRE(hazeGetLastError() == HAZE_ERROR_INTERNAL);
     haze::test::free_all_residues(d_eval);
     haze::test::free_all_residues(d_out);
 }
 
 TEST_CASE("hazeNTTMrp and hazeINTTMrp use each residue's configured root", "[integration]") {
-    haze::test::skip_if_hw_coefficient_input();
     const std::vector<uint64_t> base = {kQ0, kQ1, kQ2};
     std::vector<uint64_t> roots;
     std::vector<std::vector<uint64_t>> x;
@@ -382,7 +390,6 @@ TEST_CASE("hazeNTTMrp and hazeINTTMrp use each residue's configured root", "[int
 
 TEST_CASE("hazeNTTMrp over rooted primes and the aux prime uses each residue's own root",
           "[integration]") {
-    haze::test::skip_if_hw_coefficient_input();
     const std::vector<uint64_t> roots = {chosen_root(kQ0), chosen_root(kQ1)};
     configure({kQ0, kQ1}, roots, haze::test::target_from_env());
     const uint64_t aux = haze::fhe_params().aux_modulus();

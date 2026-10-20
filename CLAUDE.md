@@ -178,11 +178,12 @@ unexpected failures.
 The last of those is what keeps haze honest about data formats. haze records
 ordinary-form traces for every target and the replay driver applies any hardware
 transform itself, so the two transport runs assert the same oracles and must
-agree. One case diverges by target: in `test_ntt_roots.cpp`, the
-evaluation-form INTT under a caller NTT root (`hazeFheParams::twiddle_generators`)
-accepts, under `HAZE_TRANSPORT_HW=1`, either values that match the reference or
-a refused flush (`HAZE_ERROR_INTERNAL`). `func_sim_hw` transforms only with the
-minimal root and refuses such a recording; the V80 honours the root. Two
+agree. One group of cases diverges by target: in `test_ntt_roots.cpp`, every
+case that runs a transform under a caller NTT root
+(`hazeFheParams::twiddle_generators`) accepts, under `HAZE_TRANSPORT_HW=1`,
+either values that match the reference or a refused flush
+(`HAZE_ERROR_INTERNAL`). `func_sim_hw` transforms only with the minimal root and
+refuses such a recording; the V80 honours the root. Two
 documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
 `test-transport-hw`), via the helpers in `integration_helpers.hpp`:
 
@@ -191,16 +192,10 @@ documented exceptions skip under `HAZE_TRANSPORT_HW=1` (set only by
   cannot reproduce because it holds every value as `v*R mod p` — including a
   `hazeIsHalfModulus` mask, whose set bits are stored as `R mod p_aux`, not 1.
   Setting the flag makes a recording ordinary-form-target only.
-- `skip_if_hw_coefficient_input` — cases that upload COEFFICIENT-form bytes and
-  transform them in-trace. haze declares every H2D input evaluation form (the C
-  ABI has no format tag), and the driver bit-reverses inputs on load, which
-  scrambles coefficient-form bytes before their NTT. See the input-format
-  contract on `hazeNTT` in `haze.h`. Real CKKS workloads are unaffected —
-  ciphertext limbs are already evaluation form. Elementwise ops commute with the
-  permutation and symmetric round-trips cancel it, so only direction-sensitive
-  checks against a coefficient-domain oracle are affected, and only on the SRP
-  raw-memory input path (the MRP arms pass under `func_sim_hw`, though which
-  driver path spares them was never pinned down).
+- `skip_if_hw_coefficient_input` — single-residue cases that upload
+  COEFFICIENT-form bytes with plain `hazeMemcpy`, which records them as
+  evaluation form. The MRP arms tag theirs with `hazeMemcpyMrpFormat`; under
+  `test-transport-hw` they need a compiler that honours the recorded form.
 
 Sanitizers are mutually exclusive `cmake` cache options:
 `-DHAZE_SANITIZERS=ON` (ASAN+UBSAN) or `-DHAZE_TSAN=ON`. UBSAN's enum check
