@@ -12,7 +12,8 @@
 // from the Product.
 //
 // hazeMemcpyMrpFormat: the polynomial form an upload declares is the form its
-// recorded input .bin carries, through cross-epoch reuse.
+// recorded input .bin carries, through cross-epoch reuse and through a flushed
+// result promoted to a later recording's input.
 
 #include "cereal/archives/portable_binary.hpp"
 #include "integration_helpers.hpp"
@@ -237,6 +238,94 @@ TEST_CASE("upload format: cross-epoch reuse of a coefficient upload keeps its fo
 
     for (const auto *group : {&src, &first_sum, &reused_sum})
         haze::test::free_all_residues(*group);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upload format: a flushed INTT result read by the next recording is coefficient form",
+          "[integration]") {
+    // An MRP group output (residues 0 and 1) and a lone single-residue output (the last).
+    const fs::path dir = configure("local", "haze_upload_format_result");
+    const auto values = residues(0xF500ULL);
+    const auto eval =
+        haze::test::allocate_and_h2d_residues(values, kBase, HAZE_POLY_FORMAT_EVALUATION);
+    const auto lone = haze::test::allocate_and_h2d_residues({values[0]});
+    const auto coef = haze::test::allocate_dst_residues(kBase.size() + 1, kBytes);
+    const std::vector<const void *> eval_view = haze::test::to_const(eval);
+    REQUIRE(hazeINTTMrp(coef.data(), eval_view.data(), kBase.data(), kBase.size(), nullptr) ==
+            HAZE_SUCCESS);
+    REQUIRE(hazeINTT(coef.back(), lone[0], 0, nullptr) == HAZE_SUCCESS);
+    for (void *p : coef)
+        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    const auto back = record_ntt({coef.begin(), coef.end() - 1});
+    void *lone_back = nullptr;
+    REQUIRE(hazeMalloc(&lone_back, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeNTT(lone_back, coef.back(), 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(lone_back) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    for (const char *input : {"haze_in_0", "haze_in_1", "haze_in_2"})
+        require_bin_format(input_file(dir, input, ".bin"), Format::COEFFICIENT);
+    std::vector<void *> round_trip = back;
+    round_trip.push_back(lone_back);
+    for (std::size_t i = 0; i < round_trip.size(); ++i) {
+        INFO("output " << i);
+        std::vector<uint64_t> got(kRingDim);
+        REQUIRE(hazeMemcpy(got.data(), round_trip[i], kBytes, HAZE_MEMCPY_DEVICE_TO_HOST) ==
+                HAZE_SUCCESS);
+        REQUIRE(got == values[i % kBase.size()]);
+    }
+
+    haze::test::free_all_residues(eval);
+    haze::test::free_all_residues(lone);
+    haze::test::free_all_residues(coef);
+    haze::test::free_all_residues(round_trip);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upload format: a memset over a flushed coefficient result drops its form",
+          "[integration]") {
+    const fs::path dir = configure("local", "haze_upload_format_memset");
+    const auto lone = haze::test::allocate_and_h2d_residues({residues(0xF600ULL)[0]});
+    const auto out = haze::test::allocate_dst_residues(2, kBytes);
+    REQUIRE(hazeINTT(out[0], lone[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(out[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    REQUIRE(hazeMemset(out[0], 0, kBytes) == HAZE_SUCCESS);
+    REQUIRE(hazeNTT(out[1], out[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(out[1]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    require_bin_format(input_file(dir, "haze_in_0", ".bin"), Format::EVALUATION);
+
+    haze::test::free_all_residues(lone);
+    haze::test::free_all_residues(out);
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upload format: a flushed evaluation result over a coefficient one drops its form",
+          "[integration]") {
+    const fs::path dir = configure("local", "haze_upload_format_overwrite");
+    const auto lone = haze::test::allocate_and_h2d_residues({residues(0xF700ULL)[0]});
+    const auto out = haze::test::allocate_dst_residues(2, kBytes);
+    REQUIRE(hazeINTT(out[0], lone[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(out[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    REQUIRE(hazeNTT(out[0], lone[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(out[0]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+
+    REQUIRE(hazeINTT(out[1], out[0], 0, nullptr) == HAZE_SUCCESS);
+    REQUIRE(hazeTagOutput(out[1]) == HAZE_SUCCESS);
+    REQUIRE(hazeFlush() == HAZE_SUCCESS);
+    require_bin_format(input_file(dir, "haze_in_0", ".bin"), Format::EVALUATION);
+
+    haze::test::free_all_residues(lone);
+    haze::test::free_all_residues(out);
     REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
     fs::remove_all(dir);
 }

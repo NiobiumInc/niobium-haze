@@ -119,6 +119,7 @@ void EpochState::invalidate(DevAddr addr) noexcept {
     pending_outputs_.erase(addr);
     addr_modulus_.erase(addr);
     undeclared_uploads_.erase(addr);
+    coefficient_results_.erase(addr);
     // Bytes are address-scoped now: an invalidated addr's on-disk residue, if any,
     // no longer describes anything live. Safe unconditionally -- bind_name snapshots
     // a tag's residue onto its own file at tag time, so freeing addr afterward (a
@@ -149,7 +150,8 @@ EpochState::lookup_or_create_locked(DevAddr addr) {
     std::optional<fhetch::Format> format = input_spill().format(addr);
     if (!format) {
         // Fresh live-in: promote the shadow the same way an eager H2D tag would.
-        format = fhetch::Format::Evaluation;
+        format = coefficient_results_.contains(addr) ? fhetch::Format::Coefficient
+                                                     : fhetch::Format::Evaluation;
         auto components = allocator().extract_polynomial_components(addr, ring_dim);
         if (!components) {
             // An addr with neither shadow nor a spilled residue has no value to read;
@@ -228,6 +230,7 @@ void EpochState::store_compute_result_locked(DevAddr addr, niobium::fhetch::Poly
                                              uint64_t modulus) noexcept {
     poly_map_.insert_or_assign(addr, std::move(poly));
     undeclared_uploads_.erase(addr);
+    coefficient_results_.erase(addr);
     // A no-modulus (kCopyModulus) result drops any stale entry so a later
     // copy/automorph can't recover a previous occupant's modulus here.
     if (modulus != kCopyModulus)
@@ -256,6 +259,14 @@ uint64_t EpochState::recorded_modulus_locked(DevAddr addr) const noexcept {
 void EpochState::ensure_output_tag_locked(DevAddr addr) {
     if (!pending_outputs_.contains(addr))
         pending_outputs_.emplace(addr, "haze_out_" + std::to_string(output_counter_++));
+}
+
+void EpochState::note_result_format_locked(DevAddr addr) {
+    auto it = poly_map_.find(addr);
+    if (it != poly_map_.end() && it->second.format() == fhetch::Format::Coefficient)
+        coefficient_results_.insert(addr);
+    else
+        coefficient_results_.erase(addr);
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_output_locked(DevAddr addr) {
@@ -294,6 +305,7 @@ std::expected<void, HazeInternalError> EpochState::copy_result_locked(DevAddr ds
 }
 
 std::expected<void, HazeInternalError> EpochState::tag_h2d_input_locked(DevAddr addr) noexcept {
+    coefficient_results_.erase(addr);
     // No recording (failed init): keep H2D as a plain shadow write and skip
     // the tag; a later compute fails at require_recording_locked.
     if (!recording_) {
@@ -375,6 +387,8 @@ std::expected<void, HazeInternalError>
 EpochState::tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
                                      std::span<const uint64_t> moduli,
                                      fhetch::Format format) noexcept {
+    for (DevAddr a : addrs)
+        coefficient_results_.erase(a);
     // No recording (failed init): keep H2D as a plain shadow write and skip the
     // tag, matching tag_h2d_input_locked.
     if (!recording_) {
@@ -695,6 +709,7 @@ std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAd
 void EpochState::reset() noexcept {
     HazeLockGuard lock(mutex_);
     clear_state_locked();
+    coefficient_results_.clear();
     // reset_for_epoch resets fhetch's recording registries and counters, none of
     // which the imminent compiler teardown needs. This control-plane call always
     // precedes CompilerBackend::reset_compiler() (DeviceState::reset()), which
