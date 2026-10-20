@@ -97,6 +97,7 @@ std::expected<void, HazeInternalError> EpochState::materialize_epoch(bool run_re
             if (auto r = allocator().update_shadow(g->addrs[i], std::move(values)); !r) {
                 return std::unexpected(r.error());
             }
+            note_result_format_locked(g->addrs[i]);
         }
     }
 
@@ -122,6 +123,7 @@ std::expected<void, HazeInternalError> EpochState::materialize_epoch(bool run_re
         if (auto r = allocator().update_shadow(addr, std::move(values)); !r) {
             return std::unexpected(r.error());
         }
+        note_result_format_locked(addr);
     }
 
     return {};

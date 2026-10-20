@@ -214,6 +214,8 @@ class EpochState {
 
     void ensure_output_tag_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
+    void note_result_format_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
+
     // Lock order: see the canonical DAG in common/thread_safety.hpp
     // (epoch → allocator only; config scalars are read lock-free).
     HazeMutex mutex_;
@@ -226,6 +228,9 @@ class EpochState {
     // Addrs whose current bytes arrived by a plain modulus-less hazeMemcpy(H2D);
     // backs is_undeclared_upload_locked. Written only where the upload happens.
     std::unordered_set<DevAddr> undeclared_uploads_ HAZE_GUARDED_BY(mutex_);
+    // Addrs whose materialized shadow holds a coefficient-form result, so promoting it to an
+    // input keeps that form. Outlives clear_state_locked, as the shadow does.
+    std::unordered_set<DevAddr> coefficient_results_ HAZE_GUARDED_BY(mutex_);
     // MRP group bookkeeping; invariants documented on MrpGroupRegistry.
     MrpGroupRegistry mrp_ HAZE_GUARDED_BY(mutex_);
     uint64_t input_counter_ HAZE_GUARDED_BY(mutex_) = 0;

@@ -308,9 +308,10 @@ HAZE_API hazeError_t hazeIsHalfModulus(void *dst, const void *src, int mod_idx,
 //
 // INPUT FORMAT: H2D bytes are recorded as evaluation form in natural order (the
 // slot order hazeNTT produces, see ROOT) unless uploaded with
-// hazeMemcpyMrpFormat(..., HAZE_POLY_FORMAT_COEFFICIENT). A hardware target
-// reorders evaluation-form inputs on load, so coefficient bytes recorded as
-// evaluation are scrambled before hazeNTT.
+// hazeMemcpyMrpFormat(..., HAZE_POLY_FORMAT_COEFFICIENT), and a flushed result
+// read back as an input keeps its op's form. A hardware target reorders
+// evaluation-form inputs on load, so coefficient bytes recorded as evaluation
+// are scrambled before hazeNTT.
 //
 // ROOT: a transform at modulus q uses the primitive 2N-th root psi that
 // hazeFheParams::twiddle_generators names for q, else the minimal primitive
