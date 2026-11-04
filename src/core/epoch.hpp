@@ -79,6 +79,12 @@ class EpochState {
     std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept
         HAZE_EXCLUDES(mutex_);
 
+    // Read-only query (backs hazeOutputGroupName): the name the outputs index will give the
+    // pending output `addr` belongs to (its MRP group's, else its own one-limb name), or
+    // SourceUnavailable if `addr` is not a pending output. Never starts or perturbs a recording.
+    std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept
+        HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -263,6 +269,9 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
 
 // Backs hazeInputGroupName (EpochState::input_group_name).
 std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept;
+
+// Backs hazeOutputGroupName (EpochState::output_group_name).
+std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept;
 
 // Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;

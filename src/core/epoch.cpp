@@ -673,6 +673,24 @@ std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAd
     }
 }
 
+std::expected<std::string, HazeInternalError> EpochState::output_group_name(DevAddr addr) noexcept {
+    HazeLockGuard lock(mutex_);
+    try {
+        // The same precedence tag_pending_outputs_locked applies: a residue of a pending MRP
+        // group is exported under the group's name, any other pending output under its own.
+        if (const std::string *group = mrp_.pending_group_for(addr); group != nullptr)
+            return *group;
+        if (auto it = pending_outputs_.find(addr); it != pending_outputs_.end())
+            return it->second;
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "output_group_name: addr is not a pending output");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed, "output_group_name threw");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+}
+
 void EpochState::reset() noexcept {
     HazeLockGuard lock(mutex_);
     clear_state_locked();
@@ -713,6 +731,10 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 
 std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept {
     return epoch().input_group_name(addr);
+}
+
+std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept {
+    return epoch().output_group_name(addr);
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {

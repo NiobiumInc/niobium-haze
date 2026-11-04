@@ -202,6 +202,19 @@ extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out
     return HAZE_SUCCESS;
 }
 
+extern "C" hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_len) noexcept {
+    if (ptr == nullptr || out == nullptr || out_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::output_group_name(haze::to_dev_addr(ptr));
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
+    if (result->size() >= out_len)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    std::memcpy(out, result->data(), result->size());
+    out[result->size()] = '\0';
+    return HAZE_SUCCESS;
+}
+
 extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
     if (dev_ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
