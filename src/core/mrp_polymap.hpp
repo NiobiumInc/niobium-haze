@@ -58,6 +58,10 @@ std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void
                                                     std::size_t count, const uint64_t *base,
                                                     std::size_t len) noexcept;
 
+// An MRP input recorded without words: its addresses and primes only.
+std::expected<void, HazeInternalError> declare_mrp(void *const *dst, std::size_t count,
+                                                   const uint64_t *base, std::size_t len) noexcept;
+
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
                                                         std::size_t count,
                                                         std::size_t len) noexcept;

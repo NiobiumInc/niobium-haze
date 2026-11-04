@@ -57,6 +57,9 @@ bool write_ciphertext_input_bin(const std::string &name,
                                 const lbcrypto::Ciphertext<lbcrypto::DCRTPoly> &ct,
                                 const std::vector<uint64_t> &addr_ids);
 
+// The {.ids, empty .bin} pair of an input declared without its words.
+bool write_declared_input(const std::string &name, const std::vector<uint64_t> &addr_ids);
+
 // Iterate every distinct fhetch::tag_input record (shape, addr_ids, values).
 void for_each_captured_input(const std::function<void(const niobium::CapturedInputRecord &)> &cb);
 
@@ -438,6 +441,12 @@ void on_post_recording(const HookCtx &hctx) {
             const auto *ctx = context_for_shape(hctx, local_cache, rec.shape);
             if (ctx == nullptr) {
                 log_hook_error("input '" + rec.name + "': no CC available for shape");
+                return;
+            }
+            // A declared input (hazeDeclareMrp) has no words: its addresses only.
+            if (haze::input_spill().declared(rec.name)) {
+                if (!niobium::detail::write_declared_input(rec.name, rec.addr_ids))
+                    log_hook_error("write_declared_input failed for '" + rec.name + "'");
                 return;
             }
             // Every non-key input is tagged (and its residues spilled) at H2D or op-time

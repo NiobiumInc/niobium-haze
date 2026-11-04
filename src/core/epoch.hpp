@@ -151,6 +151,10 @@ class EpochState {
     std::expected<void, HazeInternalError>
     tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs,
                              std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
+    // The same input entry with no words: nothing read, nothing spilled (hazeDeclareMrp).
+    std::expected<void, HazeInternalError>
+    tag_declared_mrp_input_locked(std::span<const DevAddr> addrs,
+                                  std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
 
     // Register an MRP-shaped grouping so replay emits a single fhetch::tag_output(name, MRP);
     // re-registration is latest-write-wins (identical membership no-ops, anything else

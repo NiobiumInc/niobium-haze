@@ -123,6 +123,14 @@ HAZE_API hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, siz
 // internal failure (e.g. allocation failure copying the name).
 HAZE_API hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
 
+// hazeDeclareMrp: record `dst[0..base_len)` as one MRP input of `count` bytes per residue,
+// residue i under prime base[i], exactly as hazeMemcpyMrp(H2D) would, but without its words:
+// nothing is read and nothing spilled. The program's input entry is written with its
+// addresses and an empty word file; whoever runs the program supplies the words. A D2H of a
+// declared input is an error (it has none).
+HAZE_API hazeError_t hazeDeclareMrp(void *const *dst, size_t count, const uint64_t *base,
+                                    size_t base_len) HAZE_NOEXCEPT;
+
 // hazeMallocMrp reserves `num_residues` device polynomials for one MRP group under a single
 // allocator lock and writes their addresses into `ptrs[0..num_residues)` (all non-null on
 // success); `num_residues` is the group's residue count (the `base_len` passed to the MRP

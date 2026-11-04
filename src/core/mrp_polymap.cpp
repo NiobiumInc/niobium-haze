@@ -144,6 +144,20 @@ std::expected<void, HazeInternalError> copy_h2d_mrp(void *const *dst, const void
     return epoch().tag_h2d_mrp_input_locked(addrs, std::span(base, len));
 }
 
+std::expected<void, HazeInternalError> declare_mrp(void *const *dst, std::size_t count,
+                                                   const uint64_t *base, std::size_t len) noexcept {
+    if (auto v = validate_moduli_base(base, len); !v)
+        return v;
+    if (count == 0)
+        return {};
+    std::vector<DevAddr> addrs;
+    addrs.reserve(len);
+    for (std::size_t i = 0; i < len; ++i)
+        addrs.push_back(to_dev_addr(dst[i]));
+    EpochSession session;
+    return epoch().tag_declared_mrp_input_locked(addrs, std::span(base, len));
+}
+
 std::expected<void, HazeInternalError> copy_to_host_mrp(void *const *dst, const void *const *src,
                                                         std::size_t count,
                                                         std::size_t len) noexcept {

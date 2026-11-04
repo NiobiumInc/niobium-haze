@@ -176,6 +176,13 @@ extern "C" hazeError_t hazeMemcpyMrp(void *const *dst, const void *const *src, s
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
 
+extern "C" hazeError_t hazeDeclareMrp(void *const *dst, size_t count, const uint64_t *base,
+                                      size_t base_len) noexcept {
+    if (dst == nullptr || base == nullptr || base_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::declare_mrp(dst, count, base, base_len));
+}
+
 extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) noexcept {
     if (ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);

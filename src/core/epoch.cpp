@@ -624,6 +624,39 @@ std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noex
     }
 }
 
+std::expected<void, HazeInternalError>
+EpochState::tag_declared_mrp_input_locked(std::span<const DevAddr> addrs,
+                                          std::span<const uint64_t> moduli) noexcept {
+    if (!recording_) {
+        return {};
+    }
+    const uint64_t ring_dim = fhe_params().ring_dim();
+    const std::string name = mrp_.next_input_group_name();
+    try {
+        std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+        pairs.reserve(addrs.size());
+        for (std::size_t i = 0; i < addrs.size(); ++i)
+            pairs.emplace_back(fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation),
+                               moduli[i]);
+        fhetch::tag_input(name, fhetch::MRP::from_pairs(pairs));
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            fhetch::bind_modulus(pairs[i].first, moduli[i]);
+            poly_map_.insert_or_assign(addrs[i], pairs[i].first);
+            pending_outputs_.erase(addrs[i]);
+            addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
+            undeclared_uploads_.erase(addrs[i]);
+        }
+        input_spill().declare(name);
+        mrp_.record_input_group(addrs, name);
+    } catch (...) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "tag_declared_mrp_input_locked threw; epoch state cleared");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+    return {};
+}
+
 std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
     try {
