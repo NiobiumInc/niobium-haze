@@ -103,6 +103,7 @@ TEST_CASE("declare mrp: an uploaded input of the same program carries its words"
     // The control for the empty word file above: the same recording with an upload.
     const fs::path dir = configure("haze_declare_mrp_control");
     std::vector<std::vector<uint64_t>> values;
+    values.reserve(kBase.size());
     for (std::size_t i = 0; i < kBase.size(); ++i)
         values.push_back(haze::test::make_residue(kBase[i], 0xD0ULL + i, kRingDim));
     const auto uploaded = haze::test::allocate_and_h2d_residues(values, kBase);
