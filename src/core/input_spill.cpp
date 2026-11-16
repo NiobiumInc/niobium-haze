@@ -479,7 +479,7 @@ void InputSpillStore::declare(const std::string &name) noexcept {
 
 bool InputSpillStore::declared(const std::string &name) const noexcept {
     HazeLockGuard lock(mutex_);
-    return declared_.find(name) != declared_.end();
+    return declared_.contains(name);
 }
 
 // clear_names() and clear() cannot fail, so their diagnoses are warnings.
