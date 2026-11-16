@@ -147,7 +147,10 @@ HAZE_API hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_
 // residue i under prime base[i], exactly as hazeMemcpyMrp(H2D) would, but without its words:
 // nothing is read and nothing spilled. The program's input entry is written with its
 // addresses and an empty word file; whoever runs the program supplies the words. A D2H of a
-// declared input is an error (it has none).
+// declared input is an error (it has none). It takes hazeMemcpyMrp(H2D)'s checks: every dst a
+// live allocation (HAZE_ERROR_UNKNOWN_ADDRESS) and `count` at most one polynomial
+// (HAZE_ERROR_SIZE_MISMATCH); `count == 0` records nothing. Before hazeConfigureDevice it
+// records nothing, as an upload does.
 HAZE_API hazeError_t hazeDeclareMrp(void *const *dst, size_t count, const uint64_t *base,
                                     size_t base_len) HAZE_NOEXCEPT;
 
