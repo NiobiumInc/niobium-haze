@@ -468,12 +468,14 @@ InputSpillStore::take_named(const std::string &name) noexcept {
     }
 }
 
-void InputSpillStore::declare(const std::string &name) noexcept {
+bool InputSpillStore::declare(const std::string &name) noexcept {
     HazeLockGuard lock(mutex_);
     try {
-        declared_[name] = true;
+        declared_.insert(name);
+        return true;
     } catch (...) {
         record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::declare");
+        return false;
     }
 }
 

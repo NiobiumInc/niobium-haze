@@ -25,6 +25,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace haze {
@@ -108,8 +109,9 @@ class InputSpillStore {
     take_named(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
 
     // An input recorded without its words (hazeDeclareMrp): nothing is spilled; the
-    // flush writes its addresses and an empty word file.
-    void declare(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
+    // flush writes its addresses and an empty word file. False (the name not
+    // recorded) if storing it failed; the caller must not record the input.
+    [[nodiscard]] bool declare(const std::string &name) noexcept HAZE_EXCLUDES(mutex_);
     [[nodiscard]] bool declared(const std::string &name) const noexcept HAZE_EXCLUDES(mutex_);
 
     // Drops every name's snapshotted copies, leaving addr records (and their bytes)
@@ -144,7 +146,7 @@ class InputSpillStore {
     std::unordered_map<DevAddr, Record> records_ HAZE_GUARDED_BY(mutex_);
     // Name -> its snapshotted residues' Records, in bind_name's addrs order.
     std::unordered_map<std::string, std::vector<Record>> named_records_ HAZE_GUARDED_BY(mutex_);
-    std::unordered_map<std::string, bool> declared_ HAZE_GUARDED_BY(mutex_);
+    std::unordered_set<std::string> declared_ HAZE_GUARDED_BY(mutex_);
 };
 
 // Defined in device_state.cpp.
