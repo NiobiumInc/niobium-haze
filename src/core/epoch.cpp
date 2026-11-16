@@ -28,7 +28,6 @@
 #include <optional>
 #include <span>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -714,9 +713,11 @@ EpochState::tag_declared_mrp_input_locked(std::span<const DevAddr> addrs,
             undeclared_uploads_.erase(addrs[i]);
         }
         // A name the spill store could not keep would flush as an input with
-        // missing words: fail the call, which clears the epoch state below.
-        if (!input_spill().declare(name))
-            throw std::runtime_error("declare failed");
+        // missing words: fail the call and clear the epoch state.
+        if (auto declared = input_spill().declare(name); !declared) {
+            clear_state_locked();
+            return declared;
+        }
         mrp_.record_input_group(addrs, name);
     } catch (...) {
         clear_state_locked();

@@ -149,6 +149,12 @@ std::expected<void, HazeInternalError> declare_mrp(void *const *dst, std::size_t
                                                    const uint64_t *base, std::size_t len) noexcept {
     if (auto v = validate_moduli_base(base, len); !v)
         return v;
+    // The checks hazeMemcpyMrp(H2D) makes through copy_h2d, without the copy:
+    // every residue a live allocation, `count` at most one polynomial.
+    if (auto live = require_allocated_array(dst, len); !live)
+        return live;
+    if (count > allocator().polynomial_size())
+        return std::unexpected(HazeInternalError::PolySizeMismatch);
     if (count == 0)
         return {};
     std::vector<DevAddr> addrs;
