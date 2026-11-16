@@ -11,6 +11,7 @@ hazeBroadcastMulMrp@@HAZE_1.0
 hazeBroadcastRsubMrp@@HAZE_1.0
 hazeBroadcastSubMrp@@HAZE_1.0
 hazeConfigureDevice@@HAZE_1.1
+hazeDeclareMrp@@HAZE_1.3
 hazeDeviceCanAccessPeer@@HAZE_1.0
 hazeDeviceEnablePeerAccess@@HAZE_1.0
 hazeDeviceReset@@HAZE_1.0
@@ -62,6 +63,7 @@ hazeMulScalar@@HAZE_1.0
 hazeMulScalarMrp@@HAZE_1.0
 hazeNTT@@HAZE_1.0
 hazeNTTMrp@@HAZE_1.0
+hazeOutputGroupName@@HAZE_1.3
 hazePointerGetAttributes@@HAZE_1.0
 hazeReplayBridgeInitCryptoContext@@HAZE_1.1
 hazeReplayBridgeReset@@HAZE_1.0
