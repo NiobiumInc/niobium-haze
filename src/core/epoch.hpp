@@ -88,6 +88,12 @@ class EpochState {
     std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept
         HAZE_EXCLUDES(mutex_);
 
+    // Read-only query (backs hazeOutputGroupName): the name the outputs index will give the
+    // pending output `addr` belongs to (its MRP group's, else its own one-limb name), or
+    // SourceUnavailable if `addr` is not a pending output. Never starts or perturbs a recording.
+    std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept
+        HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -160,6 +166,10 @@ class EpochState {
     std::expected<void, HazeInternalError>
     tag_h2d_mrp_input_locked(std::span<const DevAddr> addrs, std::span<const uint64_t> moduli,
                              niobium::fhetch::Format format) noexcept HAZE_REQUIRES(mutex_);
+    // The same input entry with no words: nothing read, nothing spilled (hazeDeclareMrp).
+    std::expected<void, HazeInternalError>
+    tag_declared_mrp_input_locked(std::span<const DevAddr> addrs,
+                                  std::span<const uint64_t> moduli) noexcept HAZE_REQUIRES(mutex_);
 
     // Register an MRP-shaped grouping so replay emits a single fhetch::tag_output(name, MRP);
     // re-registration is latest-write-wins (identical membership no-ops, anything else
@@ -281,6 +291,9 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept;
 
 // Backs hazeInputGroupName (EpochState::input_group_name).
 std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept;
+
+// Backs hazeOutputGroupName (EpochState::output_group_name).
+std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept;
 
 // Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;

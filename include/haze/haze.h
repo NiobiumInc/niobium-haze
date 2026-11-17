@@ -135,6 +135,25 @@ HAZE_API hazeError_t hazeMemcpyMrpFormat(void *const *dst, const void *const *sr
 // internal failure (e.g. allocation failure copying the name).
 HAZE_API hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
 
+// hazeOutputGroupName: write the name the program's outputs index gives the tagged output `ptr`
+// belongs to (the group's "haze_mrp_out_N", or a one-limb output's own name) into `out`, so that a
+// caller can say what each output of a recorded program is. Valid from hazeTagOutput(ptr) until
+// the epoch's finalize (hazeFlush / hazeWriteProgram), which consumes the pending outputs. An
+// address that is not a pending output fails as an address with no input group fails in
+// hazeInputGroupName; the buffer rules are hazeInputGroupName's.
+HAZE_API hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
+
+// hazeDeclareMrp: record `dst[0..base_len)` as one MRP input of `count` bytes per residue,
+// residue i under prime base[i], exactly as hazeMemcpyMrp(H2D) would, but without its words:
+// nothing is read and nothing spilled. The program's input entry is written with its
+// addresses and an empty word file; whoever runs the program supplies the words. A D2H of a
+// declared input is an error (it has none). It takes hazeMemcpyMrp(H2D)'s checks: every dst a
+// live allocation (HAZE_ERROR_UNKNOWN_ADDRESS) and `count` at most one polynomial
+// (HAZE_ERROR_SIZE_MISMATCH); `count == 0` records nothing. Before hazeConfigureDevice it
+// records nothing, as an upload does.
+HAZE_API hazeError_t hazeDeclareMrp(void *const *dst, size_t count, const uint64_t *base,
+                                    size_t base_len) HAZE_NOEXCEPT;
+
 // hazeMallocMrp reserves `num_residues` device polynomials for one MRP group under a single
 // allocator lock and writes their addresses into `ptrs[0..num_residues)` (all non-null on
 // success); `num_residues` is the group's residue count (the `base_len` passed to the MRP

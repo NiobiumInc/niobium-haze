@@ -468,10 +468,27 @@ InputSpillStore::take_named(const std::string &name) noexcept {
     }
 }
 
+std::expected<void, HazeInternalError> InputSpillStore::declare(const std::string &name) noexcept {
+    HazeLockGuard lock(mutex_);
+    try {
+        declared_.insert(name);
+        return {};
+    } catch (...) {
+        record_internal_error(HazeInternalError::SpillIoFailed, "InputSpillStore::declare");
+        return std::unexpected(HazeInternalError::SpillIoFailed);
+    }
+}
+
+bool InputSpillStore::declared(const std::string &name) const noexcept {
+    HazeLockGuard lock(mutex_);
+    return declared_.contains(name);
+}
+
 // clear_names() and clear() cannot fail, so their diagnoses are warnings.
 
 void InputSpillStore::clear_names() noexcept {
     HazeLockGuard lock(mutex_);
+    declared_.clear();
     for (const auto &[name, recs] : named_records_) {
         for (std::size_t i = 0; i < recs.size(); ++i) {
             std::error_code ec;
@@ -491,6 +508,7 @@ void InputSpillStore::clear() noexcept {
     // leaves the store empty and inactive.
     records_.clear();
     named_records_.clear();
+    declared_.clear();
     const std::filesystem::path local_dir = dir_;
     active_ = false;
     dir_.clear();

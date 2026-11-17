@@ -65,9 +65,17 @@ void bootstrap_compiler() {
     // leak a prior configure's level into this one instead of reverting to a
     // real default; "O0" itself is a downstream no-op either way.
     std::string opt_level_arg_storage = "--opt-level=O" + std::to_string(rc.opt_level());
-    char *argv[] = {prog_storage.data(),          target_arg_storage.data(),
-                    no_ring_check_storage.data(), no_prime_check_storage.data(),
-                    opt_level_arg_storage.data(), nullptr};
+    // The text .fhetch trace, as before niobium-fhetch made the binary .fhex its
+    // default: haze's tests and its consumers read the text form. Explicit for
+    // the same reason as the opt level (the singleton keeps a prior choice).
+    std::string trace_format_storage = "--trace-format=text";
+    char *argv[] = {prog_storage.data(),
+                    target_arg_storage.data(),
+                    no_ring_check_storage.data(),
+                    no_prime_check_storage.data(),
+                    opt_level_arg_storage.data(),
+                    trace_format_storage.data(),
+                    nullptr};
     int argc = static_cast<int>(std::size(argv)) - 1;
     niobium::compiler().init(argc, argv);
     niobium::compiler().set_program_info(program_name, program_version, program_description);

@@ -55,3 +55,10 @@ HAZE_1.2 {
   global:
     hazeMemcpyMrpFormat;
 } HAZE_1.1;
+
+# hazeDeclareMrp and hazeOutputGroupName are new here.
+HAZE_1.3 {
+  global:
+    hazeDeclareMrp;
+    hazeOutputGroupName;
+} HAZE_1.2;

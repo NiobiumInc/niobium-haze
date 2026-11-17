@@ -690,6 +690,44 @@ std::expected<void, HazeInternalError> EpochState::tag_output(DevAddr addr) noex
     }
 }
 
+std::expected<void, HazeInternalError>
+EpochState::tag_declared_mrp_input_locked(std::span<const DevAddr> addrs,
+                                          std::span<const uint64_t> moduli) noexcept {
+    if (!recording_) {
+        return {};
+    }
+    const uint64_t ring_dim = fhe_params().ring_dim();
+    const std::string name = mrp_.next_input_group_name();
+    try {
+        std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
+        pairs.reserve(addrs.size());
+        for (std::size_t i = 0; i < addrs.size(); ++i)
+            pairs.emplace_back(fhetch::Polynomial::zeros(ring_dim, fhetch::Format::Evaluation),
+                               moduli[i]);
+        fhetch::tag_input(name, fhetch::MRP::from_pairs(pairs));
+        for (std::size_t i = 0; i < addrs.size(); ++i) {
+            fhetch::bind_modulus(pairs[i].first, moduli[i]);
+            poly_map_.insert_or_assign(addrs[i], pairs[i].first);
+            pending_outputs_.erase(addrs[i]);
+            addr_modulus_.insert_or_assign(addrs[i], moduli[i]);
+            undeclared_uploads_.erase(addrs[i]);
+        }
+        // A name the spill store could not keep would flush as an input with
+        // missing words: fail the call and clear the epoch state.
+        if (auto declared = input_spill().declare(name); !declared) {
+            clear_state_locked();
+            return declared;
+        }
+        mrp_.record_input_group(addrs, name);
+    } catch (...) {
+        clear_state_locked();
+        record_internal_error(HazeInternalError::BackendReplayFailed,
+                              "tag_declared_mrp_input_locked threw; epoch state cleared");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+    return {};
+}
+
 std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
     try {
@@ -702,6 +740,24 @@ std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAd
         return *name;
     } catch (...) {
         record_internal_error(HazeInternalError::BackendReplayFailed, "input_group_name threw");
+        return std::unexpected(HazeInternalError::BackendReplayFailed);
+    }
+}
+
+std::expected<std::string, HazeInternalError> EpochState::output_group_name(DevAddr addr) noexcept {
+    HazeLockGuard lock(mutex_);
+    try {
+        // The same precedence tag_pending_outputs_locked applies: a residue of a pending MRP
+        // group is exported under the group's name, any other pending output under its own.
+        if (const std::string *group = mrp_.pending_group_for(addr); group != nullptr)
+            return *group;
+        if (auto it = pending_outputs_.find(addr); it != pending_outputs_.end())
+            return it->second;
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "output_group_name: addr is not a pending output");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    } catch (...) {
+        record_internal_error(HazeInternalError::BackendReplayFailed, "output_group_name threw");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
 }
@@ -747,6 +803,10 @@ std::expected<void, HazeInternalError> tag_output(DevAddr addr) noexcept {
 
 std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noexcept {
     return epoch().input_group_name(addr);
+}
+
+std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept {
+    return epoch().output_group_name(addr);
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {

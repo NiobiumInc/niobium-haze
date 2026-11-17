@@ -191,6 +191,13 @@ extern "C" hazeError_t hazeMemcpyMrpFormat(void *const *dst, const void *const *
     return set_error(HAZE_ERROR_INVALID_VALUE);
 }
 
+extern "C" hazeError_t hazeDeclareMrp(void *const *dst, size_t count, const uint64_t *base,
+                                      size_t base_len) noexcept {
+    if (dst == nullptr || base == nullptr || base_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::declare_mrp(dst, count, base, base_len));
+}
+
 extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_len) noexcept {
     if (ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
@@ -203,6 +210,19 @@ extern "C" hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out
         return set_error(haze::to_public_error(result.error()));
     // No truncation: a buffer too short to hold the name plus its NUL is rejected outright.
     // >= keeps the same bound as size()+1 > out_len without the wrap at SIZE_MAX.
+    if (result->size() >= out_len)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    std::memcpy(out, result->data(), result->size());
+    out[result->size()] = '\0';
+    return HAZE_SUCCESS;
+}
+
+extern "C" hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_len) noexcept {
+    if (ptr == nullptr || out == nullptr || out_len == 0)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    auto result = haze::output_group_name(haze::to_dev_addr(ptr));
+    if (!result)
+        return set_error(haze::to_public_error(result.error()));
     if (result->size() >= out_len)
         return set_error(HAZE_ERROR_INVALID_VALUE);
     std::memcpy(out, result->data(), result->size());
