@@ -2,7 +2,7 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ============================================================
 
 Project: niobium-haze
-Generated: 2026-10-30
+Generated: 2026-11-18
 Tool: SCANOSS (snippet detection with License dataset)
 Components: 76
 
@@ -22,12 +22,12 @@ These require manual review to determine licensing terms.
 
 LICENSE SUMMARY
 
-  Apache-2.0: 17 component(s)
+  Apache-2.0: 16 component(s)
   Apache-2.0 WITH LLVM-exception: 2 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA: 1 component(s)
   Apache-2.0 WITH LLVM-exception AND NCSA AND NCSA OR MIT AND NCSA AND MIT: 1 component(s)
   BSD-2-Clause: 7 component(s)
-  BSD-3-Clause: 30 component(s)
+  BSD-3-Clause: 31 component(s)
   BSD-3-Clause-LBNL: 1 component(s)
   BSL-1.0: 1 component(s)
   CC-BY-4.0: 1 component(s)
@@ -265,6 +265,18 @@ COMPONENT ATTRIBUTIONS
   Copyright:
     Copyright (c) 2016-2023 Viktor Kirilov
   License: MPL-2.0
+
+  enterprise-firefox
+  Version: FIREFOX_123_0_RELEASE
+  Source: https://github.com/mozilla/enterprise-firefox
+  PURL: pkg:github/mozilla/enterprise-firefox
+  Copyright:
+    Copyright 2005; Google Inc.
+    Copyright 2008; Google Inc.
+    Copyright 2009; Google Inc.
+    Copyright 2015; Google Inc.
+    Copyright 2018; Google Inc.
+  License: BSD-3-Clause
 
   Fall_Semester_programing
   Version: 32-Linux
@@ -849,10 +861,18 @@ COMPONENT ATTRIBUTIONS
   Source: https://github.com/llvm/llvm-project-legacy-branches
   PURL: pkg:github/llvm/llvm-project-legacy-branches
   Copyright:
+    Copyright 1984 Sun Microsystems Inc
+    Copyright 1991 Carnegie Mellon University
+    Copyright 1991 Free Software Foundation Inc
+    Copyright 1991 Regents of the University of California
     Copyright 1991 by the Massachusetts Institute of Technology
     Copyright 1992 Henry Spencer. All rights reserved
+    Copyright 1993 by Digital Equipment Corporation
+    Copyright 1995 96 97 Free Software Foundation Inc
     Copyright 1997-2014 Intel Corporation
     Copyright 1997-2016 Intel Corporation
+    Copyright 2000 Intel Corporation
+    Copyright 2003-2007 University of Illinois at Urbana-Champaign
     Copyright 2003-2009 Jonathan  Wolf  Rentzsch:  http:  rentzsch.com
     Copyright 2003-2012 University of Illinois at Urbana-Champaign
     Copyright 2003-2014 University of Illinois at Urbana-Champaign.
@@ -910,14 +930,6 @@ COMPONENT ATTRIBUTIONS
   PURL: pkg:pypi/nurikit
   Copyright:
     Copyright 2017 Google Inc
-    Copyright 2007; Google Inc.
-  License: Apache-2.0
-
-  nurikit
-  Version: v0.1.0a14.post0
-  Source: https://github.com/seoklab/nurikit
-  PURL: pkg:github/seoklab/nurikit
-  Copyright:
     Copyright 2007; Google Inc.
   License: Apache-2.0
 
