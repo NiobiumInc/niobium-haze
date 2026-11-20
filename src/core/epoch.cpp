@@ -21,8 +21,6 @@
 #include "core/input_spill.hpp"
 #include "core/output_metadata.hpp"
 
-#include <bit>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -776,15 +774,7 @@ std::expected<std::string, HazeInternalError> EpochState::output_group_name(DevA
 
 std::expected<void, HazeInternalError>
 EpochState::set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata) noexcept {
-    // A CKKS encoding's slots fill at most half the ring.
-    const uint64_t max_slots = fhe_params().ring_dim() / 2;
-    if (!std::isfinite(metadata.scaling_factor) || metadata.scaling_factor <= 0.0 ||
-        metadata.noise_scale_deg == 0 || !std::has_single_bit(metadata.slots) ||
-        metadata.slots > max_slots) {
-        record_internal_error(HazeInternalError::InvalidArgument,
-                              "set_output_metadata: a value outside hazeOutputMetadata's ranges");
-        return std::unexpected(HazeInternalError::InvalidArgument);
-    }
+    const uint64_t ring_dim = fhe_params().ring_dim();
     HazeLockGuard lock(mutex_);
     const std::string *name = pending_output_name_locked(addr);
     if (name == nullptr) {
@@ -792,7 +782,7 @@ EpochState::set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata
                               "set_output_metadata: addr is not a pending output");
         return std::unexpected(HazeInternalError::SourceUnavailable);
     }
-    return output_metadata().set(*name, metadata);
+    return output_metadata().set(*name, metadata, ring_dim);
 }
 
 void EpochState::reset() noexcept {

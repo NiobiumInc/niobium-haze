@@ -21,41 +21,26 @@
 #include "scheme/ckksrns/ckksrns-ser.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
 namespace fs = std::filesystem;
 
-constexpr uint64_t kRingDim = 4096;
-constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
-constexpr uint64_t kQ0 = 576460752303415297ULL;
-constexpr uint64_t kQ1 = 576460752303439873ULL;
-const std::vector<uint64_t> kBase = {kQ0, kQ1};
+using haze::test::output_group_name;
+using haze::test::mrp2::configure;
+using haze::test::mrp2::kBase;
+using haze::test::mrp2::kBytes;
+using haze::test::mrp2::kRingDim;
+
 constexpr hazeOutputMetadata kMetadata = {
     .scaling_factor = 1099511627776.0, .noise_scale_deg = 2, .slots = 8};
-
-// Reset, then configure `program_name` (relative to the runs dir); the program is only written.
-fs::path configure(const std::string &program_name) {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const fs::path dir{program_name};
-    fs::remove_all(dir);
-    const hazeFheParams fhe = {
-        .ring_dim = kRingDim, .moduli = kBase.data(), .moduli_count = kBase.size()};
-    const hazeReplayConfig replay = {
-        .target = "FUNC_SIM", .program_name = program_name.c_str(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
-    return dir;
-}
 
 struct Recorded {
     std::vector<void *> src;
@@ -64,21 +49,10 @@ struct Recorded {
 
 // Records hazeNTTMrp over a declared input into fresh slots and tags them.
 Recorded record_ntt() {
-    Recorded r{.src = haze::test::allocate_dst_residues(kBase.size(), kBytes),
-               .out = haze::test::allocate_dst_residues(kBase.size(), kBytes)};
-    REQUIRE(hazeDeclareMrp(r.src.data(), kBytes, kBase.data(), kBase.size()) == HAZE_SUCCESS);
-    const std::vector<const void *> view = haze::test::to_const(r.src);
-    REQUIRE(hazeNTTMrp(r.out.data(), view.data(), kBase.data(), kBase.size(), nullptr) ==
-            HAZE_SUCCESS);
-    for (void *p : r.out)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    return r;
-}
-
-std::string output_group_name(const void *ptr) {
-    char name[64] = {};
-    REQUIRE(hazeOutputGroupName(ptr, name, sizeof name) == HAZE_SUCCESS);
-    return name;
+    std::vector<void *> src = haze::test::allocate_dst_residues(kBase.size(), kBytes);
+    REQUIRE(hazeDeclareMrp(src.data(), kBytes, kBase.data(), kBase.size()) == HAZE_SUCCESS);
+    std::vector<void *> out = haze::test::mrp2::record_ntt(src);
+    return {.src = std::move(src), .out = std::move(out)};
 }
 
 lbcrypto::Ciphertext<lbcrypto::DCRTPoly> read_template(const fs::path &dir,

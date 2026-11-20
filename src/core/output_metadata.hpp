@@ -19,6 +19,7 @@
 #include "common/errors.hpp"
 #include "common/thread_safety.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <haze/haze_types.h>
 #include <optional>
@@ -31,8 +32,13 @@ namespace haze {
 // epoch, allocator or backend.
 class OutputMetadataStore {
   public:
+    // Records `metadata` for the output `name` of a program over a ring of `ring_dim`, replacing
+    // what it had. InvalidArgument, recording nothing, for a value outside hazeOutputMetadata's
+    // ranges: a scaling factor that is not finite and positive, a scale degree of 0, slots that
+    // are not a power of two or more than a CKKS encoding fills (half the ring).
     [[nodiscard]] std::expected<void, HazeInternalError>
-    set(const std::string &name, const hazeOutputMetadata &metadata) noexcept HAZE_EXCLUDES(mutex_);
+    set(const std::string &name, const hazeOutputMetadata &metadata, uint64_t ring_dim) noexcept
+        HAZE_EXCLUDES(mutex_);
     [[nodiscard]] std::optional<hazeOutputMetadata> find(const std::string &name) const noexcept
         HAZE_EXCLUDES(mutex_);
     void clear() noexcept HAZE_EXCLUDES(mutex_);

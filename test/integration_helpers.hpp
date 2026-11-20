@@ -7,14 +7,17 @@
 
 #pragma once
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
 #include <haze/replay_bridge.h>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -253,6 +256,62 @@ inline std::vector<uint64_t> negacyclic_conv_ref(const std::vector<uint64_t> &a,
         }
     }
     return c;
+}
+
+// The two-prime, ring-4096 program the cases about written program files record (declared and
+// uploaded MRP inputs, their formats, output names and metadata).
+namespace mrp2 {
+
+inline constexpr uint64_t kRingDim = 4096;
+inline constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
+inline constexpr uint64_t kQ0 = 576460752303415297ULL;
+inline constexpr uint64_t kQ1 = 576460752303439873ULL;
+inline const std::vector<uint64_t> kBase = {kQ0, kQ1};
+
+// Reset, then configure `program_name` (relative to the runs dir) on `target`; returns its dir.
+inline std::filesystem::path configure(const std::string &program_name,
+                                       const char *target = "FUNC_SIM") {
+    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
+    const std::filesystem::path dir{program_name};
+    std::filesystem::remove_all(dir);
+    const hazeFheParams fhe = {
+        .ring_dim = kRingDim, .moduli = kBase.data(), .moduli_count = kBase.size()};
+    const hazeReplayConfig replay = {
+        .target = target, .program_name = program_name.c_str(), .reduced_noise = 1};
+    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
+    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
+    return dir;
+}
+
+// Records hazeNTTMrp over `src` into fresh slots and tags them; returns the slots.
+inline std::vector<void *> record_ntt(const std::vector<void *> &src) {
+    const std::vector<void *> dst = allocate_dst_residues(src.size(), kBytes);
+    const std::vector<const void *> view = to_const(src);
+    REQUIRE(hazeNTTMrp(dst.data(), view.data(), kBase.data(), kBase.size(), nullptr) ==
+            HAZE_SUCCESS);
+    for (void *p : dst)
+        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
+    return dst;
+}
+
+// The program's file for `input` with `extension` (".ids", ".bin").
+inline std::filesystem::path input_file(const std::filesystem::path &dir, const std::string &input,
+                                        const char *extension) {
+    return dir / (dir.filename().string() + ".input_" + input + extension);
+}
+
+} // namespace mrp2
+
+// The names hazeInputGroupName and hazeOutputGroupName give `ptr`, which must have one.
+inline std::string input_group_name(const void *ptr) {
+    std::array<char, 64> name{};
+    REQUIRE(hazeInputGroupName(ptr, name.data(), name.size()) == HAZE_SUCCESS);
+    return name.data();
+}
+inline std::string output_group_name(const void *ptr) {
+    std::array<char, 64> name{};
+    REQUIRE(hazeOutputGroupName(ptr, name.data(), name.size()) == HAZE_SUCCESS);
+    return name.data();
 }
 
 } // namespace haze::test

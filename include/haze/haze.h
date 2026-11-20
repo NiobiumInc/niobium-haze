@@ -143,9 +143,10 @@ HAZE_API hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_l
 // hazeInputGroupName; the buffer rules are hazeInputGroupName's.
 HAZE_API hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
 
-// hazeSetOutputMetadata: say what the tagged output `ptr` belongs to is decoded with (its scale,
-// scale degree and slots), so the written program's ciphertext template for that output carries
-// it and a replay elsewhere yields a ciphertext its owner can decrypt and decode. It applies to
+// hazeSetOutputMetadata: record how the output that the tagged `ptr` belongs to is decoded (its
+// scale, scale degree and slots), so that the written program's ciphertext template for that
+// output carries them and a replay elsewhere yields a ciphertext its owner can decrypt and
+// decode. It applies to
 // the whole output hazeOutputGroupName names for `ptr`; a second call replaces the first. Valid
 // over hazeOutputGroupName's window, and dropped with the pending outputs at the epoch's finalize.
 // An output without it keeps the template's defaults. NULL `ptr`/`metadata` or a value outside

@@ -24,54 +24,19 @@
 #include <filesystem>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
 #include <string>
 #include <vector>
 
 namespace {
 
 namespace fs = std::filesystem;
-
-constexpr uint64_t kRingDim = 4096;
-constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
-constexpr uint64_t kQ0 = 576460752303415297ULL;
-constexpr uint64_t kQ1 = 576460752303439873ULL;
-const std::vector<uint64_t> kBase = {kQ0, kQ1};
-
-// Reset, then configure `program_name` (relative to the runs dir) on FUNC_SIM.
-fs::path configure(const std::string &program_name) {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const fs::path dir{program_name};
-    fs::remove_all(dir);
-    const hazeFheParams fhe = {
-        .ring_dim = kRingDim, .moduli = kBase.data(), .moduli_count = kBase.size()};
-    const hazeReplayConfig replay = {
-        .target = "FUNC_SIM", .program_name = program_name.c_str(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
-    return dir;
-}
-
-// Records hazeNTTMrp over `src` into fresh slots and tags them; returns the slots.
-std::vector<void *> record_ntt(const std::vector<void *> &src) {
-    const std::vector<void *> dst = haze::test::allocate_dst_residues(src.size(), kBytes);
-    const std::vector<const void *> view = haze::test::to_const(src);
-    REQUIRE(hazeNTTMrp(dst.data(), view.data(), kBase.data(), kBase.size(), nullptr) ==
-            HAZE_SUCCESS);
-    for (void *p : dst)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    return dst;
-}
-
-fs::path input_file(const fs::path &dir, const std::string &input, const char *extension) {
-    return dir / (dir.filename().string() + ".input_" + input + extension);
-}
-
-std::string input_group_name(const void *ptr) {
-    char name[64] = {};
-    REQUIRE(hazeInputGroupName(ptr, name, sizeof name) == HAZE_SUCCESS);
-    return name;
-}
+using haze::test::input_group_name;
+using haze::test::mrp2::configure;
+using haze::test::mrp2::input_file;
+using haze::test::mrp2::kBase;
+using haze::test::mrp2::kBytes;
+using haze::test::mrp2::kRingDim;
+using haze::test::mrp2::record_ntt;
 
 } // namespace
 
