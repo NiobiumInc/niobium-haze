@@ -19,10 +19,14 @@
 #include "core/backend.hpp"
 #include "core/config.hpp"
 #include "core/input_spill.hpp"
+#include "core/output_metadata.hpp"
 
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <haze/haze_types.h>
 #include <ios>
 #include <niobium/fhetch_api.h>
 #include <optional>
@@ -674,6 +678,8 @@ void EpochState::clear_state_locked() noexcept {
     // not epoch-scoped, so a live input's residue survives into the next epoch.
     CompilerBackend::clear_captured();
     input_spill().clear_names();
+    // What the pending outputs are decoded with goes with them.
+    output_metadata().clear();
 }
 
 std::string EpochState::mrp_group_name_locked(DevAddr leading) {
@@ -744,15 +750,21 @@ std::expected<std::string, HazeInternalError> EpochState::input_group_name(DevAd
     }
 }
 
+const std::string *EpochState::pending_output_name_locked(DevAddr addr) const {
+    // The same precedence tag_pending_outputs_locked applies: a residue of a pending MRP
+    // group is exported under the group's name, any other pending output under its own.
+    if (const std::string *group = mrp_.pending_group_for(addr); group != nullptr)
+        return group;
+    if (auto it = pending_outputs_.find(addr); it != pending_outputs_.end())
+        return &it->second;
+    return nullptr;
+}
+
 std::expected<std::string, HazeInternalError> EpochState::output_group_name(DevAddr addr) noexcept {
     HazeLockGuard lock(mutex_);
     try {
-        // The same precedence tag_pending_outputs_locked applies: a residue of a pending MRP
-        // group is exported under the group's name, any other pending output under its own.
-        if (const std::string *group = mrp_.pending_group_for(addr); group != nullptr)
-            return *group;
-        if (auto it = pending_outputs_.find(addr); it != pending_outputs_.end())
-            return it->second;
+        if (const std::string *name = pending_output_name_locked(addr); name != nullptr)
+            return *name;
         record_internal_error(HazeInternalError::SourceUnavailable,
                               "output_group_name: addr is not a pending output");
         return std::unexpected(HazeInternalError::SourceUnavailable);
@@ -760,6 +772,27 @@ std::expected<std::string, HazeInternalError> EpochState::output_group_name(DevA
         record_internal_error(HazeInternalError::BackendReplayFailed, "output_group_name threw");
         return std::unexpected(HazeInternalError::BackendReplayFailed);
     }
+}
+
+std::expected<void, HazeInternalError>
+EpochState::set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata) noexcept {
+    // A CKKS encoding's slots fill at most half the ring.
+    const uint64_t max_slots = fhe_params().ring_dim() / 2;
+    if (!std::isfinite(metadata.scaling_factor) || metadata.scaling_factor <= 0.0 ||
+        metadata.noise_scale_deg == 0 || !std::has_single_bit(metadata.slots) ||
+        metadata.slots > max_slots) {
+        record_internal_error(HazeInternalError::InvalidArgument,
+                              "set_output_metadata: a value outside hazeOutputMetadata's ranges");
+        return std::unexpected(HazeInternalError::InvalidArgument);
+    }
+    HazeLockGuard lock(mutex_);
+    const std::string *name = pending_output_name_locked(addr);
+    if (name == nullptr) {
+        record_internal_error(HazeInternalError::SourceUnavailable,
+                              "set_output_metadata: addr is not a pending output");
+        return std::unexpected(HazeInternalError::SourceUnavailable);
+    }
+    return output_metadata().set(*name, metadata);
 }
 
 void EpochState::reset() noexcept {
@@ -807,6 +840,11 @@ std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noe
 
 std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept {
     return epoch().output_group_name(addr);
+}
+
+std::expected<void, HazeInternalError>
+set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata) noexcept {
+    return epoch().set_output_metadata(addr, metadata);
 }
 
 std::expected<void, HazeInternalError> flush() noexcept {

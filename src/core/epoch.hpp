@@ -94,6 +94,13 @@ class EpochState {
     std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept
         HAZE_EXCLUDES(mutex_);
 
+    // Backs hazeSetOutputMetadata: records what the pending output `addr` belongs to is decoded
+    // with, under the name output_group_name gives it. InvalidArgument for a value out of range,
+    // SourceUnavailable for an addr that is not a pending output.
+    std::expected<void, HazeInternalError>
+    set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata) noexcept
+        HAZE_EXCLUDES(mutex_);
+
     void reset() noexcept HAZE_EXCLUDES(mutex_);
 
     // ---- Locked methods (caller holds mutex_) ----
@@ -224,6 +231,10 @@ class EpochState {
 
     void ensure_output_tag_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
+    // The name the outputs index will give the pending output `addr` belongs to, as
+    // tag_pending_outputs_locked exports it; nullptr when `addr` is not a pending output.
+    const std::string *pending_output_name_locked(DevAddr addr) const HAZE_REQUIRES(mutex_);
+
     void note_result_format_locked(DevAddr addr) HAZE_REQUIRES(mutex_);
 
     // Lock order: see the canonical DAG in common/thread_safety.hpp
@@ -294,6 +305,10 @@ std::expected<std::string, HazeInternalError> input_group_name(DevAddr addr) noe
 
 // Backs hazeOutputGroupName (EpochState::output_group_name).
 std::expected<std::string, HazeInternalError> output_group_name(DevAddr addr) noexcept;
+
+// Backs hazeSetOutputMetadata (EpochState::set_output_metadata).
+std::expected<void, HazeInternalError>
+set_output_metadata(DevAddr addr, const hazeOutputMetadata &metadata) noexcept;
 
 // Backs hazeFlush (EpochState::replay_and_populate).
 std::expected<void, HazeInternalError> flush() noexcept;

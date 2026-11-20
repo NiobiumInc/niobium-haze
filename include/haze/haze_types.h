@@ -252,4 +252,15 @@ typedef struct {
     size_t p_base_len;
 } hazeModUpParams;
 
+// What a CKKS ciphertext output is decoded with, which its residues do not carry; see
+// hazeSetOutputMetadata.
+//   scaling_factor: the scale its message is encoded at (finite, > 0).
+//   noise_scale_deg: the power of the scale it carries (>= 1; 2 before a rescale).
+//   slots: the number of slots it encodes (a power of two, at most ring_dim / 2).
+typedef struct {
+    double scaling_factor;
+    uint32_t noise_scale_deg;
+    uint32_t slots;
+} hazeOutputMetadata;
+
 #endif /* HAZE_TYPES_H */

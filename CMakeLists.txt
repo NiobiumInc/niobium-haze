@@ -206,6 +206,7 @@ add_library(haze_objs OBJECT
   src/core/materialize.cpp
   src/core/mrp_polymap.cpp
   src/core/mrp_registry.cpp
+  src/core/output_metadata.cpp
   src/core/polynomial_io.cpp
   src/core/stream.cpp
   # Shared leaf utilities.
@@ -515,6 +516,7 @@ add_executable(haze_tests
   test/test_input_spill.cpp
   test/test_upload_format.cpp
   test/test_declare_mrp.cpp
+  test/test_output_metadata.cpp
   test/test_mrp_registry.cpp
   test/test_sequential_sessions.cpp
   test/test_spill_root_isolation.cpp

@@ -28,6 +28,10 @@
 //   EpochState::mutex_ -> DeviceAllocator::mutex_
 //   EpochState::mutex_ -> CompilerBackend::init_mutex_
 //   EpochState::mutex_ -> InputSpillStore::mutex_
+//   EpochState::mutex_ -> OutputMetadataStore::mutex_
+//
+// The OutputMetadataStore edge: hazeSetOutputMetadata writes, and clear_state_locked clears, the
+// store under epoch_mutex_, and the post-recording hook reads it there. It is a LEAF too.
 //
 // The InputSpillStore edge: the replay-bridge post-recording hook runs under
 // epoch_mutex_ and calls into the spill store. InputSpillStore is a LEAF like the

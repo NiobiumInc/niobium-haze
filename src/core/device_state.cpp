@@ -15,6 +15,7 @@
 #include "common/errors.hpp"
 #include "common/log.hpp"
 #include "core/config.hpp"
+#include "core/output_metadata.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -83,6 +84,9 @@ DeviceAllocator &allocator() noexcept {
 }
 InputSpillStore &input_spill() noexcept {
     return device_state().input_spill;
+}
+OutputMetadataStore &output_metadata() noexcept {
+    return device_state().output_metadata;
 }
 EpochState &epoch() noexcept {
     return device_state().epoch;
