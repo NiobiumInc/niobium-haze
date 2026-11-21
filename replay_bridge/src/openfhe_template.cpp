@@ -14,7 +14,8 @@
 #include "common/log.hpp"
 #include "core/backend.hpp" // haze::backend().ensure_initialized — one shared vendor bring-up
 #include "core/config.hpp"  // haze::config_finalized — require the frozen config before bootstrap
-#include "core/input_spill.hpp" // haze::input_spill() — flush-time consumer of spilled residues
+#include "core/input_spill.hpp"     // haze::input_spill() — flush-time consumer of spilled residues
+#include "core/output_metadata.hpp" // haze::output_metadata() — what each output is decoded with
 #include "cryptocontext-ser.h"
 #include "key/key-ser.h"
 #include "openfhe.h"
@@ -503,6 +504,14 @@ void on_post_recording(const HookCtx &hctx) {
                 // Template towers carry the trace moduli from synthesize, so
                 // the driver's SetValues matches with no post-hoc install.
                 auto ct = synthesize_for_shape(*ctx, shape, /*per_residue_values=*/{});
+                // What the caller said it is decoded with (hazeSetOutputMetadata), so the
+                // ciphertext a replay fills from this template decrypts and decodes; without it,
+                // the synthesized context's defaults.
+                if (const auto metadata = haze::output_metadata().find(name)) {
+                    ct->SetScalingFactor(metadata->scaling_factor);
+                    ct->SetNoiseScaleDeg(metadata->noise_scale_deg);
+                    ct->SetSlots(metadata->slots);
+                }
                 if (!niobium::detail::write_ciphertext_template(name, ct)) {
                     log_hook_error("write_ciphertext_template failed for '" + name + "'");
                 }

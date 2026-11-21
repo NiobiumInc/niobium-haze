@@ -62,3 +62,9 @@ HAZE_1.3 {
     hazeDeclareMrp;
     hazeOutputGroupName;
 } HAZE_1.2;
+
+# hazeSetOutputMetadata is new here.
+HAZE_1.4 {
+  global:
+    hazeSetOutputMetadata;
+} HAZE_1.3;

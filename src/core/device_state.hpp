@@ -17,6 +17,7 @@
 #include "core/config.hpp"
 #include "core/epoch.hpp"
 #include "core/input_spill.hpp"
+#include "core/output_metadata.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -40,6 +41,7 @@ class DeviceState {
     CompilerBackend backend;
     DeviceAllocator allocator;
     InputSpillStore input_spill;
+    OutputMetadataStore output_metadata;
     EpochState epoch;
     std::atomic<int> active_device{0};
     std::atomic<uint64_t> next_stream_id{1};

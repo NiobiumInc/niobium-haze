@@ -143,6 +143,18 @@ HAZE_API hazeError_t hazeInputGroupName(const void *ptr, char *out, size_t out_l
 // hazeInputGroupName; the buffer rules are hazeInputGroupName's.
 HAZE_API hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t out_len) HAZE_NOEXCEPT;
 
+// hazeSetOutputMetadata: record how the output that the tagged `ptr` belongs to is decoded (its
+// scale, scale degree and slots), so that the written program's ciphertext template for that
+// output carries them and a replay elsewhere yields a ciphertext its owner can decrypt and
+// decode. It applies to
+// the whole output hazeOutputGroupName names for `ptr`; a second call replaces the first. Valid
+// over hazeOutputGroupName's window, and dropped with the pending outputs at the epoch's finalize.
+// An output without it keeps the template's defaults. NULL `ptr`/`metadata` or a value outside
+// hazeOutputMetadata's ranges returns HAZE_ERROR_INVALID_VALUE; an address that is not a pending
+// output returns hazeOutputGroupName's error.
+HAZE_API hazeError_t hazeSetOutputMetadata(const void *ptr,
+                                           const hazeOutputMetadata *metadata) HAZE_NOEXCEPT;
+
 // hazeDeclareMrp: record `dst[0..base_len)` as one MRP input of `count` bytes per residue,
 // residue i under prime base[i], exactly as hazeMemcpyMrp(H2D) would, but without its words:
 // nothing is read and nothing spilled. The program's input entry is written with its

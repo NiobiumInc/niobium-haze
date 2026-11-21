@@ -70,6 +70,7 @@ hazeReplayBridgeReset@@HAZE_1.0
 hazeReplayBridgeTakeHookHadError@@HAZE_1.0
 hazeRotAutomorphCoeffMrp@@HAZE_1.0
 hazeSetDevice@@HAZE_1.0
+hazeSetOutputMetadata@@HAZE_1.4
 hazeStreamBeginCapture@@HAZE_1.0
 hazeStreamCreate@@HAZE_1.0
 hazeStreamCreateWithPriority@@HAZE_1.0

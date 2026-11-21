@@ -28,7 +28,6 @@
 #include <fstream>
 #include <haze/haze.h>
 #include <haze/haze_types.h>
-#include <haze/replay_bridge.h>
 #include <ios>
 #include <iterator>
 #include <optional>
@@ -39,25 +38,12 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr uint64_t kRingDim = 4096;
-constexpr std::size_t kBytes = kRingDim * sizeof(uint64_t);
-constexpr uint64_t kQ0 = 576460752303415297ULL;
-constexpr uint64_t kQ1 = 576460752303439873ULL;
-const std::vector<uint64_t> kBase = {kQ0, kQ1};
-
-// Reset, then configure `program_name` (relative to the runs dir) on `target`.
-fs::path configure(const char *target, const std::string &program_name) {
-    REQUIRE(hazeDeviceReset() == HAZE_SUCCESS);
-    const fs::path dir{program_name};
-    fs::remove_all(dir);
-    const hazeFheParams fhe = {
-        .ring_dim = kRingDim, .moduli = kBase.data(), .moduli_count = kBase.size()};
-    const hazeReplayConfig replay = {
-        .target = target, .program_name = program_name.c_str(), .reduced_noise = 1};
-    REQUIRE(hazeConfigureDevice(&fhe, &replay) == HAZE_SUCCESS);
-    REQUIRE(hazeReplayBridgeInitCryptoContext(kRingDim, kQ0) == HAZE_SUCCESS);
-    return dir;
-}
+using haze::test::mrp2::configure;
+using haze::test::mrp2::input_file;
+using haze::test::mrp2::kBase;
+using haze::test::mrp2::kBytes;
+using haze::test::mrp2::kRingDim;
+using haze::test::mrp2::record_ntt;
 
 std::vector<std::vector<uint64_t>> residues(uint64_t seed) {
     std::vector<std::vector<uint64_t>> r;
@@ -73,21 +59,6 @@ std::vector<const void *> host_views(const std::vector<std::vector<uint64_t>> &v
     for (const auto &v : values)
         views.push_back(v.data());
     return views;
-}
-
-// Records hazeNTTMrp over `src` into fresh slots and tags them; returns the slots.
-std::vector<void *> record_ntt(const std::vector<void *> &src) {
-    const std::vector<void *> dst = haze::test::allocate_dst_residues(src.size(), kBytes);
-    const std::vector<const void *> view = haze::test::to_const(src);
-    REQUIRE(hazeNTTMrp(dst.data(), view.data(), kBase.data(), kBase.size(), nullptr) ==
-            HAZE_SUCCESS);
-    for (void *p : dst)
-        REQUIRE(hazeTagOutput(p) == HAZE_SUCCESS);
-    return dst;
-}
-
-fs::path input_file(const fs::path &dir, const std::string &input, const char *extension) {
-    return dir / (dir.filename().string() + ".input_" + input + extension);
 }
 
 std::string slurp(const fs::path &p) {
@@ -124,7 +95,7 @@ void require_bin_format(const fs::path &bin, Format expected) {
 
 TEST_CASE("upload format: a coefficient-tagged upload records COEFFICIENT polynomials",
           "[integration]") {
-    const fs::path dir = configure("FUNC_SIM", "haze_upload_format_coefficient");
+    const fs::path dir = configure("haze_upload_format_coefficient", "FUNC_SIM");
     const auto src = haze::test::allocate_and_h2d_residues(residues(0xF100ULL), kBase,
                                                            HAZE_POLY_FORMAT_COEFFICIENT);
     const auto out = record_ntt(src);
@@ -142,7 +113,7 @@ TEST_CASE("upload format: hazeMemcpyMrp records what an EVALUATION-tagged upload
     std::vector<std::string> ids;
     for (const auto format :
          {std::optional<hazePolyFormat>{}, std::optional{HAZE_POLY_FORMAT_EVALUATION}}) {
-        const fs::path dir = configure("FUNC_SIM", "haze_upload_format_evaluation");
+        const fs::path dir = configure("haze_upload_format_evaluation", "FUNC_SIM");
         const auto src = haze::test::allocate_and_h2d_residues(residues(0xF200ULL), kBase, format);
         const auto out = record_ntt(src);
         REQUIRE(hazeWriteProgram() == HAZE_SUCCESS);
@@ -161,7 +132,7 @@ TEST_CASE("upload format: hazeMemcpyMrp records what an EVALUATION-tagged upload
 
 TEST_CASE("upload format: hazeMemcpyMrpFormat rejects an unknown form and a non-H2D coefficient",
           "[integration]") {
-    const fs::path dir = configure("FUNC_SIM", "haze_upload_format_rejects");
+    const fs::path dir = configure("haze_upload_format_rejects", "FUNC_SIM");
     const auto values = residues(0xF300ULL);
     const auto src =
         haze::test::allocate_and_h2d_residues(values, kBase, HAZE_POLY_FORMAT_EVALUATION);
@@ -215,7 +186,7 @@ TEST_CASE("upload format: hazeMemcpyMrpFormat rejects an unknown form and a non-
 
 TEST_CASE("upload format: cross-epoch reuse of a coefficient upload keeps its form",
           "[integration]") {
-    const fs::path dir = configure("local", "haze_upload_format_reuse");
+    const fs::path dir = configure("haze_upload_format_reuse", "local");
     const auto src = haze::test::allocate_and_h2d_residues(residues(0xF400ULL), kBase,
                                                            HAZE_POLY_FORMAT_COEFFICIENT);
     const std::vector<const void *> src_view = haze::test::to_const(src);
@@ -245,7 +216,7 @@ TEST_CASE("upload format: cross-epoch reuse of a coefficient upload keeps its fo
 TEST_CASE("upload format: a flushed INTT result read by the next recording is coefficient form",
           "[integration]") {
     // An MRP group output (residues 0 and 1) and a lone single-residue output (the last).
-    const fs::path dir = configure("local", "haze_upload_format_result");
+    const fs::path dir = configure("haze_upload_format_result", "local");
     const auto values = residues(0xF500ULL);
     const auto eval =
         haze::test::allocate_and_h2d_residues(values, kBase, HAZE_POLY_FORMAT_EVALUATION);
@@ -287,7 +258,7 @@ TEST_CASE("upload format: a flushed INTT result read by the next recording is co
 
 TEST_CASE("upload format: a memset over a flushed coefficient result drops its form",
           "[integration]") {
-    const fs::path dir = configure("local", "haze_upload_format_memset");
+    const fs::path dir = configure("haze_upload_format_memset", "local");
     const auto lone = haze::test::allocate_and_h2d_residues({residues(0xF600ULL)[0]});
     const auto out = haze::test::allocate_dst_residues(2, kBytes);
     REQUIRE(hazeINTT(out[0], lone[0], 0, nullptr) == HAZE_SUCCESS);
@@ -308,7 +279,7 @@ TEST_CASE("upload format: a memset over a flushed coefficient result drops its f
 
 TEST_CASE("upload format: a flushed evaluation result over a coefficient one drops its form",
           "[integration]") {
-    const fs::path dir = configure("local", "haze_upload_format_overwrite");
+    const fs::path dir = configure("haze_upload_format_overwrite", "local");
     const auto lone = haze::test::allocate_and_h2d_residues({residues(0xF700ULL)[0]});
     const auto out = haze::test::allocate_dst_residues(2, kBytes);
     REQUIRE(hazeINTT(out[0], lone[0], 0, nullptr) == HAZE_SUCCESS);

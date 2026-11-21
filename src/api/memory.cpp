@@ -230,6 +230,13 @@ extern "C" hazeError_t hazeOutputGroupName(const void *ptr, char *out, size_t ou
     return HAZE_SUCCESS;
 }
 
+extern "C" hazeError_t hazeSetOutputMetadata(const void *ptr,
+                                             const hazeOutputMetadata *metadata) noexcept {
+    if (ptr == nullptr || metadata == nullptr)
+        return set_error(HAZE_ERROR_INVALID_VALUE);
+    return set_internal_result(haze::set_output_metadata(haze::to_dev_addr(ptr), *metadata));
+}
+
 extern "C" hazeError_t hazeMemset(void *dev_ptr, int value, size_t count) noexcept {
     if (dev_ptr == nullptr)
         return set_error(HAZE_ERROR_INVALID_VALUE);
