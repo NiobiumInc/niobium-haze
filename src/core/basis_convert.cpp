@@ -36,16 +36,6 @@ namespace fhetch = niobium::fhetch;
 
 namespace {
 
-// OpenFHE's centering threshold floor(q/2) for an odd prime q.
-uint64_t half_modulus(uint64_t q) noexcept {
-    return (q - 1) / 2;
-}
-
-uint64_t add_mod(uint64_t a, uint64_t b, uint64_t m) noexcept {
-    const uint64_t s = a + b;
-    return (s >= m) ? s - m : s;
-}
-
 uint64_t prod_mod(const fhetch::ModuliBase &base, uint64_t m) noexcept {
     uint64_t r = 1 % m;
     for (const uint64_t q : base)
@@ -53,57 +43,15 @@ uint64_t prod_mod(const fhetch::ModuliBase &base, uint64_t m) noexcept {
     return r;
 }
 
-// (Q / base[skip]) mod m, Q = prod(base).
-uint64_t prod_mod_except(const fhetch::ModuliBase &base, std::size_t skip, uint64_t m) noexcept {
-    uint64_t r = 1 % m;
-    for (std::size_t i = 0; i < base.size(); ++i) {
-        if (i != skip)
-            r = mulmod_u64(r, base[i] % m, m);
-    }
-    return r;
-}
-
-// Centered (reduced-noise) FBC with the centering hoisted out of the per-term work:
-// y_p = sum_i ((s_i + h_i) mod q_i) * c_ip + K_p (mod p), K_p = -sum_i h_i * c_ip mod p, the
-// same residue as fhetch's per-term form with one shift per source and one ADDI per target.
+// Centered FBC as fhetch's per-term FourOp chains, which every hardware replay driver
+// recognizes; drivers before niobium-compiler 9482b0ea corrupt a shift shared across targets.
 fhetch::MRP fast_base_convert_centered(const fhetch::MRP &x,
                                        const fhetch::ModuliBase &target_base) {
-    const fhetch::ModuliBase &source_base = x.base();
-    std::vector<fhetch::Polynomial> shifted;
-    shifted.reserve(source_base.size());
-    for (std::size_t i = 0; i < source_base.size(); ++i) {
-        const uint64_t q = source_base[i];
-        const uint64_t q_hat_inv = modinv_prime(prod_mod_except(source_base, i, q), q);
-        const auto scaled = fhetch::sr_mulps(x[q], fhetch::Scalar::from_int(q_hat_inv), q);
-        shifted.push_back(fhetch::sr_addps(scaled, fhetch::Scalar::from_int(half_modulus(q)), q));
-    }
-
-    const std::unordered_set<uint64_t> source_set(source_base.begin(), source_base.end());
-    std::vector<std::pair<fhetch::Polynomial, uint64_t>> pairs;
-    pairs.reserve(target_base.size());
-    for (const uint64_t p : target_base) {
-        if (source_set.contains(p)) {
-            pairs.emplace_back(emit_copy(x[p], p), p);
-            continue;
-        }
-        uint64_t h_c_sum = 0;
-        std::vector<fhetch::Polynomial> terms;
-        terms.reserve(source_base.size());
-        for (std::size_t i = 0; i < source_base.size(); ++i) {
-            const uint64_t c = prod_mod_except(source_base, i, p);
-            h_c_sum = add_mod(h_c_sum, mulmod_u64(half_modulus(source_base[i]) % p, c, p), p);
-            terms.push_back(fhetch::sr_mulps(shifted[i], fhetch::Scalar::from_int(c), p));
-        }
-        fhetch::Polynomial acc = terms[0];
-        for (std::size_t i = 1; i < terms.size(); ++i)
-            acc = fhetch::sr_addp(acc, terms[i], p);
-        const uint64_t k_p = (h_c_sum == 0) ? 0 : p - h_c_sum;
-        pairs.emplace_back(fhetch::sr_addps(acc, fhetch::Scalar::from_int(k_p), p), p);
-    }
-    return fhetch::MRP::from_pairs(pairs);
+    return fhetch::fast_base_convert(x, target_base, fhetch::FbcVariant::ReducedNoise,
+                                     fhetch::FbcCenterShape::FourOp);
 }
 
-// CKKS ApproxModDown over the factored centered FBC; same composition as fhetch::rescale_fbc.
+// CKKS ApproxModDown over the centered FBC; same composition as fhetch::rescale_fbc.
 fhetch::MRP rescale_centered(const fhetch::MRP &x, const fhetch::ModuliBase &rescale_base) {
     const std::unordered_set<uint64_t> rescale_set(rescale_base.begin(), rescale_base.end());
     fhetch::ModuliBase target_base;
